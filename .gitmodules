@@ -1,0 +1,3 @@
+[submodule "producer/deps/draco"]
+	path = producer/deps/draco
+	url = https://github.com/google/draco.git
