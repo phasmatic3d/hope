@@ -1,3 +1,12 @@
 [submodule "producer/deps/draco"]
 	path = producer/deps/draco
 	url = https://github.com/google/draco.git
+[submodule "producer/deps/asio"]
+	path = producer/deps/asio
+	url = https://github.com/chriskohlhoff/asio.git
+[submodule "producer/deps/websocketpp"]
+	path = producer/deps/websocketpp
+	url = https://github.com/zaphoyd/websocketpp.git
+[submodule "producer/deps/glm"]
+	path = producer/deps/glm
+	url = https://github.com/g-truc/glm.git

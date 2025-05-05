@@ -17,5 +17,23 @@ add_executable(hope_producer src/producer.cpp)
 target_include_directories(hope_producer PRIVATE
     ${CMAKE_BINARY_DIR}
     deps/draco/src
+    deps/glm
+    deps/OpenSSL/include
+    deps/asio/asio/include
+    deps/websocketpp
 )
-target_link_libraries(hope_producer PRIVATE draco)
+
+target_link_directories(hope_producer PRIVATE deps/OpenSSL/lib)
+
+target_link_libraries(hope_producer PRIVATE draco libcrypto libssl)
+
+add_custom_command(TARGET hope_producer POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/deps/OpenSSL/bin/libcrypto-3-x64.dll"
+        "$<TARGET_FILE_DIR:hope_producer>/libcrypto-3-x64.dll"
+)
+add_custom_command(TARGET hope_producer POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/deps/OpenSSL/bin/libssl-3-x64.dll"
+        "$<TARGET_FILE_DIR:hope_producer>/libssl-3-x64.dll"
+)
