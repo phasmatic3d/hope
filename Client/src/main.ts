@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { initDracoDecoder, decodePointCloud } from './dracoDecoder';
+import { openConnetion } from './transmissionWS';
 
 let decoderModule: any;
 let pointCloud: THREE.Points | null = null;
@@ -18,12 +19,13 @@ async function setupScene()
   decoderModule = await initDracoDecoder();
 
   // Load and decode the Draco file
-  loadAndUpdatePointCloud(scene, 'bunny.drc');
+  //loadAndUpdatePointCloud(scene, 'bunny.drc');
+  loadAndUpdatePointCloudFromWS(scene);
 
   const geometry = new THREE.BoxGeometry();
   const material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
   const cube = new THREE.Mesh(geometry, material);
-  scene.add(cube);
+  //scene.add(cube);
 
   // Generate some points
   const numPoints = 1000;
@@ -44,9 +46,10 @@ async function setupScene()
   });
 
   const points = new THREE.Points(points_geometry, points_material);
-  scene.add(points);
+  //scene.add(points);
 
   camera.position.z = 15;
+  camera.position.y = -10;
 
   function animate() {
     requestAnimationFrame(animate);
@@ -78,7 +81,7 @@ async function setupScene()
     cube.rotation.x += 0.01;
     cube.rotation.y += 0.01;
     points.rotation.y += 0.01;
-    pointCloud && (pointCloud.rotation.y += 0.01);
+    //pointCloud && (pointCloud.rotation.y += 0.01);
     renderer.render(scene, camera);
   }
   
@@ -112,6 +115,40 @@ async function loadAndUpdatePointCloud(scene: THREE.Scene, drcUrl: string) {
     // Add to the scene
     scene.add(pointCloud);
   }
+}
+
+async function loadAndUpdatePointCloudFromWS(scene: THREE.Scene) {
+  
+  openConnetion((data: ArrayBuffer) => {
+    // Decode the point cloud data
+    const positions = decodePointCloud(decoderModule, data);
+
+    // Create/update the geometry
+    if (pointCloudGeometry) {
+      pointCloudGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      pointCloudGeometry.attributes.position.needsUpdate = true; // Mark as needing update
+    } 
+    else 
+    {
+      pointCloudGeometry = new THREE.BufferGeometry();
+      pointCloudGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+      // Set up the material and create the point cloud object
+      const material = new THREE.PointsMaterial({ color: 0x00ff00, size: 0.05 });
+      pointCloud = new THREE.Points(pointCloudGeometry, material);
+      /*pointCloud.scale.x = 100;
+      pointCloud.scale.y = 100;
+      pointCloud.scale.z = 100;*/
+
+      pointCloud.position.y = -10
+
+      // Add to the scene
+      scene.add(pointCloud);
+    }
+
+  }, (msg) => {
+    console.log("Reject", msg)
+  })  
 }
 
 setupScene();
