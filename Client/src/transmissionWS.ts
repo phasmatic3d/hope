@@ -17,7 +17,7 @@ export function openConnetion(response : (data: ArrayBuffer) => void, reject: (m
 
   // Event handler for when a message is received
   socket.addEventListener('message', (event) => {
-    console.warn("Receive Message")
+    //console.warn("Receive Message")
       if (event.data instanceof ArrayBuffer) {
           //console.warn('Received ArrayBuffer:', event.data);
 

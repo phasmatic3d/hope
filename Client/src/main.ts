@@ -6,6 +6,8 @@ let decoderModule: any;
 let pointCloud: THREE.Points | null = null;
 let pointCloudGeometry: THREE.BufferGeometry | null = null;
 
+const worker = new Worker(new URL('./worker.ts', import.meta.url), {  });
+
 async function setupScene() 
 {
   const scene = new THREE.Scene();
@@ -20,7 +22,7 @@ async function setupScene()
 
   // Load and decode the Draco file
   //loadAndUpdatePointCloud(scene, 'bunny.drc');
-  loadAndUpdatePointCloudFromWS(scene);
+  loadAndUpdatePointCloudFromWS_worker(scene);
 
   const geometry = new THREE.BoxGeometry();
   const material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
@@ -145,6 +147,45 @@ async function loadAndUpdatePointCloudFromWS(scene: THREE.Scene) {
       // Add to the scene
       scene.add(pointCloud);
     }
+
+  }, (msg) => {
+    console.log("Reject", msg)
+  })  
+}
+
+async function loadAndUpdatePointCloudFromWS_worker(scene: THREE.Scene) {
+
+  worker.onmessage = (event: MessageEvent<Float32Array>) => {
+    // Create/update the geometry
+    const positions = event.data;
+    if (pointCloudGeometry) {
+      pointCloudGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      pointCloudGeometry.attributes.position.needsUpdate = true; // Mark as needing update
+    } 
+    else 
+    {
+      pointCloudGeometry = new THREE.BufferGeometry();
+      pointCloudGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+      // Set up the material and create the point cloud object
+      const material = new THREE.PointsMaterial({ color: 0x00ff00, size: 0.1 });
+      pointCloud = new THREE.Points(pointCloudGeometry, material);
+      /*pointCloud.scale.x = 100;
+      pointCloud.scale.y = 100;
+      pointCloud.scale.z = 100;*/
+
+      pointCloud.position.y = -10
+
+      // Add to the scene
+      scene.add(pointCloud);
+    }
+  };
+  
+  openConnetion((data: ArrayBuffer) => {
+    // Decode the point cloud data
+    worker.postMessage({
+      //decoderModule: decoderModule, 
+      data: data});   
 
   }, (msg) => {
     console.log("Reject", msg)
