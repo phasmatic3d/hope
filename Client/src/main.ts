@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import { initDracoDecoder, decodePointCloud } from './dracoDecoder';
 import { openConnetion } from './transmissionWS';
 
@@ -15,7 +16,9 @@ async function setupScene()
 
   const renderer = new THREE.WebGLRenderer();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.xr.enabled = true;
   document.body.appendChild(renderer.domElement);
+  document.body.appendChild(VRButton.createButton(renderer));
 
   // Set up Draco decoder (once)
   decoderModule = await initDracoDecoder();
@@ -86,8 +89,39 @@ async function setupScene()
     //pointCloud && (pointCloud.rotation.y += 0.01);
     renderer.render(scene, camera);
   }
+
+  //animate();
+  renderer.setAnimationLoop(() => {
+    {
+      const positions = points_geometry.getAttribute('position') as THREE.BufferAttribute;
+      const colors = points_geometry.getAttribute('color') as THREE.BufferAttribute;
+      
+      for (let i = 0; i < positions.count; i++) {
+        const i3 = i * 3;
   
-  animate();
+        // Example: Random walk
+        positions.array[i3 + 0] += (Math.random() - 0.5) * 0.1;
+        positions.array[i3 + 1] += (Math.random() - 0.5) * 0.1;
+        positions.array[i3 + 2] += (Math.random() - 0.5) * 0.1;
+  
+        // Example: Change color over time
+        /*colors.array[i3 + 0] = Math.random();
+        colors.array[i3 + 1] = Math.random();
+        colors.array[i3 + 2] = Math.random();*/
+      }
+  
+      positions.needsUpdate = true;
+      colors.needsUpdate = true;
+      points_geometry.setDrawRange(0, 1000); // Start with 0 points
+    }
+  
+  
+    cube.rotation.x += 0.01;
+    cube.rotation.y += 0.01;
+    points.rotation.y += 0.01;
+    //pointCloud && (pointCloud.rotation.y += 0.01);
+    renderer.render(scene, camera);
+  });
 }
 
 async function loadAndUpdatePointCloud(scene: THREE.Scene, drcUrl: string) {
