@@ -30,8 +30,25 @@ Client
 - [x] 3D visualization
 - [x] Virtual Reality
 
-
-
 ## How to Install
 
 Before you apply the following steps.....
+
+## Scope
+
+3D point cloud streaming for the next generation of XR telepresence systems.
+
+## Building
+
+### Client
+
+`...`
+
+### Producer
+
+1. `git clone git@github.com:phasmatic3d/hope`
+
+2. `cd hope`
+
+3. `git submodule update --init --recursive`
+>>>>>>> 0ae98c8 (README updates)
