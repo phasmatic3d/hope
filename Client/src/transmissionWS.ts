@@ -2,9 +2,8 @@ export function openConnetion(response : (data: ArrayBuffer) => void, reject: (m
   console.warn("WebSockets")
   // Connect to the WebSocket server
   //const socket = new WebSocket('ws://localhost:9002');
-  const socket = new WebSocket('ws://192.168.1.155:9002');
+  const socket = new WebSocket('wss://192.168.1.155:9002');
   
-
   // Set the binary type to 'arraybuffer'
   socket.binaryType = 'arraybuffer';
 

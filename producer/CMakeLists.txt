@@ -25,7 +25,7 @@ target_include_directories(hope_producer PRIVATE
 
 target_link_directories(hope_producer PRIVATE deps/OpenSSL/lib)
 
-target_link_libraries(hope_producer PRIVATE draco libcrypto libssl)
+target_link_libraries(hope_producer PRIVATE draco_static crypto ssl)
 
 
 if (WIN32)

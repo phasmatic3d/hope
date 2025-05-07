@@ -125,19 +125,19 @@ private:
 	int m_num_of_points;
 };
 
-point_cloud pc(4000);
+point_cloud pc(10000);
 
 void time_broadcast_loop(server* s) {
 	while (true) {
 		//std::this_thread::sleep_for(1s);
-
+	
 		auto now = std::chrono::system_clock::now();
 		std::time_t now_time = std::chrono::system_clock::to_time_t(now);
 		std::string msg = std::ctime(&now_time); // includes newline
-
+	
 		pc.build();
 		const auto& buffer = pc.GetBuffer();
-
+	
 		std::lock_guard<std::mutex> lock(connection_mutex);
 		for (auto const& hdl : connections) {
 			websocketpp::lib::error_code ec;
