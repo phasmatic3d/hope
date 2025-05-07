@@ -34,11 +34,19 @@ Client
 
 Before you apply the following steps.....
 
+`openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout server.key -out server.crt`
+
 ## Scope
 
 3D point cloud streaming for the next generation of XR telepresence systems.
 
 ## Building
+
+1. `git clone git@github.com:phasmatic3d/hope`
+
+2. `cd hope`
+
+3. `git submodule update --init --recursive`
 
 ### Client
 
@@ -46,9 +54,14 @@ Before you apply the following steps.....
 
 ### Producer
 
-1. `git clone git@github.com:phasmatic3d/hope`
+**!!!Linux note**
 
-2. `cd hope`
+`sudo apt-get install libssl-dev`
 
-3. `git submodule update --init --recursive`
->>>>>>> 0ae98c8 (README updates)
+4. `cd producer`
+
+**!!! Draco note**
+
+Ensure that the path to the `hope` project root directory does not contain any regex symbols (e.g. +? e.t.c.))
+
+5. `cmake -DCMAKE_BUILD_TYPE=Release -S . -B build`
