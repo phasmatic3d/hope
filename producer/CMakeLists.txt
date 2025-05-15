@@ -10,6 +10,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 # Add Draco subdirectory
 add_subdirectory(deps/draco)
 
+# Add Realsense subdirectory
+set(BUILD_EXAMPLES OFF CACHE BOOL "Disable librealsense examples")
+set(BUILD_WITH_STATIC_CRT OFF CACHE BOOL "Disable librealsense examples")
+add_subdirectory(deps/librealsense)
+
 # Add the executable
 add_executable(hope_producer src/producer.cpp)
 
@@ -25,8 +30,11 @@ target_include_directories(hope_producer PRIVATE
 
 target_link_directories(hope_producer PRIVATE deps/OpenSSL/lib)
 
-target_link_libraries(hope_producer PRIVATE draco_static crypto ssl)
-
+if (WIN32)
+    target_link_libraries(hope_producer PRIVATE draco libcrypto libssl realsense2)
+else()
+    target_link_libraries(hope_producer PRIVATE draco_static crypto ssl)
+endif()
 
 if (WIN32)
     add_custom_command(TARGET hope_producer POST_BUILD
@@ -38,6 +46,11 @@ if (WIN32)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_SOURCE_DIR}/deps/OpenSSL/bin/libssl-3-x64.dll"
             "$<TARGET_FILE_DIR:hope_producer>/libssl-3-x64.dll"
+    )
+    add_custom_command(TARGET hope_producer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_BINARY_DIR}/deps/draco/$<CONFIG>/draco.dll"
+            "$<TARGET_FILE_DIR:hope_producer>/draco.dll"
     )
 endif()
 

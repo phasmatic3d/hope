@@ -10,3 +10,6 @@
 [submodule "producer/deps/glm"]
 	path = producer/deps/glm
 	url = https://github.com/g-truc/glm.git
+[submodule "producer/deps/librealsense"]
+	path = producer/deps/librealsense
+	url = https://github.com/IntelRealSense/librealsense.git
