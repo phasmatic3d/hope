@@ -56,7 +56,7 @@ Before you apply the following steps.....
 
 **!!!Linux note**
 
-`sudo apt-get install libssl-dev`
+`sudo apt-get install libssl-dev libusb-1.0-0-dev`
 
 4. `cd producer`
 

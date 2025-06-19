@@ -33,7 +33,7 @@ target_link_directories(hope_producer PRIVATE deps/OpenSSL/lib)
 if (WIN32)
     target_link_libraries(hope_producer PRIVATE draco libcrypto libssl realsense2)
 else()
-    target_link_libraries(hope_producer PRIVATE draco_static crypto ssl)
+    target_link_libraries(hope_producer PRIVATE draco_static crypto ssl realsense2)
 endif()
 
 if (WIN32)
