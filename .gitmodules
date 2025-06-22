@@ -17,3 +17,6 @@
 	path = producer/deps/opencv
 	url = https://github.com/opencv/opencv.git
 	branch = 4.x
+[submodule "producer/deps/opencv_contrib"]
+	path = producer/deps/opencv_contrib
+	url = https://github.com/opencv/opencv_contrib.git
