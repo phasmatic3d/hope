@@ -12,8 +12,8 @@ public:
 
     Detector(const std::string& modelPath,
         const std::string& classesPath,
-        float               confThresh = 0.5f,
-        float               nmsThresh = 0.4f,
+        float               confThresh = 0.4f,
+        float               nmsThresh = 0.3f,
         cv::Size            inpSz = { 640,640 });
 
     void detect_and_draw(cv::Mat& frame,

@@ -2,7 +2,9 @@
 #include <fstream>
 #include <stdexcept>
 #include <iomanip>
+#include <iostream>
 
+#include <librealsense2/rs.hpp>
 
 Detector::Detector(const std::string& modelPath,
     const std::string& classesPath,
@@ -30,8 +32,8 @@ Detector::Detector(const std::string& modelPath,
     if (net.empty())
         throw std::runtime_error("Failed to load model: " + modelPath);
 
-    net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-    net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+    net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+    net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA_FP16);
 }
 
 void Detector::detect_and_draw(cv::Mat& frame,
@@ -40,50 +42,57 @@ void Detector::detect_and_draw(cv::Mat& frame,
     int                     interval)
 {
     // Preprocess
+
+
     cv::Mat blob = cv::dnn::blobFromImage(
         frame, 1 / 255.0f, inpSize, cv::Scalar(), true, false);
     net.setInput(blob);
 
-    // Only run detection every `interval` frames
-    if (frameCount % interval != 0)
-        return;
-
     // Forward pass
     std::vector<cv::Mat> outputs;
     net.forward(outputs, net.getUnconnectedOutLayersNames());
+
+
     cv::Mat& out = outputs[0];  
+
+    
 
     // Parse Detections
     std::vector<int>     ids;
     std::vector<float>   confs;
     std::vector<cv::Rect> boxes;
-    int rows = out.size[1], dims = out.size[2];
+    int rows = out.size[2], dimensions = out.size[1];
+
+    out = out.reshape(1, dimensions); 
+    cv::transpose(out, out); 
+
     float* data = reinterpret_cast<float*>(out.data);
 
-    for (int i = 0; i < rows; ++i, data += dims) {
-        float score = data[4];
-        if (score < confThreshold) continue;
+    for (int i = 0; i < rows; ++i, data += dimensions) {
 
-        // find best class
-        cv::Mat scores(1, (int)classNames.size(), CV_32FC1, data + 5);
+		float* classScores = data + 4; 
+        cv::Mat scores(1, 80, CV_32FC1, classScores);
+
         cv::Point classIdPoint;
         double maxClassScore;
         cv::minMaxLoc(scores, nullptr, &maxClassScore, nullptr, &classIdPoint);
-        if (maxClassScore < confThreshold) continue;
 
-		//decode bounding box
-        float cx = data[0] * frame.cols;
-        float cy = data[1] * frame.rows;
-        float w = data[2] * frame.cols;
-        float h = data[3] * frame.rows;
-        int left = static_cast<int>(cx - w / 2);
-        int top = static_cast<int>(cy - h / 2);
+        float conf = static_cast<float>(maxClassScore);
+        if (conf < confThreshold) continue;
+
+		float x = data[0], y = data[1], w = data[2], h = data[3];
+
+        int left = x * frame.cols - w * frame.cols / 2;
+		int top = y * frame.rows - h * frame.rows / 2;
+
+		int width = w * frame.cols;
+		int height = h * frame.rows;
 
         ids.push_back(classIdPoint.x);
-        confs.push_back(static_cast<float>(maxClassScore));
-        boxes.emplace_back(left, top, static_cast<int>(w), static_cast<int>(h));
+        confs.push_back(conf);
+        boxes.emplace_back(left, top, width, height);
     }
-
+    std::cout << "[DEBUG] kept " << boxes.size() << " boxes before NMS\n";
     // NMS
     std::vector<int> indices;
     cv::dnn::NMSBoxes(boxes, confs, confThreshold, nmsThreshold, indices);
@@ -93,6 +102,20 @@ void Detector::detect_and_draw(cv::Mat& frame,
         const auto& b = boxes[idx];
         int            cls = ids[idx];
         float          c = confs[idx];
+
+        /*std::cout << "[DETECT] class=" << classNames[ids[idx]]
+            << " conf=" << std::fixed << std::setprecision(2)
+                << confs[idx] << "\n";*/
+
+                // Log to console:
+        std::cout << "[BOX] class=\"" << classNames[ids[idx]]
+            << "\" conf=" << std::fixed << std::setprecision(2) << c
+            << "  x=" << b.x
+            << " y=" << b.y
+            << " w=" << b.width
+            << " h=" << b.height
+            << "\n";
+
 
 		// draw bounding box
         cv::rectangle(frame, b, cv::Scalar(0, 255, 0), 2);
@@ -115,19 +138,45 @@ void Detector::detect_and_draw(cv::Mat& frame,
             0.5,
             cv::Scalar(0, 0, 0),
             1);
-
-        // depth at box center
+        
+        // assume `box` is already clamped into [0..W)×[0..H)
         int cx = b.x + b.width / 2;
         int cy = b.y + b.height / 2;
+
+        // clamp into the depth frame
+        cx = std::clamp(cx, 0, depth.get_width() - 1);
+        cy = std::clamp(cy, 0, depth.get_height() - 1);
+
+        // get distance (returns 0 on holes, throws only if x,y out of range)
         float z = depth.get_distance(cx, cy);
-        std::ostringstream distLabel;
-        distLabel << std::fixed << std::setprecision(2) << z << " m";
-        cv::putText(frame,
-            distLabel.str(),
-            cv::Point(b.x, b.y + b.height + 15),
-            cv::FONT_HERSHEY_SIMPLEX,
-            0.5,
-            cv::Scalar(255, 0, 0),
-            1);
+
+        // treat zero or nan as invalid
+        if (z <= 0.f || !std::isfinite(z)) {
+            // skip drawing depth or draw “N/A”
+        }
+        else {
+            std::ostringstream oss;
+            oss << std::fixed << std::setprecision(2) << z << " m";
+            cv::putText(frame, oss.str(),
+                { b.x, b.y + b.height - 45 },
+                cv::FONT_HERSHEY_SIMPLEX, 0.5,
+                cv::Scalar(255, 0, 0), 1);
+        }
+
+        // 1) Extract the single image from the blob :
+        std::vector<cv::Mat> outputs;
+        cv::dnn::imagesFromBlob(blob, outputs);
+        cv::Mat netInput = outputs[0];  // float,  C×H×W  or H×W×C depending on your OpenCV version
+
+        // 3) Denormalize: undo the scale and add back the mean
+        netInput *= 255.0f;                        // undo 1/255.0
+
+        // 4) Convert to 8-bit and back to BGR
+        netInput.convertTo(netInput, CV_8U);
+        cv::cvtColor(netInput, netInput, cv::COLOR_RGB2BGR);
+
+        // 5) Show it
+        cv::imshow("What the net actually sees", netInput);
+        //cv::resize(frame, frame, { 640,480 });
     }
 }

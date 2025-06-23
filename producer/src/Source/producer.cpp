@@ -109,12 +109,10 @@ public:
 		builder.Start(m_num_of_points);
 
 		// Position attribute
-		int pos_att_id = builder.AddAttribute(
-			draco::GeometryAttribute::POSITION, 3, draco::DT_FLOAT32);
+		int pos_att_id = builder.AddAttribute(draco::GeometryAttribute::POSITION, 3, draco::DT_FLOAT32);
 
 		// Color attribute
-		int col_att_id = builder.AddAttribute(
-			draco::GeometryAttribute::COLOR, 3, draco::DT_UINT8);
+		int col_att_id = builder.AddAttribute(draco::GeometryAttribute::COLOR, 3, draco::DT_UINT8);
 
 		// Feed each point’s position & color into Draco
 		for (int i = 0; i < m_num_of_points; ++i) {		
@@ -368,7 +366,7 @@ int main() {
 	bool showColor = true;
 
 	// Define a centered 200×200 ROI
-	const int ROI_W = 300, ROI_H = 300;
+	const int ROI_W = 100, ROI_H = 100;
 	cv::Rect roi;
 	
 	// Object Detector
@@ -384,7 +382,7 @@ int main() {
 	{
 		// Block program until frames arrive
 		rs2::frameset frames = p.wait_for_frames();
-		frames = align_to_color.process(frames);
+		frames = align_to_color.process(frames); // Align depth to color
 		auto color = frames.get_color_frame();
 		rs2::depth_frame depth = frames.get_depth_frame();
 
@@ -410,8 +408,13 @@ int main() {
 
 		//Choose which to display
 		cv::Mat output;
-		if (showColor)
+		if (showColor) {
 			output = visualize_color_frame(color);
+
+			// Object Detection (TODO)
+			det.detect_and_draw(output, depth, frame_count, 10);
+
+		}
 		else
 			output = visualize_depth_frame(depth, color_map);
 
@@ -420,8 +423,7 @@ int main() {
 		roi = cv::Rect(cx - ROI_W / 2, cy - ROI_H / 2, ROI_W, ROI_H);
 		cv::rectangle(output, roi, cv::Scalar(0, 255, 0), 2);
 
-		// Object Detection (TODO)
-		//det.detect_and_draw(output, depth, frame_count, 10);
+		
 
 		// Get a pointer to the vertex data
 		auto vertices = points.get_vertices();   // returns a pointer to rs2::vertex[]
@@ -480,7 +482,6 @@ int main() {
 			cv::FONT_HERSHEY_SIMPLEX,
 			0.6, { 255,255,255 }, 2);
 
-		// Show on window
 		cv::imshow(win_name, output);
 		// Exit on ESC
 		int key = cv::waitKey(1);
@@ -516,17 +517,14 @@ int main() {
 			}
 		}
 
-		switch (key) {
-		case 61: if (dracoSettings.posQuant < 20) dracoSettings.posQuant++; break;
-		case 45: if (dracoSettings.posQuant > 1) dracoSettings.posQuant--; break;
-		case 93: if (dracoSettings.colorQuant < 16) dracoSettings.colorQuant++; break;
-		case 91: if (dracoSettings.colorQuant > 1) dracoSettings.colorQuant--; break;
-		case 46: if (dracoSettings.speedEncode < 10) dracoSettings.speedEncode++; break;
-		case 44: if (dracoSettings.speedEncode > 0) dracoSettings.speedEncode--; break;
-		}
+		else if (key == 61) if (dracoSettings.posQuant < 20) dracoSettings.posQuant++;
+		else if (key == 45) if (dracoSettings.posQuant > 1) dracoSettings.posQuant--;
+		else if (key == 93) if (dracoSettings.colorQuant < 16) dracoSettings.colorQuant++;
+		else if (key == 91) if (dracoSettings.colorQuant > 1) dracoSettings.colorQuant--;
+		else if (key == 46) if (dracoSettings.speedEncode < 10) dracoSettings.speedEncode++;
+		else if (key == 44) if (dracoSettings.speedEncode > 0) dracoSettings.speedEncode--;
 
-		++frame_count;
-		
+		//std::cout << frame_count << std::endl;
 	}
 #endif
 	return 1;
