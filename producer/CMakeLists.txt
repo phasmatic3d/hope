@@ -92,6 +92,7 @@ add_executable(hope_producer
     src/Source/Detector.cpp
     src/Headers/Detector.h
     src/Headers/Structs.h
+    src/Headers/Enums.h
 )
 
 # URL locations for model and classes
@@ -164,6 +165,8 @@ else()
         opencv_imgproc
         opencv_highgui
         opencv_dnn
+        ${CUDART_LIBRARY}
+        ${CUDNN_LIBRARY}
     )
 endif()
 
@@ -183,13 +186,9 @@ if (WIN32)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_BINARY_DIR}/deps/draco/$<CONFIG>/draco.dll"
             "$<TARGET_FILE_DIR:hope_producer>/draco.dll"
-    )
+     )
     
-    add_custom_command(TARGET hope_producer POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_BINARY_DIR}/$<CONFIG>/realsense2d.dll"
-            "$<TARGET_FILE_DIR:hope_producer>/realsense2d.dll"
-    )
+    # TODO, Correctly copy realsense2d.dll and realsense2.dll into correct config directories
     
 endif()
 

@@ -16,9 +16,10 @@ public:
         float               nmsThresh = 0.3f,
         cv::Size            inpSz = { 640,640 });
 
-    void detect_and_draw(cv::Mat& frame,
+    bool detect_and_draw(cv::Mat& frame,
         const rs2::depth_frame& depth,
         int                     frameCount,
+        cv::Rect&               bestROI,
         int                     interval = 10);
 
 

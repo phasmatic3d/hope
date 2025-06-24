@@ -36,9 +36,10 @@ Detector::Detector(const std::string& modelPath,
     net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA_FP16);
 }
 
-void Detector::detect_and_draw(cv::Mat& frame,
+bool Detector::detect_and_draw(cv::Mat& frame,
     const rs2::depth_frame& depth,
     int                     frameCount,
+    cv::Rect&               bestROI,
     int                     interval)
 {
     // Preprocess
@@ -92,31 +93,26 @@ void Detector::detect_and_draw(cv::Mat& frame,
         confs.push_back(conf);
         boxes.emplace_back(left, top, width, height);
     }
-    std::cout << "[DEBUG] kept " << boxes.size() << " boxes before NMS\n";
+    //std::cout << "[DEBUG] kept " << boxes.size() << " boxes before NMS\n";
     // NMS
     std::vector<int> indices;
     cv::dnn::NMSBoxes(boxes, confs, confThreshold, nmsThreshold, indices);
 
+    if (indices.empty()) {
+        // nothing passed the threshold
+        return false;
+    }
+
     //Draw Results
+    int bestIdx = indices[0];
+    float bestConf = confs[bestIdx];
     for (int idx : indices) {
+
         const auto& b = boxes[idx];
         int            cls = ids[idx];
         float          c = confs[idx];
 
-        /*std::cout << "[DETECT] class=" << classNames[ids[idx]]
-            << " conf=" << std::fixed << std::setprecision(2)
-                << confs[idx] << "\n";*/
-
-                // Log to console:
-        std::cout << "[BOX] class=\"" << classNames[ids[idx]]
-            << "\" conf=" << std::fixed << std::setprecision(2) << c
-            << "  x=" << b.x
-            << " y=" << b.y
-            << " w=" << b.width
-            << " h=" << b.height
-            << "\n";
-
-
+        /*
 		// draw bounding box
         cv::rectangle(frame, b, cv::Scalar(0, 255, 0), 2);
 
@@ -162,21 +158,22 @@ void Detector::detect_and_draw(cv::Mat& frame,
                 cv::FONT_HERSHEY_SIMPLEX, 0.5,
                 cv::Scalar(255, 0, 0), 1);
         }
-
-        // 1) Extract the single image from the blob :
-        std::vector<cv::Mat> outputs;
-        cv::dnn::imagesFromBlob(blob, outputs);
-        cv::Mat netInput = outputs[0];  // float,  C×H×W  or H×W×C depending on your OpenCV version
-
-        // 3) Denormalize: undo the scale and add back the mean
-        netInput *= 255.0f;                        // undo 1/255.0
-
-        // 4) Convert to 8-bit and back to BGR
-        netInput.convertTo(netInput, CV_8U);
-        cv::cvtColor(netInput, netInput, cv::COLOR_RGB2BGR);
-
-        // 5) Show it
-        cv::imshow("What the net actually sees", netInput);
-        //cv::resize(frame, frame, { 640,480 });
+        */
+        if (confs[idx] > bestConf) {
+            bestConf = confs[idx];
+            bestIdx = idx;
+        }
     }
+    bestROI = boxes[bestIdx];
+
+    
+    
+
+    // clamp into frame bounds
+    bestROI.x = std::clamp(bestROI.x, 0, frame.cols - 1);
+    bestROI.y = std::clamp(bestROI.y, 0, frame.rows - 1);
+    bestROI.width = std::clamp(bestROI.width, 1, frame.cols - bestROI.x);
+    bestROI.height = std::clamp(bestROI.height, 1, frame.rows - bestROI.y);
+
+    return true;
 }

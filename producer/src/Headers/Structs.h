@@ -17,31 +17,65 @@ struct Timer {
 
 
 struct EncodingStats {
-    double prep_ms = 0.0;      // time to feed Draco builder
-    double encode_ms = 0.0;    // time to run encoder.Encode...
-    size_t bytes = 0;          // final buffer size
+	double det_ms = 0.0; // time to run detection
+	double pc_ms = 0.0; // time to find ROI PC
+    double prep_ms = 0.0;   // time to feed Draco builder
+    double encode_ms = 0.0;   // time to run encoder.Encode...
+    double decode_ms = 0.0;   // time to run decoder.Decode...
+    mutable double total_time_ms = 0.0;
+    size_t encoded_bytes = 0;     // final buffer size
+    size_t raw_bytes = 0; // encoded buffer size
+	size_t pts = 0; // number of points in the point cloud
 
     void print() const {
-        // Build the new text
-        char buf[128];
-        int  len = std::snprintf(buf, sizeof(buf),
-            "Prep: %7.2f ms | Encode: %7.2f ms | Size: %8zu bytes",
-            prep_ms, encode_ms, bytes);
-        if (len < 0) len = 0;
-        if (len > (int)sizeof(buf) - 1) len = sizeof(buf) - 1;
-        buf[len] = '\0';
-
-        // Pad with spaces up to last_length so we fully clear the old text
-        static size_t last_length = 0;
-        size_t        target_len = std::max<size_t>(last_length, len);
-        std::string   out(buf);
-        if (out.size() < target_len) {
-            out.append(target_len - out.size(), ' ');
+        // On the very first call we need to emit blank lines to reserve space.
+        static bool first = true;
+        const int LINES = 8;  // total lines we will print each frame
+        if (first) {
+            for (int i = 0; i < LINES; ++i) std::cout << "\n";
+            first = false;
         }
-        last_length = out.size();
 
-        // Carriage return + text + flush
-        std::cout << '\r' << out << std::flush;
+        // Move cursor back up so our new block overwrites the old one
+        std::cout << "\033[" << LINES << "A";
+
+        // compute savings %
+        double savings = 0.0;
+        if (raw_bytes > 0) {
+            savings = 100.0 * (static_cast<double>(raw_bytes) - static_cast<double>(encoded_bytes))
+                / static_cast<double>(raw_bytes);
+        }
+
+        // Now print each stat on its own line
+        std::cout << "Obj Detection time : " << std::fixed << std::setprecision(2) << det_ms << " ms\n"
+            << "PC   time : " << std::fixed << std::setprecision(2) << pc_ms << " ms\n"
+            << "Prep  time : " << std::fixed << std::setprecision(2) << prep_ms << " ms\n"
+            << "Encode time : " << std::fixed << std::setprecision(2) << encode_ms << " ms\n"
+            << "Decode time : " << std::fixed << std::setprecision(2) << decode_ms << " ms\n"
+            << "Pts         : " << pts << "\n"
+            << "Raw/Enc     : "
+            << raw_bytes << " B / " << encoded_bytes << " B"
+            << "  (Saved: " << std::fixed << std::setprecision(1) << savings << "%)\n"
+            << std::flush;
+    }
+
+    void printBodyOnly() const {
+        // compute total_time
+        total_time_ms = det_ms + pc_ms + prep_ms + encode_ms + decode_ms;
+
+        double savings = (raw_bytes > 0)
+            ? 100.0 * (raw_bytes - encoded_bytes) / raw_bytes
+            : 0.0;
+        std::cout
+            << "Obj Detection time : " << std::fixed << std::setprecision(2) << det_ms << " ms\n"
+            << "PC   time        : " << std::fixed << std::setprecision(2) << pc_ms << " ms\n"
+            << "Prep  time        : " << std::fixed << std::setprecision(2) << prep_ms << " ms\n"
+            << "Encode time       : " << std::fixed << std::setprecision(2) << encode_ms << " ms\n"
+            << "Decode time       : " << std::fixed << std::setprecision(2) << decode_ms << " ms\n"
+            << "Pts               : " << pts << "\n"
+            << "Raw/Enc           : "
+            << raw_bytes << " B / " << encoded_bytes << " B"
+            << "  (Saved: " << std::fixed << std::setprecision(1) << savings << "%)\n";
     }
 };
 
@@ -49,21 +83,26 @@ struct DracoSettings {
     int posQuant = 10;  // position quantization bits
     int colorQuant = 8;   // color quantization bits
     int speedEncode = 5;   // encoder speed “compression vs speed”
-    int speedDecode = 10;  // decoder speed 
+    int speedDecode = 5;  // decoder speed 
+    int roiWidth = 100; // default ROI width
+    int roiHeight = 100; // default ROI height
 
-    // Called when you press Space:
+
+
     void applyTo(draco::Encoder& enc) const {
         enc.SetSpeedOptions(speedEncode, speedDecode);
         enc.SetAttributeQuantization(draco::GeometryAttribute::POSITION, posQuant);
         enc.SetAttributeQuantization(draco::GeometryAttribute::COLOR, colorQuant);
     }
 
+
     // For display
     std::string toString() const {
         char buf[128];
         std::snprintf(buf, sizeof(buf),
-            "Qpos:%2d Qcol:%2d Spd:%2d/%2d",
-            posQuant, colorQuant, speedEncode, speedDecode
+            "Qpos:%2d Qcol:%2d Spd:%2d/%2d ROI:%dx%d",
+            posQuant, colorQuant, speedEncode, 10,
+            roiWidth, roiHeight
         );
         return buf;
     }
