@@ -365,16 +365,17 @@ void print_stats(EncodingStats& statsROI, EncodingStats& statsOut, EncodingStats
 		first = false;
 	}
 
-	std::cout << "\033[" << TOTAL << "A";
+	// move up TOTAL lines, then clear everything below
+	std::cout  << "\033[" << TOTAL << "A" << "\033[J";
 
 	// --- ROI stats ---
-	std::cout << "=== ROI Stats ===\n";
+	std::cout << "\033[32m" << "=== ROI Stats ===\n";
 	statsROI.printBodyOnly();
 	// --- Outside ROI stats ---
-	std::cout << "=== Outside-of-ROI Stats ===\n";
+	std::cout << "\033[0m" << "\033[31m" << "===Outside-of-ROI Stats ===\n";
 	statsOut.printBodyOnly();
 	// --- Full Frame stats ---
-	std::cout << "=== Full Frame Stats===\n";
+	std::cout << "\033[0m" << "\033[38;2;255;165;0m"  << "=== Full Frame Stats ===\n";
 	statsFull.printBodyOnly();
 
 	std::cout << std::flush;
@@ -474,20 +475,17 @@ int main() {
 		if (currentMode == BuildMode::ROI) { 
 			// Object Detection (TODO)
 			Timer t_det;
-			
-
-
-			if (det.detect_and_draw(output, depth, frame_count, roi)) {
+			//if (det.detect_and_draw(output, depth, frame_count, roi)) {
 				// success: get ROI from object detection
-			}
-			else {
+			//}
+			//else {
 				// fallback: center a default ROI
 				int cx = output.cols / 2, cy = output.rows / 2;
 				roi = cv::Rect(cx - dracoSettingsROI.roiWidth / 2,
 					cy - dracoSettingsROI.roiHeight / 2,
 					dracoSettingsROI.roiWidth,
 					dracoSettingsROI.roiHeight);
-			}
+			//}
 			cv::rectangle(output, roi, cv::Scalar(0, 255, 0), 2); // Draw
 			statsROI.det_ms = t_det.elapsed_ms();
 
@@ -557,9 +555,9 @@ int main() {
 			statsOut.pc_ms = t_pc_out.elapsed_ms(); // Time to find outside ROI point cloud
 
 			dracoSettingsOut.posQuant = dracoSettingsROI.posQuant / 4;
-			dracoSettingsOut.colorQuant = dracoSettingsROI.colorQuant / 4;
-			dracoSettingsOut.speedEncode = 10;
-			dracoSettingsOut.speedDecode = 10;
+			dracoSettingsOut.colorQuant = dracoSettingsROI.colorQuant;
+			dracoSettingsOut.speedEncode = dracoSettingsROI.speedDecode;
+			dracoSettingsOut.speedDecode = dracoSettingsROI.speedDecode;
 			point_cloud cloudOut(static_cast<int>(outVerts.size()));
 
 			if (!outVerts.empty()) {
@@ -622,7 +620,7 @@ int main() {
 			}
 		} // BUILD MODE FULL FRAME
 
-		std::cout << "Total Time : " << std::fixed << std::setprecision(2) << statsROI.total_time_ms + statsOut.total_time_ms + statsFull.total_time_ms << " ms\n";
+		std::cout << "\033[0m" << "Total Time : " << std::fixed << std::setprecision(2) << statsROI.total_time_ms + statsOut.total_time_ms + statsFull.total_time_ms << " ms\n";
 			
 
 		// Update & draw FPS

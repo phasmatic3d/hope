@@ -82,10 +82,10 @@ struct EncodingStats {
 struct DracoSettings {
     int posQuant = 10;  // position quantization bits
     int colorQuant = 8;   // color quantization bits
-    int speedEncode = 5;   // encoder speed “compression vs speed”
-    int speedDecode = 5;  // decoder speed 
-    int roiWidth = 100; // default ROI width
-    int roiHeight = 100; // default ROI height
+    int speedEncode = 10;   // encoder speed “compression vs speed”
+    int speedDecode = 10;  // decoder speed 
+    int roiWidth = 240; // default ROI width
+    int roiHeight = 240; // default ROI height
 
 
 

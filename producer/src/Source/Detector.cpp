@@ -103,62 +103,10 @@ bool Detector::detect_and_draw(cv::Mat& frame,
         return false;
     }
 
-    //Draw Results
     int bestIdx = indices[0];
     float bestConf = confs[bestIdx];
     for (int idx : indices) {
 
-        const auto& b = boxes[idx];
-        int            cls = ids[idx];
-        float          c = confs[idx];
-
-        /*
-		// draw bounding box
-        cv::rectangle(frame, b, cv::Scalar(0, 255, 0), 2);
-
-        //label text
-        std::ostringstream label;
-        label << classNames[cls] << ' ' << int(c * 100) << '%';
-        int baseLine;
-        auto textSize = cv::getTextSize(
-            label.str(), cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
-        cv::rectangle(frame,
-            cv::Point(b.x, b.y - textSize.height - baseLine),
-            cv::Point(b.x + textSize.width, b.y),
-            cv::Scalar(0, 255, 0),
-            cv::FILLED);
-        cv::putText(frame,
-            label.str(),
-            cv::Point(b.x, b.y - baseLine),
-            cv::FONT_HERSHEY_SIMPLEX,
-            0.5,
-            cv::Scalar(0, 0, 0),
-            1);
-        
-        // assume `box` is already clamped into [0..W)×[0..H)
-        int cx = b.x + b.width / 2;
-        int cy = b.y + b.height / 2;
-
-        // clamp into the depth frame
-        cx = std::clamp(cx, 0, depth.get_width() - 1);
-        cy = std::clamp(cy, 0, depth.get_height() - 1);
-
-        // get distance (returns 0 on holes, throws only if x,y out of range)
-        float z = depth.get_distance(cx, cy);
-
-        // treat zero or nan as invalid
-        if (z <= 0.f || !std::isfinite(z)) {
-            // skip drawing depth or draw “N/A”
-        }
-        else {
-            std::ostringstream oss;
-            oss << std::fixed << std::setprecision(2) << z << " m";
-            cv::putText(frame, oss.str(),
-                { b.x, b.y + b.height - 45 },
-                cv::FONT_HERSHEY_SIMPLEX, 0.5,
-                cv::Scalar(255, 0, 0), 1);
-        }
-        */
         if (confs[idx] > bestConf) {
             bestConf = confs[idx];
             bestIdx = idx;
