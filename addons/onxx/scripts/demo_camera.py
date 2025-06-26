@@ -113,14 +113,16 @@ while cap.isOpened():
             color = tuple(np.random.randint(0, 256, size=3))
             out_mask = (out_mask_logits[0] > 0.0).permute(1, 2, 0).cpu().numpy().astype(np.uint8)
             colored_mask = np.zeros_like(frame, dtype=np.uint8)
-            for c in range(3):
-                colored_mask[:, :, c] = out_mask[:, :, 0] * color[c]
+            #for c in range(3):
+            colored_mask[:, :, 0] = out_mask[:, :, 0] * 255
+            colored_mask[:, :, 1] = out_mask[:, :, 0] * 0
+            colored_mask[:, :, 2] = out_mask[:, :, 0] * 0
         else:
             out_mask = (out_mask_logits[0] > 0.0).permute(1, 2, 0).cpu().numpy().astype(np.uint8) * 255
             colored_mask = cv2.cvtColor(out_mask, cv2.COLOR_GRAY2RGB)
 
-        all_mask = cv2.addWeighted(all_mask, 1, colored_mask, 0.5, 0)
-        frame = cv2.addWeighted(frame, 1, all_mask, 0.5, 0)
+        all_mask = cv2.addWeighted(all_mask, 1, colored_mask, 1, 0)
+        frame = cv2.addWeighted(frame, 1, all_mask, 1, 0)
 
         cv2.imshow("Camera", frame)
 
