@@ -43,7 +43,7 @@ def build_sam2_camera_predictor(
     apply_postprocessing=True,
 ):
     hydra_overrides = [
-        "++model._target_=sam2.sam2_camera_predictor.SAM2CameraPredictor",
+        "++model._target_=sam2_camera_predictor.SAM2CameraPredictor",
     ]
     if apply_postprocessing:
         hydra_overrides_extra = hydra_overrides_extra.copy()

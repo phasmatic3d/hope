@@ -3,7 +3,7 @@ import cv2
 import argparse
 import os
 import numpy as np
-from sam2.build_sam import build_sam2_camera_predictor
+import sam2_camera_predictor as sam2_camera
 from enum import Enum
 from pathlib import Path
 
@@ -60,7 +60,7 @@ if not os.path.exists(CONFIG_PATH):
 if not os.path.exists(path_to_yaml):
     print(f'Config {link[0]} for sam2.1 does not exist, exiting...')
 
-predictor = build_sam2_camera_predictor(path_to_yaml, path_to_chkp)
+predictor = sam2_camera.build_sam2_camera_predictor(path_to_yaml, path_to_chkp)
 
 point = None
 point_selected = False
