@@ -13,3 +13,6 @@
 [submodule "producer/deps/librealsense"]
 	path = producer/deps/librealsense
 	url = https://github.com/IntelRealSense/librealsense.git
+[submodule "tests/onxx/deps/json"]
+	path = tests/onxx/deps/json
+	url = https://github.com/nlohmann/json.git

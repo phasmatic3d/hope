@@ -1,0 +1,22 @@
+{
+  "configurations": [
+    {
+      "name": "Linux",
+      "includePath": [
+        "${workspaceFolder}/**",
+        "${workspaceFolder}/build/_deps/draco/",
+        "${workspaceFolder}/build/_deps/draco-src/src",
+        "${workspaceFolder}/build/_deps/spdlog-src/include",
+        "${workspaceFolder}/build/_deps/websocketpp-src/",
+        "${workspaceFolder}/build/_deps/asio-src/asio/include",
+        "${workspaceFolder}/build/_deps/glm-src"
+      ],
+      "defines": [],
+      "compilerPath": "/usr/bin/g++",
+      "cStandard": "c17",
+      "cppStandard": "c++17",
+      "intelliSenseMode": "linux-gcc-x64"
+    }
+  ],
+  "version": 4
+}
