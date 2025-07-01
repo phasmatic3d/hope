@@ -6,36 +6,7 @@ import numpy as np
 import sam2_camera_predictor as sam2_camera
 from enum import Enum
 from pathlib import Path
-
-WORKING_DIR = os.getcwd()
-CONFIG_PATH = os.path.join(WORKING_DIR, "configs")
-CHECKPOINT_PATH = os.path.join(WORKING_DIR, "checkpoints")
-
-SAM2p1_BASE_URL="https://dl.fbaipublicfiles.com/segment_anything_2/092824"
-
-sam2p1_configs = [
-    f"{SAM2p1_BASE_URL}/sam2.1_hiera_tiny.pt",
-    f"{SAM2p1_BASE_URL}/sam2.1_hiera_small.pt",
-    f"{SAM2p1_BASE_URL}/sam2.1_hiera_base_plus.pt",
-    f"{SAM2p1_BASE_URL}/sam2.1_hiera_large.pt"]
-
-class MODEL_SIZE(Enum):
-    TINY = 0
-    SMALL = 1
-    BASE_PLUS = 2
-    LARGE = 3
-
-map_to_config = {
-    MODEL_SIZE.TINY: ["sam2.1_hiera_t.yaml", sam2p1_configs[MODEL_SIZE.TINY.value]],
-    MODEL_SIZE.SMALL: ["sam2.1_hiera_s.yaml", sam2p1_configs[MODEL_SIZE.SMALL.value]],
-    MODEL_SIZE.BASE_PLUS: ["sam2.1_hiera_base+.yaml", sam2p1_configs[MODEL_SIZE.BASE_PLUS.value]],
-    MODEL_SIZE.LARGE: ["sam2.1_hiera_l.yaml", sam2p1_configs[MODEL_SIZE.LARGE.value]] }
-
-map_to_enum = {
-    "tiny" : MODEL_SIZE.TINY,
-    "small" : MODEL_SIZE.SMALL,
-    "base_plus" : MODEL_SIZE.BASE_PLUS,
-    "large" : MODEL_SIZE.LARGE,}
+import sam2_config
 
 torch.autocast(device_type="cuda", dtype=torch.bfloat16).__enter__()
 
@@ -44,17 +15,17 @@ if torch.cuda.get_device_properties(0).major >= 8:
     torch.backends.cudnn.allow_tf32 = True
 
 parser = argparse.ArgumentParser(description="SAM2.1 demo")
-parser.add_argument("--outdir", type=str, default=os.path.join(WORKING_DIR))
+parser.add_argument("--outdir", type=str, default=os.path.join(sam2_config.WORKING_DIR))
 parser.add_argument("--checkpoint", type=str, default="large", choices=["tiny", "small", "base_plus", "large"])
 
 args = parser.parse_args()
 
-enum = map_to_enum[args.checkpoint]
-link = map_to_config[enum]
-path_to_yaml = os.path.join(CONFIG_PATH, link[0])
-path_to_chkp = os.path.join(CHECKPOINT_PATH, Path(link[1]).name)
+enum = sam2_config.map_to_enum[args.checkpoint]
+link = sam2_config.map_to_config[enum]
+path_to_yaml = os.path.join(sam2_config.CONFIG_PATH, link[0])
+path_to_chkp = os.path.join(sam2_config.CHECKPOINT_PATH, Path(link[1]).name)
 
-if not os.path.exists(CONFIG_PATH):
+if not os.path.exists(sam2_config.CONFIG_PATH):
     print('Config path for sam2.1 does not exist, exiting...')
     
 if not os.path.exists(path_to_yaml):
@@ -73,7 +44,8 @@ def collect_point(event, x, y, flags, param):
         point = [x, y]
         point_selected = True
 
-cap = cv2.VideoCapture(0)
+demo_vid = './assets/terence tao clip2.mp4'
+cap = cv2.VideoCapture(demo_vid)
 cv2.namedWindow("Camera")
 cv2.setMouseCallback("Camera", collect_point)
 
@@ -109,19 +81,14 @@ while cap.isOpened():
 
         all_mask = np.zeros_like(frame, dtype=np.uint8)
         
-        if random_color:
-            color = tuple(np.random.randint(0, 256, size=3))
-            out_mask = (out_mask_logits[0] > 0.0).permute(1, 2, 0).cpu().numpy().astype(np.uint8)
-            colored_mask = np.zeros_like(frame, dtype=np.uint8)
-            #for c in range(3):
-            colored_mask[:, :, 0] = out_mask[:, :, 0] * 255
-            colored_mask[:, :, 1] = out_mask[:, :, 0] * 0
-            colored_mask[:, :, 2] = out_mask[:, :, 0] * 0
-        else:
-            out_mask = (out_mask_logits[0] > 0.0).permute(1, 2, 0).cpu().numpy().astype(np.uint8) * 255
-            colored_mask = cv2.cvtColor(out_mask, cv2.COLOR_GRAY2RGB)
+        out_mask = (out_mask_logits[0] > 0.0).permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+        colored_mask = np.zeros_like(frame, dtype=np.uint8)
 
-        all_mask = cv2.addWeighted(all_mask, 1, colored_mask, 1, 0)
+        colored_mask[:, :, 0] = out_mask[:, :, 0] * 255
+        colored_mask[:, :, 1] = out_mask[:, :, 0] * 0
+        colored_mask[:, :, 2] = out_mask[:, :, 0] * 0
+
+        all_mask = cv2.addWeighted(all_mask, 0, colored_mask, 1, 0)
         frame = cv2.addWeighted(frame, 1, all_mask, 1, 0)
 
         cv2.imshow("Camera", frame)
