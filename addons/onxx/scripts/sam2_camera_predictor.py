@@ -34,17 +34,9 @@ def _load_checkpoint(model, ckpt_path):
             raise RuntimeError()
         logging.info("Loaded checkpoint sucessfully")
         
-def build_sam2_camera_predictor(
-    config_file,
-    ckpt_path=None,
-    device="cuda",
-    mode="eval",
-    hydra_overrides_extra=[],
-    apply_postprocessing=True,
-):
-    hydra_overrides = [
-        "++model._target_=sam2_camera_predictor.SAM2CameraPredictor",
-    ]
+def build_sam2_camera_predictor(config_file, ckpt_path=None, device="cuda", mode="eval", hydra_overrides_extra=[], apply_postprocessing=True, image_size = 1024 ):
+    hydra_overrides = [ "++model._target_=sam2_camera_predictor.SAM2CameraPredictor", ]
+
     if apply_postprocessing:
         hydra_overrides_extra = hydra_overrides_extra.copy()
         hydra_overrides_extra += [
@@ -58,9 +50,10 @@ def build_sam2_camera_predictor(
             "++model.fill_hole_area=8",
         ]
     hydra_overrides.extend(hydra_overrides_extra)
-
+    
     # Read config and init model
     cfg = compose(config_name=config_file, overrides=hydra_overrides)
+    cfg.model.image_size = image_size
     OmegaConf.resolve(cfg)
     model = instantiate(cfg.model, _recursive_=True)
     _load_checkpoint(model, ckpt_path)
@@ -92,13 +85,7 @@ class SAM2CameraPredictor(SAM2Base):
         self.condition_state = {}
         self.frame_idx = 0
 
-    def perpare_data(
-        self,
-        img,
-        image_size=1024,
-        img_mean=(0.485, 0.456, 0.406),
-        img_std=(0.229, 0.224, 0.225),
-    ):
+    def perpare_data( self, img, image_size, img_mean=(0.485, 0.456, 0.406), img_std=(0.229, 0.224, 0.225), ):
         if isinstance(img, np.ndarray):
             img_np = img
             img_np = cv2.resize(img_np, (image_size, image_size)) / 255.0

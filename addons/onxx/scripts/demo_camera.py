@@ -4,7 +4,6 @@ import argparse
 import os
 import numpy as np
 import sam2_camera_predictor as sam2_camera
-from enum import Enum
 from pathlib import Path
 import sam2_config
 
@@ -36,7 +35,6 @@ predictor = sam2_camera.build_sam2_camera_predictor(path_to_yaml, path_to_chkp)
 point = None
 point_selected = False
 if_init = False
-random_color = True
 
 def collect_point(event, x, y, flags, param):
     global point, point_selected
@@ -44,8 +42,8 @@ def collect_point(event, x, y, flags, param):
         point = [x, y]
         point_selected = True
 
-demo_vid = './assets/terence tao clip2.mp4'
-cap = cv2.VideoCapture(demo_vid)
+#demo_vid = './assets/terence tao clip2.mp4'
+cap = cv2.VideoCapture(0)
 cv2.namedWindow("Camera")
 cv2.setMouseCallback("Camera", collect_point)
 
