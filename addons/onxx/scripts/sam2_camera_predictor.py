@@ -4,23 +4,24 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-from collections import OrderedDict
 
 import torch
+import cv2
+import logging
+import torch
+import numpy as np
 
+from collections import OrderedDict
 from tqdm import tqdm
+from omegaconf import OmegaConf
+
+from hydra import initialize, compose
+from hydra.utils import instantiate
+from hydra.core.global_hydra import GlobalHydra
+
 
 from sam2.modeling.sam2_base import NO_OBJ_SCORE, SAM2Base
 from sam2.utils.misc import concat_points, fill_holes_in_mask_scores, load_video_frames
-import numpy as np
-import cv2
-
-import logging
-
-import torch
-from hydra import compose
-from hydra.utils import instantiate
-from omegaconf import OmegaConf
 
 def _load_checkpoint(model, ckpt_path):
     if ckpt_path is not None:
@@ -34,8 +35,21 @@ def _load_checkpoint(model, ckpt_path):
             raise RuntimeError()
         logging.info("Loaded checkpoint sucessfully")
         
-def build_sam2_camera_predictor(config_file, ckpt_path=None, device="cuda", mode="eval", hydra_overrides_extra=[], apply_postprocessing=True, image_size = 1024 ):
+def build_sam2_camera_predictor(
+    config_file: str, 
+    config_path: str,
+    ckpt_path=None, 
+    device="cuda", 
+    mode="eval", 
+    hydra_overrides_extra=[], 
+    apply_postprocessing=True, 
+    image_size = 1024 
+):
     hydra_overrides = [ "++model._target_=sam2_camera_predictor.SAM2CameraPredictor", ]
+
+    # Clear Hydra if it's already initialized
+    if GlobalHydra.instance().is_initialized():
+        GlobalHydra.instance().clear()
 
     if apply_postprocessing:
         hydra_overrides_extra = hydra_overrides_extra.copy()
@@ -49,17 +63,23 @@ def build_sam2_camera_predictor(config_file, ckpt_path=None, device="cuda", mode
             # fill small holes in the low-res masks up to `fill_hole_area` (before resizing them to the original video resolution)
             "++model.fill_hole_area=8",
         ]
+
     hydra_overrides.extend(hydra_overrides_extra)
     
+    with initialize(config_path=config_path, version_base=None):
+        cfg = compose(config_name=config_file, overrides=hydra_overrides)
     # Read config and init model
-    cfg = compose(config_name=config_file, overrides=hydra_overrides)
+    #cfg = compose(config_name=config_file, overrides=hydra_overrides)
     cfg.model.image_size = image_size
     OmegaConf.resolve(cfg)
+
     model = instantiate(cfg.model, _recursive_=True)
     _load_checkpoint(model, ckpt_path)
     model = model.to(device)
+
     if mode == "eval":
         model.eval()
+
     return model
 
 class SAM2CameraPredictor(SAM2Base):
@@ -75,6 +95,7 @@ class SAM2CameraPredictor(SAM2Base):
         clear_non_cond_mem_around_input=False,
         # whether to also clear non-conditioning memory of the surrounding frames (only effective when `clear_non_cond_mem_around_input` is True).
         clear_non_cond_mem_for_multi_obj=False,
+        device: str="cpu", 
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -84,8 +105,9 @@ class SAM2CameraPredictor(SAM2Base):
         self.clear_non_cond_mem_for_multi_obj = clear_non_cond_mem_for_multi_obj
         self.condition_state = {}
         self.frame_idx = 0
+        self._device = torch.device(device)
 
-    def perpare_data( self, img, image_size, img_mean=(0.485, 0.456, 0.406), img_std=(0.229, 0.224, 0.225), ):
+    def prepare_data( self, img, image_size, img_mean=(0.485, 0.456, 0.406), img_std=(0.229, 0.224, 0.225), ):
         if isinstance(img, np.ndarray):
             img_np = img
             img_np = cv2.resize(img_np, (image_size, image_size)) / 255.0
@@ -106,10 +128,13 @@ class SAM2CameraPredictor(SAM2Base):
     @torch.inference_mode()
     def load_first_frame(self, img):
 
+        offload_to_cpu = not torch.cuda.is_available()
         self.condition_state = self._init_state(
-            offload_video_to_cpu=False, offload_state_to_cpu=False
+            offload_video_to_cpu=offload_to_cpu,
+            offload_state_to_cpu=offload_to_cpu
         )
-        img, width, height = self.perpare_data(img, image_size=self.image_size)
+
+        img, width, height = self.prepare_data(img, image_size=self.image_size)
         self.condition_state["images"] = [img]
         self.condition_state["num_frames"] = len(self.condition_state["images"])
         self.condition_state["video_height"] = height
@@ -117,7 +142,7 @@ class SAM2CameraPredictor(SAM2Base):
         self._get_image_feature(frame_idx=0, batch_size=1)
 
     def add_conditioning_frame(self, img):
-        img, width, height = self.perpare_data(img, image_size=self.image_size)
+        img, width, height = self.prepare_data(img, image_size=self.image_size)
         self.condition_state["images"].append(img)
         self.condition_state["num_frames"] = len(self.condition_state["images"])
         self._get_image_feature(
@@ -141,7 +166,7 @@ class SAM2CameraPredictor(SAM2Base):
         self.condition_state["offload_state_to_cpu"] = offload_state_to_cpu
         # the original video height and width, used for resizing final output scores
 
-        self.condition_state["device"] = torch.device("cuda")
+        self.condition_state["device"] = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         if offload_state_to_cpu:
             self.condition_state["storage_device"] = torch.device("cpu")
         else:
@@ -806,7 +831,7 @@ class SAM2CameraPredictor(SAM2Base):
         if not self.condition_state["tracking_has_started"]:
             self.propagate_in_video_preflight()
 
-        img, _, _ = self.perpare_data(img, image_size=self.image_size)
+        img, _, _ = self.prepare_data(img, image_size=self.image_size)
 
         output_dict = self.condition_state["output_dict"]
         obj_ids = self.condition_state["obj_ids"]
@@ -1031,9 +1056,7 @@ class SAM2CameraPredictor(SAM2Base):
         )
         if backbone_out is None:
             # Cache miss -- we will run inference on a single image
-            image = (
-                self.condition_state["images"][frame_idx].cuda().float().unsqueeze(0)
-            )
+            image = self.condition_state["images"][frame_idx].to(self._device).float().unsqueeze(0)
             backbone_out = self.forward_image(image)
             # Cache the most recent frame's feature (for repeated interactions with
             # a frame; we can use an LRU cache for more frames in the future).
@@ -1058,7 +1081,7 @@ class SAM2CameraPredictor(SAM2Base):
         return features
 
     def _get_feature(self, img, batch_size):
-        image = img.cuda().float().unsqueeze(0)
+        image = img.to(self._device).float().unsqueeze(0)
         backbone_out = self.forward_image(image)
         expanded_image = image.expand(batch_size, -1, -1, -1)
         expanded_backbone_out = {

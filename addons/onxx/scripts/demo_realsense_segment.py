@@ -11,8 +11,21 @@ import sam2_camera_predictor as sam2_camera
 
 from pathlib import Path
 
-def launch_demo(path_to_yaml, path_to_chkp, image_size) :
-    predictor = sam2_camera.build_sam2_camera_predictor(path_to_yaml, path_to_chkp, image_size=image_size)
+def launch_demo(
+    path_to_yaml: str, 
+    path_to_chkp: str,
+    device: str,
+    image_size: int
+):
+    config_name = Path(path_to_yaml).name
+    config_path = "configs"
+    predictor = sam2_camera.build_sam2_camera_predictor(
+        config_file=config_name, 
+        config_path=config_path,
+        ckpt_path=path_to_chkp, 
+        device=device,
+        image_size=image_size
+    )
 
     pipeline = rs.pipeline()
     config = rs.config()
@@ -130,10 +143,13 @@ def launch_demo(path_to_yaml, path_to_chkp, image_size) :
 
 def main():
     DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    
+    print(f"Using device: {DEVICE}")
 
-    if torch.cuda.get_device_properties(0).major >= 8:
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
+    if torch.cuda.is_available():
+        if torch.cuda.get_device_properties(0).major >= 8:
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
 
     parser = argparse.ArgumentParser(description="Realsense SAM2.1 demo")
     parser.add_argument("--checkpoint", type=str, default="large", choices=["tiny", "small", "base_plus", "large"])
@@ -144,6 +160,7 @@ def main():
     enum = sam2_config.map_to_enum[args.checkpoint]
     link = sam2_config.map_to_config[enum]
     path_to_yaml = os.path.join(sam2_config.CONFIG_PATH, link[0])
+    print(f"Received path_to_yaml: {path_to_yaml}")
     path_to_chkp = os.path.join(sam2_config.CHECKPOINT_PATH, Path(link[1]).name)
 
     if args.image_size % 32 != 0:
@@ -163,7 +180,12 @@ def main():
         sam2_config.getRequest(sam2_config.CHECKPOINT_PATH, link[1])
 
     with torch.autocast(device_type=DEVICE.__str__(), dtype=torch.bfloat16):
-        launch_demo(path_to_yaml, path_to_chkp, args.image_size)
+        launch_demo(
+            path_to_yaml=path_to_yaml, 
+            path_to_chkp=path_to_chkp, 
+            device=DEVICE,
+            image_size=args.image_size
+        )
 
 if __name__ == "__main__":
     print("PyTorch version:", torch.__version__)
