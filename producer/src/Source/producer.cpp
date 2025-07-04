@@ -78,6 +78,7 @@ std::set<connection_hdl, std::owner_less<connection_hdl>> connections;
 std::mutex connection_mutex;
 std::mutex point_cloud_mutex;
 
+
 class point_cloud {
 public:
 	point_cloud(int num_of_points = 1000) : m_num_of_points(num_of_points) {
@@ -298,7 +299,7 @@ void update_and_draw_fps(cv::Mat& frame,
 	std::chrono::steady_clock::time_point& last_time,
 	double& fps)
 {
-	frame_count++;
+
 	auto now = std::chrono::steady_clock::now();
 	auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_time).count();
 	if (elapsed >= 1)
@@ -418,6 +419,7 @@ int main() {
 	// Object Detector
 	frame_count = 0;
 	Detector det("../models/yolov8n.onnx", "../models/coco.names"); 
+	AsyncDetector asyncDet{ std::move(det), /*interval=*/10 };
 
 	// Encoding Settings and stats
 	DracoSettings dracoSettingsROI;
@@ -475,18 +477,24 @@ int main() {
 		if (currentMode == BuildMode::ROI) { 
 			// Object Detection (TODO)
 			Timer t_det;
-			//if (det.detect_and_draw(output, depth, frame_count, roi)) {
-				// success: get ROI from object detection
-			//}
-			//else {
-				// fallback: center a default ROI
+
+			// feed the detector whenever frame_count % 10 == 0
+			asyncDet.pushFrame(output, depth, frame_count);
+
+			
+			if (auto detRoi = asyncDet.getROI()) {
+				if(frame_count % 10 != 0)
+					roi = *detRoi;
+			}
+			else {
+				// fallback... center a default ROI
 				int cx = output.cols / 2, cy = output.rows / 2;
 				roi = cv::Rect(cx - dracoSettingsROI.roiWidth / 2,
 					cy - dracoSettingsROI.roiHeight / 2,
 					dracoSettingsROI.roiWidth,
 					dracoSettingsROI.roiHeight);
-			//}
-			cv::rectangle(output, roi, cv::Scalar(0, 255, 0), 2); // Draw
+			}
+			cv::rectangle(output, roi, cv::Scalar(0, 255, 0), 2);
 			statsROI.det_ms = t_det.elapsed_ms();
 
 			// Gather only the vertices inside the ROI
@@ -571,10 +579,6 @@ int main() {
 				);
 			}
 
-			// Print Stats for both out and ROI
-			if (!roiVerts.empty() && !outVerts.empty()) 
-				print_stats(statsROI, statsOut, statsFull);
-			
 
 		} // BUILD MODE ROI-OUTSIDE
 		// BUILD MODE FULL FRAME
@@ -614,11 +618,12 @@ int main() {
 				statsFull
 			);
 
-			// Print Stats for the Full Frame
-			if (!fullVerts.empty()) {
-				print_stats(statsROI, statsOut, statsFull);
-			}
 		} // BUILD MODE FULL FRAME
+
+
+		// Print Stats
+		print_stats(statsROI, statsOut, statsFull);
+
 
 		std::cout << "\033[0m" << "Total Time : " << std::fixed << std::setprecision(2) << statsROI.total_time_ms + statsOut.total_time_ms + statsFull.total_time_ms << " ms\n";
 			
@@ -722,6 +727,8 @@ int main() {
 			else                                     
 				currentMode = BuildMode::ROI;
 		}
+
+		frame_count++; // Next Frame
 	}
 #endif
 	return 1;

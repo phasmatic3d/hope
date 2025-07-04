@@ -38,7 +38,7 @@ Detector::Detector(const std::string& modelPath,
 
 bool Detector::detect_and_draw(cv::Mat& frame,
     const rs2::depth_frame& depth,
-    int                     frameCount,
+    int                     frame_count,
     cv::Rect&               bestROI,
     int                     interval)
 {

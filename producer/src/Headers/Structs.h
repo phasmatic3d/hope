@@ -15,7 +15,7 @@ struct Timer {
     }
 };
 
-
+std::mutex coutMutex;
 struct EncodingStats {
 	double det_ms = 0.0; // time to run detection
 	double pc_ms = 0.0; // time to find ROI PC
@@ -28,6 +28,7 @@ struct EncodingStats {
 	size_t pts = 0; // number of points in the point cloud
 
     void print() const {
+
         // On the very first call we need to emit blank lines to reserve space.
         static bool first = true;
         const int LINES = 8;  // total lines we will print each frame
@@ -60,13 +61,15 @@ struct EncodingStats {
     }
 
     void printBodyOnly() const {
+        std::ostringstream oss;
+
         // compute total_time
         total_time_ms = det_ms + pc_ms + prep_ms + encode_ms + decode_ms;
 
         double savings = (raw_bytes > 0)
             ? 100.0 * (raw_bytes - encoded_bytes) / raw_bytes
             : 0.0;
-        std::cout
+        oss
             << "Obj Detection time : " << std::fixed << std::setprecision(2) << det_ms << " ms\n"
             << "PC   time        : " << std::fixed << std::setprecision(2) << pc_ms << " ms\n"
             << "Prep  time        : " << std::fixed << std::setprecision(2) << prep_ms << " ms\n"
@@ -76,18 +79,22 @@ struct EncodingStats {
             << "Raw/Enc           : "
             << raw_bytes << " B / " << encoded_bytes << " B"
             << "  (Saved: " << std::fixed << std::setprecision(1) << savings << "%)\n";
+
+        // atomically write to cout
+        std::lock_guard<std::mutex> lock(coutMutex);
+        std::cout << oss.str() << std::flush;
     }
 };
 
 struct DracoSettings {
     int posQuant = 10;  // position quantization bits
     int colorQuant = 8;   // color quantization bits
-    int speedEncode = 10;   // encoder speed “compression vs speed”
-    int speedDecode = 10;  // decoder speed 
+    int speedEncode = 9;   // encoder speed “compression vs speed”
+    int speedDecode = 9;  // decoder speed 
     int roiWidth = 240; // default ROI width
     int roiHeight = 240; // default ROI height
 
-
+    std::mutex coutMutex;
 
     void applyTo(draco::Encoder& enc) const {
         enc.SetSpeedOptions(speedEncode, speedDecode);
