@@ -89,10 +89,13 @@ find_package(OpenCV REQUIRED COMPONENTS core imgproc highgui)
 # Add the executable
 add_executable(hope_producer
     src/Source/producer.cpp
+    src/Source/Encoder.cpp
     src/Source/Detector.cpp
+    src/Headers/Encoder.h
     src/Headers/Detector.h
     src/Headers/Structs.h
     src/Headers/Enums.h
+    src/Headers/Util.hpp
 )
 
 # URL locations for model and classes

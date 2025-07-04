@@ -1,6 +1,16 @@
 #pragma once
 #include <chrono>
 #include <cstddef>
+#include <iostream>
+#include <iomanip>
+#include "Enums.h"
+#include <sstream>
+#include <mutex>
+#include <draco/compression/encode.h>
+#include <draco/compression/decode.h>
+#include <draco/point_cloud/point_cloud.h>
+#include <draco/point_cloud/point_cloud_builder.h>
+#include <draco/core/encoder_buffer.h>
 
 struct Timer {
     using clock = std::chrono::steady_clock;
@@ -15,7 +25,7 @@ struct Timer {
     }
 };
 
-std::mutex coutMutex;
+
 struct EncodingStats {
 	double det_ms = 0.0; // time to run detection
 	double pc_ms = 0.0; // time to find ROI PC
@@ -80,8 +90,6 @@ struct EncodingStats {
             << raw_bytes << " B / " << encoded_bytes << " B"
             << "  (Saved: " << std::fixed << std::setprecision(1) << savings << "%)\n";
 
-        // atomically write to cout
-        std::lock_guard<std::mutex> lock(coutMutex);
         std::cout << oss.str() << std::flush;
     }
 };

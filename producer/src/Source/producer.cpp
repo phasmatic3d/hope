@@ -21,10 +21,11 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp> // glm::value_ptr
-
+#include "Encoder.h"
 #include "Detector.h"
 #include "Structs.h"
-#include "Enums.h"
+#include "Util.hpp"
+
 
 
 
@@ -81,15 +82,16 @@ std::mutex point_cloud_mutex;
 
 class point_cloud {
 public:
-	point_cloud(int num_of_points = 1000) : m_num_of_points(num_of_points) {
-
+	point_cloud(int num_of_points = 1000)
+		: m_num_of_points(num_of_points)
+	{
 	}
 
 	void build(const rs2::vertex* vertices,
 		const rs2::texture_coordinate* texcoords,
 		const rs2::video_frame& color_frame,
 		size_t count,
-		DracoSettings &dracoSettings,
+		DracoSettings& dracoSettings,
 		EncodingStats& stats) {
 		std::lock_guard<std::mutex> lock(point_cloud_mutex);
 
@@ -98,11 +100,11 @@ public:
 		m_point_data.resize(count);
 		m_num_of_points = count;
 		stats.pts = count;
-		stats.raw_bytes = count * (3 * sizeof(float) + 3 * sizeof(uint8_t)); // xyz and rgb
+		stats.raw_bytes = count * (3 * sizeof(float) + 3 * sizeof(uint8_t));
 
 		std::memcpy(m_point_data.data(), vertices, sizeof(*vertices) * count);
 
-		// Wrap the color_frame in an OpenCV Mat for easy lookup
+		// Color matrix (OpenCV) for lookup
 		cv::Mat colMat(
 			color_frame.get_height(),
 			color_frame.get_width(),
@@ -110,135 +112,68 @@ public:
 			(void*)color_frame.get_data(),
 			cv::Mat::AUTO_STEP);
 
-		// Create a point cloud builder
 		draco::PointCloudBuilder builder;
 		builder.Start(m_num_of_points);
 
-		// Position attribute
 		int pos_att_id = builder.AddAttribute(draco::GeometryAttribute::POSITION, 3, draco::DT_FLOAT32);
-
-		// Color attribute
 		int col_att_id = builder.AddAttribute(draco::GeometryAttribute::COLOR, 3, draco::DT_UINT8);
 
-		// Feed each point’s position & color into Draco
-		for (int i = 0; i < m_num_of_points; ++i) {		
-
+		// Create points
+		for (int i = 0; i < m_num_of_points; ++i) {
 			float pos[3] = {
 				static_cast<float>(m_point_data[i].x),
 				static_cast<float>(m_point_data[i].y),
 				static_cast<float>(m_point_data[i].z)
 			};
 
-			// Texture to pixel lookup
 			const auto& tc = texcoords[i];
 			int u = std::clamp(int(tc.u * (colMat.cols - 1)), 0, colMat.cols - 1);
 			int v = std::clamp(int(tc.v * (colMat.rows - 1)), 0, colMat.rows - 1);
 			auto bgr = colMat.at<cv::Vec3b>(v, u);
 			uint8_t rgb[3] = { bgr[2], bgr[1], bgr[0] };
 
-			// Position
 			builder.SetAttributeValueForPoint(pos_att_id, draco::PointIndex(i), pos);
-
-			// BGR to RGB
 			builder.SetAttributeValueForPoint(col_att_id, draco::PointIndex(i), rgb);
 		}
-		double prep_time = t_prep.elapsed_ms();
-		stats.prep_ms = prep_time; // Prep time
+		stats.prep_ms = t_prep.elapsed_ms();
 
 		// Build the point cloud
 		std::unique_ptr<draco::PointCloud> pc = builder.Finalize(false);
 		if (!pc) {
-			std::cerr << "Failed to build point cloud.\n";
+			std::cerr << "Failed to build point cloud." << std::endl;
 			return;
 		}
 
-		Timer t_encode;
-		// Set encoding options (TODO: IMPORTANT)
-		draco::Encoder encoder;
-		dracoSettings.applyTo(encoder); // Apply settings to encoder
-
-		// Encode the point cloud
-		m_point_cloud_buffer.Clear();
-		const draco::Status encodingStatus = encoder.EncodePointCloudToBuffer(*pc, &m_point_cloud_buffer);
-
-		if (!encodingStatus.ok()) {
-			std::cerr << "Encoding failed: " << encodingStatus.error_msg_string() << std::endl;
+		// Encode point cloud
+		m_encoder = std::make_unique<DracoEncoder>(dracoSettings);
+		if (!m_encoder->encode(*pc, stats)) {
 			return;
 		}
-
-		stats.encode_ms = t_encode.elapsed_ms(); // Encoding time
-		stats.encoded_bytes = m_point_cloud_buffer.size(); // Final buffer size
 
 #ifdef DECODE
 		Timer t_decode;
 		draco::Decoder decoder;
-		m_decoder_buffer.Init(m_point_cloud_buffer.data(), m_point_cloud_buffer.size());
+		m_decoder_buffer.Init(m_encoder->GetBuffer().data(), m_encoder->GetBuffer().size());
 
 		auto decoded = decoder.DecodePointCloudFromBuffer(&m_decoder_buffer);
-
 		stats.decode_ms = t_decode.elapsed_ms();
 
 		if (!decoded.ok()) {
-			std::cerr << "Decoding failed: " << decoded.status().error_msg_string() << "\n";
+			std::cerr << "Decoding failed: " << decoded.status().error_msg_string() << std::endl;
 		}
 #endif // DECODE
 	}
 
-	void build() {
-		std::lock_guard<std::mutex> lock(point_cloud_mutex);
-
-		m_point_data.resize(m_num_of_points);
-
-		std::random_device rd;
-		std::mt19937 gen(rd());
-		std::uniform_real_distribution<float> dist(-5.0f, 5.0f); // Range for x, y, z
-
-		for (int i = 0; i < m_num_of_points; ++i) {
-			glm::vec3 point(dist(gen), dist(gen), dist(gen));
-			//glm::vec3 point(float(i) / float(m_num_of_points), float(i) / float(m_num_of_points), float(i) / float(m_num_of_points));
-			m_point_data[i] = point;
-		}
-		// Create a point cloud builder
-		draco::PointCloudBuilder builder;
-		builder.Start(m_num_of_points);
-
-		// Add position attribute
-		int pos_att_id = builder.AddAttribute(draco::GeometryAttribute::POSITION, 3, draco::DT_FLOAT32);
-		builder.SetAttributeValuesForAllPoints(pos_att_id, m_point_data.data(), 0);
-
-		
-
-		// Build the point cloud
-		std::unique_ptr<draco::PointCloud> pc = builder.Finalize(false);
-		if (!pc) {
-			std::cerr << "Failed to build point cloud.\n";
-			return;
-		}
-
-		// Set encoding options
-		draco::Encoder encoder;
-		encoder.SetSpeedOptions(5, 10); // balance between speed and compression
-		encoder.SetAttributeQuantization(draco::GeometryAttribute::POSITION, 10);
-
-		// Encode the point cloud
-		m_point_cloud_buffer.Clear();
-		const draco::Status status = encoder.EncodePointCloudToBuffer(*pc, &m_point_cloud_buffer);
-
-		if (!status.ok()) {
-			std::cerr << "Encoding failed: " << status.error_msg_string() << std::endl;
-			return;
-		}
+	const draco::EncoderBuffer& GetBuffer() const {
+		return m_encoder->GetBuffer();
 	}
 
-	draco::EncoderBuffer& GetBuffer() {
-		return m_point_cloud_buffer;
-	}
 private:
-
-	draco::EncoderBuffer m_point_cloud_buffer;
-	draco::DecoderBuffer m_decoder_buffer;
+	std::mutex point_cloud_mutex;
 	std::vector<glm::vec3> m_point_data;
 	int m_num_of_points;
+	std::unique_ptr<DracoEncoder> m_encoder;
+	draco::DecoderBuffer m_decoder_buffer;
 };
 
 point_cloud pc(10000);
@@ -294,93 +229,6 @@ void time_broadcast_loop(server* s, rs2::pipeline& pipe) {
 	}
 }
 
-void update_and_draw_fps(cv::Mat& frame,
-	int& frame_count,
-	std::chrono::steady_clock::time_point& last_time,
-	double& fps)
-{
-
-	auto now = std::chrono::steady_clock::now();
-	auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_time).count();
-	if (elapsed >= 1)
-	{
-		fps = frame_count / static_cast<double>(elapsed);
-		frame_count = 0;
-		last_time = now;
-	}
-
-	std::ostringstream oss;
-	oss << std::fixed << std::setprecision(1) << fps << " FPS";
-	std::string text = oss.str();
-
-	int font = cv::FONT_HERSHEY_SIMPLEX;
-	double scale = 0.7;
-	int thickness = 2;
-	int baseline = 0;
-	auto text_size = cv::getTextSize(text, font, scale, thickness, &baseline);
-	cv::Point org(frame.cols - text_size.width - 10,
-		text_size.height + 10);
-	cv::putText(frame, text, org, font, scale,
-		cv::Scalar(0, 255, 0), thickness);
-}
-
-// Wrap a color frame (RGB8 or BGR8) into an OpenCV Mat in BGR order for display
-cv::Mat visualize_color_frame(const rs2::video_frame& frame)
-{
-	int w = frame.get_width();
-	int h = frame.get_height();
-
-	cv::Mat rgb(h, w, CV_8UC3, (void*)frame.get_data(), cv::Mat::AUTO_STEP);
-
-	cv::Mat bgr;
-	cv::cvtColor(rgb, bgr, cv::COLOR_RGB2BGR);
-	return bgr;
-
-}
-
-// Apply a RealSense colorizer to the depth frame, wrap it in a Mat
-cv::Mat visualize_depth_frame(const rs2::depth_frame& frame, rs2::colorizer& color_map)
-{
-	// color_map.process returns a video_frame in RGB8
-	rs2::frame colored = color_map.process(frame);
-	int  w = colored.as<rs2::video_frame>().get_width();
-	int  h = colored.as<rs2::video_frame>().get_height();
-
-	// Wrap & convert
-	cv::Mat rgb(h, w, CV_8UC3, (void*)colored.get_data(), cv::Mat::AUTO_STEP);
-	cv::Mat bgr;
-	cv::cvtColor(rgb, bgr, cv::COLOR_RGB2BGR);
-	return bgr;
-}
-
-void print_stats(EncodingStats& statsROI, EncodingStats& statsOut, EncodingStats& statsFull) {
-	static bool first = true;
-	const int LINES_ROI = 7;
-	const int LINES_OUT = 7;
-	const int LINES_FULL = 7;
-	const int TOTAL = LINES_ROI + LINES_OUT + LINES_FULL + 4;
-
-	if (first) {
-		// Reserve TOTAL blank lines
-		for (int i = 0; i < TOTAL; ++i) std::cout << "\n";
-		first = false;
-	}
-
-	// move up TOTAL lines, then clear everything below
-	std::cout  << "\033[" << TOTAL << "A" << "\033[J";
-
-	// --- ROI stats ---
-	std::cout << "\033[32m" << "=== ROI Stats ===\n";
-	statsROI.printBodyOnly();
-	// --- Outside ROI stats ---
-	std::cout << "\033[0m" << "\033[31m" << "===Outside-of-ROI Stats ===\n";
-	statsOut.printBodyOnly();
-	// --- Full Frame stats ---
-	std::cout << "\033[0m" << "\033[38;2;255;165;0m"  << "=== Full Frame Stats ===\n";
-	statsFull.printBodyOnly();
-
-	std::cout << std::flush;
-}
 
 int main() {
 	server echo_server;
@@ -431,6 +279,9 @@ int main() {
 
 	BuildMode currentMode = BuildMode::ROI;
 
+	// background model
+	//cv::Mat bgDepth = compute_background_depth(p, align_to_color);
+
 #if 1
 	while (true)
 	{
@@ -475,13 +326,12 @@ int main() {
 
 		// BUILD MODE ROI-OUTSIDE
 		if (currentMode == BuildMode::ROI) { 
-			// Object Detection (TODO)
 			Timer t_det;
 
 			// feed the detector whenever frame_count % 10 == 0
 			asyncDet.pushFrame(output, depth, frame_count);
 
-			
+			// Get the best ROI from the detector (thread)
 			if (auto detRoi = asyncDet.getROI()) {
 				if(frame_count % 10 != 0)
 					roi = *detRoi;
@@ -504,38 +354,6 @@ int main() {
 			roiTex.reserve(roi.area());
 
 
-
-			// Iterate over the ROI rectangle
-			Timer t_pc;
-			for (int y = roi.y; y < roi.y + roi.height; ++y)
-			{
-				for (int x = roi.x; x < roi.x + roi.width; ++x)
-				{
-					int idx = y * w + x;
-					float z = vertices[idx].z;
-					if (z <= 0 || !std::isfinite(z))
-						continue;   // skip invalid depth holes
-
-					roiVerts.push_back(vertices[idx]);
-					roiTex.push_back(texcoords[idx]);
-				}
-			}
-			statsROI.pc_ms = t_pc.elapsed_ms(); // Time to find ROI point cloud
-
-			//Hand off to custom point_cloud class
-			point_cloud cloud(static_cast<int>(roiVerts.size()));
-
-			if (!roiVerts.empty()) {
-				cloud.build(
-					roiVerts.data(),
-					roiTex.data(),
-					color,
-					roiVerts.size(),
-					dracoSettingsROI,
-					statsROI
-				);
-			}
-
 			// Create point cloud of points outside of the ROI
 
 			std::vector<rs2::vertex>       outVerts;
@@ -543,41 +361,76 @@ int main() {
 			outVerts.reserve(width * height - roiVerts.size());
 			outTex.reserve(width * height - roiVerts.size());
 
-			Timer t_pc_out;
+			Timer t_pc;
 			for (int y = 0; y < height; ++y) {
 				for (int x = 0; x < width; ++x) {
-					// skip ROI pixels
-					if (x >= roi.x && x < roi.x + roi.width &&
-						y >= roi.y && y < roi.y + roi.height)
-						continue;
-
-					int idx = y * width + x;
+					int idx = y * w + x;
 					float z = vertices[idx].z;
 					if (z <= 0 || !std::isfinite(z))
 						continue;
 
+					if (x >= roi.x && x < roi.x + roi.width &&
+						y >= roi.y && y < roi.y + roi.height) {
+						roiVerts.push_back(vertices[idx]);
+						roiTex.push_back(texcoords[idx]);
+						continue;
+					}
+						
 					outVerts.push_back(vertices[idx]);
 					outTex.push_back(texcoords[idx]);
 				}
 			}
-			statsOut.pc_ms = t_pc_out.elapsed_ms(); // Time to find outside ROI point cloud
+
+			
+
+			statsROI.pc_ms = t_pc.elapsed_ms(); // Time to find outside ROI point cloud
+
+			// ROI Point_cloud (high importance)
+			point_cloud cloudROI(static_cast<int>(roiVerts.size()));
+
 
 			dracoSettingsOut.posQuant = dracoSettingsROI.posQuant / 4;
 			dracoSettingsOut.colorQuant = dracoSettingsROI.colorQuant;
 			dracoSettingsOut.speedEncode = dracoSettingsROI.speedDecode;
 			dracoSettingsOut.speedDecode = dracoSettingsROI.speedDecode;
+			// Out-of-ROI point_cloud (low importance)
 			point_cloud cloudOut(static_cast<int>(outVerts.size()));
 
-			if (!outVerts.empty()) {
-				cloudOut.build(
-					outVerts.data(),
-					outTex.data(),
-					color,
-					outVerts.size(),
-					dracoSettingsOut,
-					statsOut
-				);
-			}
+
+			// Create lambda functions to build the point clouds
+			auto buildROI = [&]() {
+				if (!roiVerts.empty()) {
+					cloudROI.build(
+						roiVerts.data(),
+						roiTex.data(),
+						color,
+						roiVerts.size(),
+						dracoSettingsROI,
+						statsROI
+					);
+				}
+			};
+
+			auto buildOut = [&]() {
+				if (!outVerts.empty()) {
+					cloudOut.build(
+						outVerts.data(),
+						outTex.data(),
+						color,
+						outVerts.size(),
+						dracoSettingsOut,
+						statsOut
+					);
+				}
+			};
+
+			// Launch each on its own thread
+			std::thread tROI(buildROI);
+			std::thread tOut(buildOut);
+
+			// Wait for both to finish
+			tROI.join();
+			tOut.join();
 
 
 		} // BUILD MODE ROI-OUTSIDE
