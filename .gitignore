@@ -1,1 +1,5 @@
 build/
+.venv/
+gesture_recognizer.task
+
+__pycache__/
