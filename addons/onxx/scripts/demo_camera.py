@@ -30,7 +30,14 @@ if not os.path.exists(sam2_config.CONFIG_PATH):
 if not os.path.exists(path_to_yaml):
     print(f'Config {link[0]} for sam2.1 does not exist, exiting...')
 
-predictor = sam2_camera.build_sam2_camera_predictor(path_to_yaml, path_to_chkp)
+config_name = Path(path_to_yaml).name
+config_path = "configs"
+predictor = sam2_camera.build_sam2_camera_predictor(
+    config_file=config_name, 
+    config_path=config_path,
+    ckpt_path=path_to_chkp, 
+)
+
 
 point = None
 point_selected = False

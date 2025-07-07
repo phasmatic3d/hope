@@ -128,10 +128,9 @@ class SAM2CameraPredictor(SAM2Base):
     @torch.inference_mode()
     def load_first_frame(self, img):
 
-        offload_to_cpu = not torch.cuda.is_available()
         self.condition_state = self._init_state(
-            offload_video_to_cpu=offload_to_cpu,
-            offload_state_to_cpu=offload_to_cpu
+            offload_video_to_cpu=False,
+            offload_state_to_cpu=False
         )
 
         img, width, height = self.prepare_data(img, image_size=self.image_size)
@@ -166,7 +165,7 @@ class SAM2CameraPredictor(SAM2Base):
         self.condition_state["offload_state_to_cpu"] = offload_state_to_cpu
         # the original video height and width, used for resizing final output scores
 
-        self.condition_state["device"] = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.condition_state["device"] = torch.device("cuda")
         if offload_state_to_cpu:
             self.condition_state["storage_device"] = torch.device("cpu")
         else:
@@ -1056,7 +1055,7 @@ class SAM2CameraPredictor(SAM2Base):
         )
         if backbone_out is None:
             # Cache miss -- we will run inference on a single image
-            image = self.condition_state["images"][frame_idx].to(self._device).float().unsqueeze(0)
+            image = self.condition_state["images"][frame_idx].cuda().float().unsqueeze(0)
             backbone_out = self.forward_image(image)
             # Cache the most recent frame's feature (for repeated interactions with
             # a frame; we can use an LRU cache for more frames in the future).
@@ -1081,7 +1080,7 @@ class SAM2CameraPredictor(SAM2Base):
         return features
 
     def _get_feature(self, img, batch_size):
-        image = img.to(self._device).float().unsqueeze(0)
+        image = img.cuda().float().unsqueeze(0)
         backbone_out = self.forward_image(image)
         expanded_image = image.expand(batch_size, -1, -1, -1)
         expanded_backbone_out = {

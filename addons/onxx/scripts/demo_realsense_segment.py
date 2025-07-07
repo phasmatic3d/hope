@@ -11,12 +11,8 @@ import sam2_camera_predictor as sam2_camera
 
 from pathlib import Path
 
-def launch_demo(
-    path_to_yaml: str, 
-    path_to_chkp: str,
-    device: str,
-    image_size: int
-):
+def launch_demo(path_to_yaml: str,  path_to_chkp: str, device: str, image_size: int):
+    
     config_name = Path(path_to_yaml).name
     config_path = "configs"
     predictor = sam2_camera.build_sam2_camera_predictor(
@@ -177,6 +173,7 @@ def main():
     
     if not os.path.exists(path_to_chkp):
         print(f'Checkpoint {path_to_chkp} is missing, downloading...')
+        os.makedirs(sam2_config.CHECKPOINT_PATH, exist_ok=True)
         sam2_config.getRequest(sam2_config.CHECKPOINT_PATH, link[1])
 
     with torch.autocast(device_type=DEVICE.__str__(), dtype=torch.bfloat16):
