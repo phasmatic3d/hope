@@ -18,7 +18,7 @@ from mediapipe.tasks.python.vision import (
 
 from mediapipe.tasks.python import BaseOptions
 
-DEBUG = True
+DEBUG = False
 
 #copied from the library directly
 class HandLandmark(enum.IntEnum):
@@ -89,6 +89,9 @@ class FingerDirection:
 
     STRAIGHT_ANGLE_THRESH = 15.0
 
+    # if either joint angle > this, we consider the finger “bent”
+    BENT_ANGLE_THRESH = 60.0
+
     def __init__(
         self, 
         model_asset_path: str,
@@ -157,6 +160,15 @@ class FingerDirection:
             cosθ = max(-1.0, min(1.0, dot_product/(normal_u * normal_v)))
             return math.degrees(math.acos(cosθ))
 
+        def is_finger_straight(angle_1, angle_2):
+            return angle_1 < self.STRAIGHT_ANGLE_THRESH and angle_2 < self.STRAIGHT_ANGLE_THRESH
+
+        def is_finger_bent(mcp, pip, dip, tip):
+            angle_1 = angle_degree(to_vec(mcp, pip), to_vec(pip, dip))
+            angle_2 = angle_degree(to_vec(pip, dip), to_vec(dip, tip))
+            # if *either* joint is bent past BENT_ANGLE_THRESH, we call the finger “bent”
+            return (angle_1 > self.BENT_ANGLE_THRESH or angle_2 > self.BENT_ANGLE_THRESH)
+
         # run the for loop in case we want multiple hands later
         for hand_index, hand_landmarks in enumerate(detected):
             # Landmark indices per MediaPipe Hands:
@@ -186,16 +198,51 @@ class FingerDirection:
             if DEBUG:
                 print(f"Segment angles: {angle_1:.1f}°, {angle_2:.1f}°")
 
-            # only count a frame if finger is straight
-            if angle_1 < self.STRAIGHT_ANGLE_THRESH and angle_2 < self.STRAIGHT_ANGLE_THRESH:
-                #self._seen_frames += 1
-                self._seen_frames[hand_index] += 1
-            else:
-                #self._seen_frames = 0
-                #self.latest_bbox = None
+            # only count a frame if index finger is straight
+            is_index_straight: bool = is_finger_straight(angle_1=angle_1, angle_2=angle_2)
+
+            if not is_index_straight:
                 self._seen_frames[hand_index] = 0
                 self.latest_bboxes[hand_index] = None
-                return
+                continue
+
+            middle_finger_bent: bool = is_finger_bent(
+                hand_landmarks[HandLandmark.MIDDLE_FINGER_MCP], 
+                hand_landmarks[HandLandmark.MIDDLE_FINGER_PIP], 
+                hand_landmarks[HandLandmark.MIDDLE_FINGER_DIP],
+                hand_landmarks[HandLandmark.MIDDLE_FINGER_TIP],
+            )
+
+            if not middle_finger_bent: 
+                self._seen_frames[hand_index] = 0
+                self.latest_bboxes[hand_index] = None
+                continue
+
+            ring_finger_bent: bool = is_finger_bent(                
+                hand_landmarks[HandLandmark.RING_FINGER_MCP], 
+                hand_landmarks[HandLandmark.RING_FINGER_PIP], 
+                hand_landmarks[HandLandmark.RING_FINGER_DIP],
+                hand_landmarks[HandLandmark.RING_FINGER_TIP],
+            )
+
+            if not ring_finger_bent: 
+                self._seen_frames[hand_index] = 0
+                self.latest_bboxes[hand_index] = None
+                continue
+
+            pinky_finger_bent: bool = is_finger_bent(                
+                hand_landmarks[HandLandmark.PINKY_MCP], 
+                hand_landmarks[HandLandmark.PINKY_PIP], 
+                hand_landmarks[HandLandmark.PINKY_DIP],
+                hand_landmarks[HandLandmark.PINKY_TIP],
+            ) 
+
+            if not pinky_finger_bent: 
+                self._seen_frames[hand_index] = 0
+                self.latest_bboxes[hand_index] = None
+                continue
+
+            self._seen_frames[hand_index] += 1
 
             bbox_norm = self._get_normalized_bbox(tip, box_size=self.box_size)
 

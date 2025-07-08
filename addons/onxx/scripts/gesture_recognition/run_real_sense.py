@@ -61,5 +61,6 @@ print(builder.get_all_stream_profiles())
 print(builder.get_stream_profile(rs.stream.depth, 0))
 
 pipeline.start(cfg)
+print(pipeline.get_active_profile())
 
 recognizer = GestureRecognition(model_asset_path="gesture_recognizer.task")
