@@ -17,6 +17,7 @@ finger_direction_recognizer = FingerDirection(
     num_hands=1,
     running_mode=RunningMode.LIVE_STREAM,
     box_size=0.2,
+    delay_frames=15,
 )
 
 cap = cv2.VideoCapture(6)

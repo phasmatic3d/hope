@@ -87,12 +87,15 @@ class PixelBBox:
 
 class FingerDirection:
 
+    STRAIGHT_ANGLE_THRESH = 15.0
+
     def __init__(
         self, 
         model_asset_path: str,
         num_hands: int,
         running_mode: RunningMode, # type: ignore
-        box_size: float=0.05
+        box_size: float=0.05,
+        delay_frames: int=15,
     ):
 
         base_options = BaseOptions(model_asset_path=model_asset_path)
@@ -108,7 +111,7 @@ class FingerDirection:
         self.box_size = box_size
         self.latest_bbox: NormalizedBBox | None = None
         # approx. half a second at 30 FPS
-        self._delay_frames = 15
+        self._delay_frames = delay_frames
         self._seen_frames = 0
 
     def recognize(self, image: Image, frame_timestamp_ms: int):
@@ -125,25 +128,78 @@ class FingerDirection:
         the pointing direction of the index finger for each detected hand.
         """
 
-        for _, hand_landmarks in enumerate(result.hand_landmarks):
+        if not result.hand_landmarks:
+            # no hand → reset
+            self._seen_frames = 0
+            self.latest_bbox = None
+            return
+
+
+        # get direction vector
+        def to_vec(a, b):
+            return (b.x - a.x, b.y - a.y)
+
+        # get the cosine using dot produce formula
+        def angle_degree(u, v, eps=1e-6):
+            dot_product = u[0]*v[0] + u[1]*v[1]
+            normal_u = math.hypot(*u)
+            normal_v = math.hypot(*v)
+            # if either vector is (almost) zero-length, bait out
+            if normal_u < eps or normal_v < eps:
+                return 180.0
+            # clamp dot/(nu*nv)
+            cosθ = max(-1.0, min(1.0, dot_product/(normal_u * normal_v)))
+            return math.degrees(math.acos(cosθ))
+
+        # run the for loop in case we want multiple hands later
+        for hand_landmarks in result.hand_landmarks:
             # Landmark indices per MediaPipe Hands:
-            # INDEX_FINGER_TIP = 8
+            mcp = hand_landmarks[
+                HandLandmark.INDEX_FINGER_MCP
+            ]
+
+            pip = hand_landmarks[
+                HandLandmark.INDEX_FINGER_PIP
+            ]
+
+            dip = hand_landmarks[
+                HandLandmark.INDEX_FINGER_DIP
+            ]
 
             tip = hand_landmarks[
                 HandLandmark.INDEX_FINGER_TIP
             ]
+
+            vector_1 = to_vec(mcp, pip)
+            vector_2 = to_vec(pip, dip)
+            vector_3 = to_vec(dip, tip)
+
+            angle_1 = angle_degree(vector_1, vector_2)
+            angle_2 = angle_degree(vector_2, vector_3)
+
+            if DEBUG:
+                print(f"Segment angles: {angle_1:.1f}°, {angle_2:.1f}°")
+
+            # only count a frame if finger is straight
+            if angle_1 < self.STRAIGHT_ANGLE_THRESH and angle_2 < self.STRAIGHT_ANGLE_THRESH:
+                self._seen_frames += 1
+            else:
+                self._seen_frames = 0
+                self.latest_bbox = None
+                return
 
             bbox_norm = self._get_normalized_bbox(tip, box_size=self.box_size)
 
             if DEBUG:
                 print(f"  normalized box: {bbox_norm}")
 
-            #self._seen_frames += 1
-            #if self._seen_frames >= self._delay_frames:
-            #    self.latest_bbox = bbox_norm
-            #else:
-            #    self._seen_frames = 0
-            #    self.latest_bbox = None
+            if DEBUG:
+                print(f"Seen Frames: {self._seen_frames}")
+
+            if self._seen_frames >= self._delay_frames:
+                self.latest_bbox = bbox_norm
+            else:
+                self.latest_bbox = None
 
 
     def _get_normalized_bbox(self, landmark, box_size: float) -> NormalizedBBox:
