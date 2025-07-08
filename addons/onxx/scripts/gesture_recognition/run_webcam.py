@@ -8,7 +8,7 @@ from mediapipe.tasks.python.vision import (
 
 from finger_detection import (
     FingerDirection,
-    PixelBBox,
+    PixelBoundingBox,
 )
 
 
@@ -44,9 +44,9 @@ while True:
 
     finger_direction_recognizer.recognize(mediapipe_image, frame_timestamp_ms=timestamp_ms)
 
-    for bbox_norm in finger_direction_recognizer.latest_bboxes:
-        if bbox_norm:
-            pixel_space_bounding_box: PixelBBox = bbox_norm.to_pixel(numpy_frame.shape[1], numpy_frame.shape[0])
+    for bounding_box_normalized in finger_direction_recognizer.latest_bounding_boxes:
+        if bounding_box_normalized:
+            pixel_space_bounding_box: PixelBoundingBox = bounding_box_normalized.to_pixel(numpy_frame.shape[1], numpy_frame.shape[0])
             cv2.rectangle(numpy_frame, (pixel_space_bounding_box.x1, pixel_space_bounding_box.y1), (pixel_space_bounding_box.x2, pixel_space_bounding_box.y2), (0,255,0), 2)
 
     cv2.imshow("Webcam", numpy_frame)

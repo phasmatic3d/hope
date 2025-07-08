@@ -46,7 +46,7 @@ class HandLandmark(enum.IntEnum):
     PINKY_TIP = 20
 
 @dataclass
-class NormalizedBBox:
+class NormalizedBoundingBox:
     """A bounding box in normalized coordinates [0.0–1.0]."""
     xmin: float
     ymin: float
@@ -61,8 +61,8 @@ class NormalizedBBox:
     def height(self) -> float:
         return self.ymax - self.ymin
 
-    def to_pixel(self, img_w: int, img_h: int) -> "PixelBBox":
-        return PixelBBox(
+    def to_pixel(self, img_w: int, img_h: int) -> "PixelBoundingBox":
+        return PixelBoundingBox(
             x1=int(self.xmin * img_w),
             y1=int(self.ymin * img_h),
             x2=int(self.xmax * img_w),
@@ -70,7 +70,7 @@ class NormalizedBBox:
         )
 
 @dataclass
-class PixelBBox:
+class PixelBoundingBox:
     """A bounding box in pixel coordinates."""
     x1: int
     y1: int
@@ -112,7 +112,7 @@ class FingerDirection:
 
         self.landmarker = HandLandmarker.create_from_options(self.options)
         self.box_size = box_size
-        self.latest_bboxes: list[NormalizedBBox | None] = [None] * num_hands
+        self.latest_bounding_boxes: list[NormalizedBoundingBox | None] = [None] * num_hands
         self._seen_frames = [0] * num_hands
         # approx. half a second at 30 FPS
         self._delay_frames = delay_frames
@@ -135,14 +135,14 @@ class FingerDirection:
             # no hand → reset
             for i in range(self.options.num_hands):
                 self._seen_frames[i] = 0
-                self.latest_bboxes[i] = None
+                self.latest_bounding_boxes[i] = None
             return
 
         detected = result.hand_landmarks
         for i in range(self.options.num_hands):
             if i >= len(detected):
                 self._seen_frames[i] = 0
-                self.latest_bboxes[i] = None
+                self.latest_bounding_boxes[i] = None
 
         # get direction vector
         def to_vec(a, b):
@@ -203,7 +203,7 @@ class FingerDirection:
 
             if not is_index_straight:
                 self._seen_frames[hand_index] = 0
-                self.latest_bboxes[hand_index] = None
+                self.latest_bounding_boxes[hand_index] = None
                 continue
 
             middle_finger_bent: bool = is_finger_bent(
@@ -215,7 +215,7 @@ class FingerDirection:
 
             if not middle_finger_bent: 
                 self._seen_frames[hand_index] = 0
-                self.latest_bboxes[hand_index] = None
+                self.latest_bounding_boxes[hand_index] = None
                 continue
 
             ring_finger_bent: bool = is_finger_bent(                
@@ -227,7 +227,7 @@ class FingerDirection:
 
             if not ring_finger_bent: 
                 self._seen_frames[hand_index] = 0
-                self.latest_bboxes[hand_index] = None
+                self.latest_bounding_boxes[hand_index] = None
                 continue
 
             pinky_finger_bent: bool = is_finger_bent(                
@@ -239,26 +239,26 @@ class FingerDirection:
 
             if not pinky_finger_bent: 
                 self._seen_frames[hand_index] = 0
-                self.latest_bboxes[hand_index] = None
+                self.latest_bounding_boxes[hand_index] = None
                 continue
 
             self._seen_frames[hand_index] += 1
 
-            bbox_norm = self._get_normalized_bbox(tip, box_size=self.box_size)
+            bounding_box_norm = self._get_normalized_bounding_box(tip, box_size=self.box_size)
 
             if DEBUG:
-                print(f"  normalized box: {bbox_norm}")
+                print(f"  normalized box: {bounding_box_norm}")
 
             if DEBUG:
                 print(f"Seen Frames: {self._seen_frames[hand_index]} for Hand: {hand_index}")
 
             if self._seen_frames[hand_index] >= self._delay_frames:
-                self.latest_bboxes[hand_index] = bbox_norm
+                self.latest_bounding_boxes[hand_index] = bounding_box_norm
             else:
-                self.latest_bboxes[hand_index] = None
+                self.latest_bounding_boxes[hand_index] = None
 
 
-    def _get_normalized_bbox(self, landmark, box_size: float) -> NormalizedBBox:
+    def _get_normalized_bounding_box(self, landmark, box_size: float) -> NormalizedBoundingBox:
         """
         Returns (xmin, ymin, xmax, ymax) in normalized coords [0..1].
         box_size is fraction of the image (e.g. 0.05 = 5% of width/height).
@@ -268,7 +268,7 @@ class FingerDirection:
         ymin = max(landmark.y - half, 0.0)
         xmax = min(landmark.x + half, 1.0)
         ymax = min(landmark.y + half, 1.0)
-        return NormalizedBBox(xmin, ymin, xmax, ymax)
+        return NormalizedBoundingBox(xmin, ymin, xmax, ymax)
 
     #Convert the frame received from OpenCV to a MediaPipe Image object.
     @staticmethod
