@@ -1,6 +1,6 @@
 import math
 import enum
-import cv2
+import numpy as np
 
 from dataclasses import dataclass
 
@@ -257,6 +257,29 @@ class FingerDirection:
             else:
                 self.latest_bounding_boxes[hand_index] = None
 
+
+    def get_masks(self, frame_shape: tuple[int,int]) -> "np.ndarray":
+        """
+        Returns a stack of binary masks (one per hand) where the pixel
+        inside each debounced fingertip BBox = 1, elsewhere = 0.
+
+        Args:
+          frame_shape: (height, width) of the frame you used for inference.
+
+        Returns:
+          masks: np.ndarray of shape (num_hands, height, width), dtype=uint8.
+        """
+
+        height, width = frame_shape[:2]
+        masks = np.zeros((self.options.num_hands, height, width), dtype=np.uint8)
+
+        for i, bounding_box_norm in enumerate(self.latest_bounding_boxes):
+            if bounding_box_norm is None:
+                continue
+            bounding_box_pixel_space = bounding_box_norm.to_pixel(img_w=width, img_h=height)
+            masks[i, bounding_box_pixel_space.y1:bounding_box_pixel_space.y2, bounding_box_pixel_space.x1:bounding_box_pixel_space.x2] = 1
+
+        return masks
 
     def _get_normalized_bounding_box(self, landmark, box_size: float) -> NormalizedBoundingBox:
         """

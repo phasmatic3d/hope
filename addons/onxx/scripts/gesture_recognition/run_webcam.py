@@ -48,6 +48,13 @@ while True:
         if bounding_box_normalized:
             pixel_space_bounding_box: PixelBoundingBox = bounding_box_normalized.to_pixel(numpy_frame.shape[1], numpy_frame.shape[0])
             cv2.rectangle(numpy_frame, (pixel_space_bounding_box.x1, pixel_space_bounding_box.y1), (pixel_space_bounding_box.x2, pixel_space_bounding_box.y2), (0,255,0), 2)
+    
+    height, width = numpy_frame.shape[:2]
+    masks = finger_direction_recognizer.get_masks((height, width))
+
+    for i in range(masks.shape[0]):
+        # each mask is 0/1; multiply by 255 to make it visible
+        cv2.imshow(f"finger-mask-{i}", masks[i] * 255)
 
     cv2.imshow("Webcam", numpy_frame)
 
