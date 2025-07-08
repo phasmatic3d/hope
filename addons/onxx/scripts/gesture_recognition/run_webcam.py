@@ -29,6 +29,7 @@ print(f"Camera reports FPS = {fps_reported:.2f}")
 
 frame_count = 0
 start_time  = time.time()
+prev_time = time.time()
 
 while True:
     # 2. Read the latest frame from the camera
@@ -36,6 +37,10 @@ while True:
     if not success:
         print("Ignoring empty camera frame.")
         break
+
+    now = time.time()
+    fps = 1.0 / (now - prev_time) if now != prev_time else 0.0
+    prev_time = now
 
     rgb_frame = cv2.cvtColor(numpy_frame, cv2.COLOR_BGR2RGB)
 
@@ -56,12 +61,12 @@ while True:
         # each mask is 0/1; multiply by 255 to make it visible
         cv2.imshow(f"finger-mask-{i}", masks[i] * 255)
 
+    cv2.putText(numpy_frame, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2, cv2.LINE_AA)
     cv2.imshow("Webcam", numpy_frame)
 
     frame_count += 1
     elapsed = time.time() - start_time
     if elapsed >= 1.0:
-        print(f"Measured FPS = {frame_count/elapsed:.2f}")
         frame_count = 0
         start_time  = time.time()
 
