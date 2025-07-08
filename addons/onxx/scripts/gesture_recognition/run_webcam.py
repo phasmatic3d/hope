@@ -6,13 +6,13 @@ from mediapipe.tasks.python.vision import (
     RunningMode,
 )
 
-from finger_detection import (
-    FingerDirection,
+from point_gesture_recognizer import (
+    PointingGestureRecognizer,
     PixelBoundingBox,
 )
 
 
-finger_direction_recognizer = FingerDirection(
+pointing_gesture_recognizer = PointingGestureRecognizer(
     model_asset_path="hand_landmarker.task",
     num_hands=2,
     running_mode=RunningMode.LIVE_STREAM,
@@ -44,18 +44,18 @@ while True:
 
     rgb_frame = cv2.cvtColor(numpy_frame, cv2.COLOR_BGR2RGB)
 
-    mediapipe_image = FingerDirection.convert_frame(rgb_frame=rgb_frame)
+    mediapipe_image = pointing_gesture_recognizer.convert_frame(rgb_frame=rgb_frame)
     timestamp_ms = int(time.time() * 1000)
 
-    finger_direction_recognizer.recognize(mediapipe_image, frame_timestamp_ms=timestamp_ms)
+    pointing_gesture_recognizer.recognize(mediapipe_image, frame_timestamp_ms=timestamp_ms)
 
-    for bounding_box_normalized in finger_direction_recognizer.latest_bounding_boxes:
+    for bounding_box_normalized in pointing_gesture_recognizer.latest_bounding_boxes:
         if bounding_box_normalized:
             pixel_space_bounding_box: PixelBoundingBox = bounding_box_normalized.to_pixel(numpy_frame.shape[1], numpy_frame.shape[0])
             cv2.rectangle(numpy_frame, (pixel_space_bounding_box.x1, pixel_space_bounding_box.y1), (pixel_space_bounding_box.x2, pixel_space_bounding_box.y2), (0,255,0), 2)
     
     height, width = numpy_frame.shape[:2]
-    masks = finger_direction_recognizer.get_masks((height, width))
+    masks = pointing_gesture_recognizer.get_masks((height, width))
 
     for i in range(masks.shape[0]):
         # each mask is 0/1; multiply by 255 to make it visible

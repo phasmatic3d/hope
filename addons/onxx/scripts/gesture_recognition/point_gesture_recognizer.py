@@ -85,7 +85,7 @@ class PixelBoundingBox:
     def height(self) -> int:
         return self.y2 - self.y1
 
-class FingerDirection:
+class PointingGestureRecognizer:
 
     STRAIGHT_ANGLE_THRESH = 15.0
 
