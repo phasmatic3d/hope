@@ -14,7 +14,7 @@ from finger_detection import (
 
 finger_direction_recognizer = FingerDirection(
     model_asset_path="hand_landmarker.task",
-    num_hands=1,
+    num_hands=2,
     running_mode=RunningMode.LIVE_STREAM,
     box_size=0.2,
     delay_frames=15,
@@ -44,9 +44,10 @@ while True:
 
     finger_direction_recognizer.recognize(mediapipe_image, frame_timestamp_ms=timestamp_ms)
 
-    if finger_direction_recognizer.latest_bbox:
-        pixel_space_bounding_box: PixelBBox = finger_direction_recognizer.latest_bbox.to_pixel(numpy_frame.shape[1], numpy_frame.shape[0])
-        cv2.rectangle(numpy_frame, (pixel_space_bounding_box.x1, pixel_space_bounding_box.y1), (pixel_space_bounding_box.x2, pixel_space_bounding_box.y2), (0,255,0), 2)
+    for bbox_norm in finger_direction_recognizer.latest_bboxes:
+        if bbox_norm:
+            pixel_space_bounding_box: PixelBBox = bbox_norm.to_pixel(numpy_frame.shape[1], numpy_frame.shape[0])
+            cv2.rectangle(numpy_frame, (pixel_space_bounding_box.x1, pixel_space_bounding_box.y1), (pixel_space_bounding_box.x2, pixel_space_bounding_box.y2), (0,255,0), 2)
 
     cv2.imshow("Webcam", numpy_frame)
 

@@ -18,7 +18,7 @@ from mediapipe.tasks.python.vision import (
 
 from mediapipe.tasks.python import BaseOptions
 
-DEBUG = False
+DEBUG = True
 
 #copied from the library directly
 class HandLandmark(enum.IntEnum):
@@ -100,19 +100,19 @@ class FingerDirection:
 
         base_options = BaseOptions(model_asset_path=model_asset_path)
 
-        options = HandLandmarkerOptions(
+        self.options = HandLandmarkerOptions(
             base_options=base_options,
             running_mode=running_mode,
             result_callback=self.on_landmarks,
             num_hands=num_hands,
         )
 
-        self.landmarker = HandLandmarker.create_from_options(options)
+        self.landmarker = HandLandmarker.create_from_options(self.options)
         self.box_size = box_size
-        self.latest_bbox: NormalizedBBox | None = None
+        self.latest_bboxes: list[NormalizedBBox | None] = [None] * num_hands
+        self._seen_frames = [0] * num_hands
         # approx. half a second at 30 FPS
         self._delay_frames = delay_frames
-        self._seen_frames = 0
 
     def recognize(self, image: Image, frame_timestamp_ms: int):
         self.landmarker.detect_async(image=image, timestamp_ms=frame_timestamp_ms)
@@ -130,10 +130,16 @@ class FingerDirection:
 
         if not result.hand_landmarks:
             # no hand → reset
-            self._seen_frames = 0
-            self.latest_bbox = None
+            for i in range(self.options.num_hands):
+                self._seen_frames[i] = 0
+                self.latest_bboxes[i] = None
             return
 
+        detected = result.hand_landmarks
+        for i in range(self.options.num_hands):
+            if i >= len(detected):
+                self._seen_frames[i] = 0
+                self.latest_bboxes[i] = None
 
         # get direction vector
         def to_vec(a, b):
@@ -152,7 +158,7 @@ class FingerDirection:
             return math.degrees(math.acos(cosθ))
 
         # run the for loop in case we want multiple hands later
-        for hand_landmarks in result.hand_landmarks:
+        for hand_index, hand_landmarks in enumerate(detected):
             # Landmark indices per MediaPipe Hands:
             mcp = hand_landmarks[
                 HandLandmark.INDEX_FINGER_MCP
@@ -182,10 +188,13 @@ class FingerDirection:
 
             # only count a frame if finger is straight
             if angle_1 < self.STRAIGHT_ANGLE_THRESH and angle_2 < self.STRAIGHT_ANGLE_THRESH:
-                self._seen_frames += 1
+                #self._seen_frames += 1
+                self._seen_frames[hand_index] += 1
             else:
-                self._seen_frames = 0
-                self.latest_bbox = None
+                #self._seen_frames = 0
+                #self.latest_bbox = None
+                self._seen_frames[hand_index] = 0
+                self.latest_bboxes[hand_index] = None
                 return
 
             bbox_norm = self._get_normalized_bbox(tip, box_size=self.box_size)
@@ -194,12 +203,12 @@ class FingerDirection:
                 print(f"  normalized box: {bbox_norm}")
 
             if DEBUG:
-                print(f"Seen Frames: {self._seen_frames}")
+                print(f"Seen Frames: {self._seen_frames[hand_index]} for Hand: {hand_index}")
 
-            if self._seen_frames >= self._delay_frames:
-                self.latest_bbox = bbox_norm
+            if self._seen_frames[hand_index] >= self._delay_frames:
+                self.latest_bboxes[hand_index] = bbox_norm
             else:
-                self.latest_bbox = None
+                self.latest_bboxes[hand_index] = None
 
 
     def _get_normalized_bbox(self, landmark, box_size: float) -> NormalizedBBox:
