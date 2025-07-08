@@ -1,3 +1,4 @@
+# Gesture Recognizer
 In order to run make sure to download a .task model: 
 
 ```
@@ -5,3 +6,9 @@ wget -q https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gestu
 ```
 
 This is google's default.
+
+# Hand Recognizer
+
+```
+wget -q https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task
+```

@@ -2,12 +2,24 @@ import time
 
 import cv2
 
-from gesture_recognition import GestureRecognition
+from mediapipe.tasks.python.vision import (
+    RunningMode,
+)
+
+from finger_detection import (
+    FingerDirection,
+    PixelBBox,
+)
 
 
-recognizer = GestureRecognition(model_asset_path="gesture_recognizer.task")
+finger_direction_recognizer = FingerDirection(
+    model_asset_path="hand_landmarker.task",
+    num_hands=1,
+    running_mode=RunningMode.LIVE_STREAM,
+    box_size=0.2,
+)
 
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(6)
 if not cap.isOpened():
     raise IOError("Cannot open webcam")
 
@@ -23,14 +35,17 @@ while True:
     if not success:
         print("Ignoring empty camera frame.")
         break
-    
+
     rgb_frame = cv2.cvtColor(numpy_frame, cv2.COLOR_BGR2RGB)
 
-    mediapipe_image = GestureRecognition.convert_frame(rgb_frame=rgb_frame)
+    mediapipe_image = FingerDirection.convert_frame(rgb_frame=rgb_frame)
     timestamp_ms = int(time.time() * 1000)
 
+    finger_direction_recognizer.recognize(mediapipe_image, frame_timestamp_ms=timestamp_ms)
 
-    recognizer.recognize(mediapipe_image, frame_timestamp_ms=timestamp_ms)
+    if finger_direction_recognizer.latest_bbox:
+        pixel_space_bounding_box: PixelBBox = finger_direction_recognizer.latest_bbox.to_pixel(numpy_frame.shape[1], numpy_frame.shape[0])
+        cv2.rectangle(numpy_frame, (pixel_space_bounding_box.x1, pixel_space_bounding_box.y1), (pixel_space_bounding_box.x2, pixel_space_bounding_box.y2), (0,255,0), 2)
 
     cv2.imshow("Webcam", numpy_frame)
 
