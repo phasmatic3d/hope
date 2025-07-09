@@ -461,7 +461,7 @@ def main():
     path_to_chkp = os.path.join(sam2_config.CHECKPOINT_PATH, Path(link[1]).name)
 
     if args.image_size % 32 != 0:
-        print(f'Requested image size {args.imaage_size} is not a multple of 32 falling back to SAM2.1 default 1024')
+        print(f'Requested image size {args.image_size} is not a multple of 32 falling back to SAM2.1 default 1024')
         args.image_size = 1024
 
     if not os.path.exists(sam2_config.CONFIG_PATH):

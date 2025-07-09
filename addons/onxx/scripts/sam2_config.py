@@ -10,12 +10,19 @@ CONFIG_PATH = os.path.join(WORKING_DIR, "configs")
 CHECKPOINT_PATH = os.path.join(WORKING_DIR, "checkpoints")
 
 SAM2p1_BASE_URL="https://dl.fbaipublicfiles.com/segment_anything_2/092824"
+SAM2_BASE_URL="https://dl.fbaipublicfiles.com/segment_anything_2/072824"
 
 sam2p1_configs = [
     f"{SAM2p1_BASE_URL}/sam2.1_hiera_tiny.pt",
     f"{SAM2p1_BASE_URL}/sam2.1_hiera_small.pt",
     f"{SAM2p1_BASE_URL}/sam2.1_hiera_base_plus.pt",
     f"{SAM2p1_BASE_URL}/sam2.1_hiera_large.pt"]
+
+sam2_configs = [
+    f"{SAM2_BASE_URL}/sam2_hiera_tiny.pt",
+    f"{SAM2_BASE_URL}/sam2_hiera_small.pt",
+    f"{SAM2_BASE_URL}/sam2_hiera_base_plus.pt",
+    f"{SAM2_BASE_URL}/sam2_hiera_large.pt"]
 
 class MODEL_SIZE(Enum):
     TINY = 0
@@ -24,10 +31,16 @@ class MODEL_SIZE(Enum):
     LARGE = 3
 
 map_to_config = {
-    MODEL_SIZE.TINY: ["sam2.1_hiera_t.yaml", sam2p1_configs[MODEL_SIZE.TINY.value]],
-    MODEL_SIZE.SMALL: ["sam2.1_hiera_s.yaml", sam2p1_configs[MODEL_SIZE.SMALL.value]],
-    MODEL_SIZE.BASE_PLUS: ["sam2.1_hiera_base+.yaml", sam2p1_configs[MODEL_SIZE.BASE_PLUS.value]],
-    MODEL_SIZE.LARGE: ["sam2.1_hiera_l.yaml", sam2p1_configs[MODEL_SIZE.LARGE.value]] }
+    MODEL_SIZE.TINY: [os.path.join("sam2.1", "sam2.1_hiera_t.yaml"), sam2p1_configs[MODEL_SIZE.TINY.value]],
+    MODEL_SIZE.SMALL: [os.path.join("sam2.1", "sam2.1_hiera_s.yaml"), sam2p1_configs[MODEL_SIZE.SMALL.value]],
+    MODEL_SIZE.BASE_PLUS: [os.path.join("sam2.1", "sam2.1_hiera_base+.yaml"), sam2p1_configs[MODEL_SIZE.BASE_PLUS.value]],
+    MODEL_SIZE.LARGE: [os.path.join("sam2.1", "sam2.1_hiera_l.yaml"), sam2p1_configs[MODEL_SIZE.LARGE.value]] }
+
+map_to_config_sam2 = {
+    MODEL_SIZE.TINY: [os.path.join("sam2", "sam2_hiera_t.yaml"), sam2_configs[MODEL_SIZE.TINY.value]],
+    MODEL_SIZE.SMALL: [os.path.join("sam2", "sam2_hiera_s.yaml"), sam2_configs[MODEL_SIZE.SMALL.value]],
+    MODEL_SIZE.BASE_PLUS: [os.path.join("sam2", "sam2_hiera_b+.yaml"), sam2_configs[MODEL_SIZE.BASE_PLUS.value]],
+    MODEL_SIZE.LARGE: [os.path.join("sam2", "sam2_hiera_l.yaml"), sam2_configs[MODEL_SIZE.LARGE.value]] }
 
 map_to_enum = {
     "tiny" : MODEL_SIZE.TINY,
