@@ -9,7 +9,7 @@
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}/producer/src",
       "env": {
-        "PYTHONPATH": "${workspaceFolder}/producer/src/bindings"
+        "PYTHONPATH": ""
       }
     }
   ]
