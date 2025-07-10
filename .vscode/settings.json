@@ -1,0 +1,18 @@
+// .vscode/settings.json
+{
+  "files.associations": {
+    "*.py": "python"
+  },
+
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+
+  "cmake.generator": "Ninja",
+  "cmake.sourceDirectory": "${workspaceFolder}/producer",
+  "cmake.buildDirectory": "${workspaceFolder}/producer/build",
+  "cmake.configureSettings": {
+  "Python_EXECUTABLE": "${config:python.defaultInterpreterPath}"
+},
+"cmake.configureArgs": [
+  "-DCMAKE_BUILD_TYPE=Release"
+],
+}

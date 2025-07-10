@@ -12,6 +12,3 @@ mediapipe
 tqdm
 omegaconf
 hydra-core
-
---only-binary DracoPy
-DracoPy

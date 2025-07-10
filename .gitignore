@@ -3,6 +3,10 @@ build/
 sam2/
 gesture_recognizer.task
 checkpoints/
-.vscode/
 
 __pycache__/
+
+*.lib
+*.exp
+*.dll
+*.pyd

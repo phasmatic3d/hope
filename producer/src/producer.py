@@ -6,7 +6,8 @@ from enum import Enum, auto
 import pyrealsense2 as rs
 import cv2
 import numpy as np
-import DracoPy
+
+import encoder
 
 # Modes for processing
 class Mode(Enum):
@@ -39,7 +40,7 @@ class DracoSettings:
     def __init__(self):
         self.posQuant = 10
         self.colorQuant = 8
-        self.speedEncode = 1
+        self.speedEncode = 9
         self.speedDecode = 1
         self.roiWidth = 240
         self.roiHeight = 240
@@ -56,6 +57,16 @@ class DracoSettings:
 
         t_enc = Timer()
 
+        # TODO USE NB WRAPPER HERE
+        buffer = encoder.encode_pointcloud(
+            points,
+            colors,
+            self.posQuant,
+            self.colorQuant,
+            self.speedEncode,
+            self.speedDecode
+        )
+        '''
         buffer = DracoPy.encode(
             points,
             quantization_bits=self.posQuant,
@@ -65,6 +76,7 @@ class DracoSettings:
         stats.encode_ms = t_enc.elapsed_ms()
         stats.encoded_bytes = len(buffer)
         return buffer
+        '''
 
 # Main demo
 

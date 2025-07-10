@@ -10,9 +10,10 @@ project(hope_producer VERSION 1.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-find_package(OpenSSL REQUIRED)
-find_package(realsense2 REQUIRED) 
+#find_package(OpenSSL REQUIRED)
+#find_package(realsense2 REQUIRED) 
 
+find_package(Python 3.11 EXACT COMPONENTS Interpreter Development)
 
 #####################################################################
 # Fetch and add Draco (encoder-decoder for 3D data)
@@ -20,7 +21,22 @@ find_package(realsense2 REQUIRED)
 
 set(FETCHCONTENT_QUIET OFF)
 
+#####################################################################
+# Fetch and add nanobind (C++ ↔ Python binding library)
+#####################################################################
 include(FetchContent)
+FetchContent_Declare(
+  nanobind
+  GIT_REPOSITORY https://github.com/wjakob/nanobind.git
+  GIT_TAG        v2.7.0     # or whatever release you want
+)
+FetchContent_MakeAvailable(nanobind)
+
+
+
+include(FetchContent)
+
+set(BUILD_SHARED_LIBS ON CACHE BOOL "Build shared libraries" FORCE)
 
 FetchContent_Declare(
   draco
@@ -29,7 +45,7 @@ FetchContent_Declare(
 )
 
 set(DRACO_POINT_CLOUD_COMPRESSION   ON CACHE BOOL "Enable point‐cloud compression."         FORCE)
-set(DRACO_MESH_COMPRESSION          ON  CACHE BOOL "Enable Mesh compression"                FORCE)
+set(DRACO_MESH_COMPRESSION          OFF  CACHE BOOL "Enable Mesh compression"                FORCE)
 
 
 set(DRACO_STANDARD_EDGEBREAKER      ON  CACHE BOOL "" FORCE)
@@ -106,63 +122,52 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(glm)
 
 # Add the executable
-add_executable(hope_producer src/producer.cpp)
-
-target_include_directories(hope_producer PRIVATE
-  ${draco_SOURCE_DIR}/src
-  ${CMAKE_BINARY_DIR}              # <-- so "draco/draco_features.h" is found
-  ${spdlog_SOURCE_DIR}/include
-  ${websocketpp_SOURCE_DIR}
-  ${asio_SOURCE_DIR}/asio/include
-  ${glm_SOURCE_DIR}
+nanobind_add_module(encoder
+    src/bindings/draco_bindings.cpp
 )
 
+set(ENCODER_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/src")
 
-# Add Realsense subdirectory
-#set(BUILD_EXAMPLES OFF CACHE BOOL "Disable librealsense examples")
-#set(BUILD_WITH_STATIC_CRT OFF CACHE BOOL "Disable librealsense examples")
-#add_subdirectory(deps/librealsense)
-#
-#
-#
-#target_link_directories(hope_producer PRIVATE deps/OpenSSL/lib)
-#
+set_target_properties(encoder PROPERTIES
+  PREFIX ""           
+  SUFFIX ".pyd"       
+  RUNTIME_OUTPUT_DIRECTORY        "${ENCODER_OUTPUT_DIR}"
+  LIBRARY_OUTPUT_DIRECTORY        "${ENCODER_OUTPUT_DIR}"
+  ARCHIVE_OUTPUT_DIRECTORY        "${ENCODER_OUTPUT_DIR}"
+)
+
+target_include_directories(encoder PRIVATE
+  ${draco_SOURCE_DIR}/src      
+  ${CMAKE_BINARY_DIR}/draco      
+  ${CMAKE_BINARY_DIR}        
+)
+
+message(STATUS "Draco source dir: ${draco_SOURCE_DIR}")
+message(STATUS "Draco build dir:  ${draco_BINARY_DIR}")
+message(STATUS "Cmake build dir:  ${CMAKE_BINARY_DIR}")
+message(STATUS "Cmake source dir:  ${CMAKE_SOURCE_DIR}")
+
+
+target_link_libraries(encoder PRIVATE
+  draco::draco
+)
 
 if (WIN32)
-    target_link_libraries(hope_producer PRIVATE draco libcrypto libssl realsense2)
-else()
-    target_link_libraries(hope_producer PRIVATE 
-      ${DRACO_LIB}
-      OpenSSL::Crypto 
-      OpenSSL::SSL 
-      realsense2::realsense2
-    )
+    
+add_custom_command(TARGET encoder POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "$<TARGET_FILE:draco::draco>"
+    "${ENCODER_OUTPUT_DIR}/draco.dll"
+)
+
 endif()
 
-if (WIN32)
-    add_custom_command(TARGET hope_producer POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/deps/OpenSSL/bin/libcrypto-3-x64.dll"
-            "$<TARGET_FILE_DIR:hope_producer>/libcrypto-3-x64.dll"
-    )
-    add_custom_command(TARGET hope_producer POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/deps/OpenSSL/bin/libssl-3-x64.dll"
-            "$<TARGET_FILE_DIR:hope_producer>/libssl-3-x64.dll"
-    )
-    add_custom_command(TARGET hope_producer POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_BINARY_DIR}/deps/draco/$<CONFIG>/draco.dll"
-            "$<TARGET_FILE_DIR:hope_producer>/draco.dll"
-    )
-endif()
-
-add_custom_command(TARGET hope_producer POST_BUILD
+add_custom_command(TARGET encoder POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/rsrc/certs/server.key"
         "${CMAKE_BINARY_DIR}/server.key"
 )
-add_custom_command(TARGET hope_producer POST_BUILD
+add_custom_command(TARGET encoder POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/rsrc/certs/server.crt"
         "${CMAKE_BINARY_DIR}/server.crt"
