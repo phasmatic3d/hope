@@ -7,7 +7,7 @@ from ultralytics import YOLOE
 CWD = os.getcwd()
 
 model = YOLOE("yoloe-11l-seg.pt", verbose=False)
-names = ["glasses", "t-shirt", "hat", "shorts", "wedding ring"]
+names = ["glasses", "shirt", "hat", "shorts", "wedding ring"]
 model.set_classes(names, model.get_text_pe(names))
 
 cap = cv.VideoCapture(0)
@@ -21,7 +21,7 @@ while cap.isOpened():
 
     now = time.time()
 
-    results = model.predict(frame, conf=0.25, verbose=False)
+    results = model.predict(frame, conf=0.1, verbose=False)
 
     #results[0].show()
 
