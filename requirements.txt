@@ -14,3 +14,4 @@ omegaconf
 hydra-core
 
 rich
+cupy-cuda12x # change this if different

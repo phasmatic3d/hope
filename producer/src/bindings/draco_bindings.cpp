@@ -20,8 +20,6 @@ NB_MODULE(encoder, m) {
 			int                                            speed_encode,
 			int                                            speed_decode) -> nb::bytes {
 				const int N = int(positions.shape(0));
-				if (int(colors.shape(0)) != N)
-					throw std::runtime_error("positions/colors must have same length");
 
 				draco::PointCloudBuilder builder;
 				builder.Start(N);
@@ -38,24 +36,9 @@ NB_MODULE(encoder, m) {
 
 				builder.SetAttributeValuesForAllPoints(pos_att_id, pos_ptr, 0);
 				builder.SetAttributeValuesForAllPoints(col_att_id, col_ptr, 0);
-#if 0
-				for (int i = 0; i < N; ++i) {
-					builder.SetAttributeValueForPoint(
-						pos_att_id,
-						draco::PointIndex(i),
-						pos_ptr + 3 * i
-					);
-					builder.SetAttributeValueForPoint(
-						col_att_id,
-						draco::PointIndex(i),
-						col_ptr + 3 * i
-					);
-				}
-#endif
+
 				// Finalize the PointCloud (allocates storage, etc)
 				std::unique_ptr<draco::PointCloud> pc = builder.Finalize(false);
-				if (!pc)
-					throw std::runtime_error("Failed to finalize PointCloud");
 
 				// Encode
 				draco::EncoderBuffer buffer;
@@ -64,10 +47,7 @@ NB_MODULE(encoder, m) {
 				encoder.SetAttributeQuantization(draco::GeometryAttribute::POSITION, pos_quant);
 				encoder.SetAttributeQuantization(draco::GeometryAttribute::COLOR, col_quant);
 
-				const draco::Status status = encoder.EncodePointCloudToBuffer(*pc, &buffer);
-				if (!status.ok())
-					throw std::runtime_error("Draco encode failed: " +
-						status.error_msg_string());
+				const draco::Status status = encoder.EncodePointCloudToBuffer(*pc, &buffer);;
 
 				//Return as Python bytes
 				//Return bytes(ptr, length)

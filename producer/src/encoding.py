@@ -6,10 +6,15 @@ import numpy as np
 import encoder
 from typing import Tuple
 
+
 # Modes for processing
 class Mode(Enum):
     FULL = auto()          
     IMPORTANCE = auto()    
+
+class VizMode(Enum):
+    COLOR = auto()
+    DEPTH = auto()
 
 
 class Timer:
@@ -30,8 +35,11 @@ class EncodingStats:
 
 class GeneralStats:
     def __init__(self):
+        self.frame_ms = 0
+        self.cull_ms = 0
         self.pc_ms = 0
         self.prep_ms = 0
+        self.true_enc_ms = 0
         self.det_ms = 0
 
     def get_total_time(self):
@@ -76,4 +84,3 @@ def _encode_chunk(pts: np.ndarray,
     end = time.time()
     stats.encode_ms = (end - start) * 1000
     return buf, stats
-
