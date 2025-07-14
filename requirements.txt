@@ -1,0 +1,17 @@
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+#torch
+#torchvision
+#torchaudio
+
+requests
+opencv-python
+numpy
+pyrealsense2
+mediapipe
+tqdm
+omegaconf
+hydra-core
+
+rich
+cupy-cuda12x # change this if different
