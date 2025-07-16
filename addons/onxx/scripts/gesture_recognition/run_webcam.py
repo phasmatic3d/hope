@@ -16,6 +16,9 @@ pointing_gesture_recognizer = PointingGestureRecognizer(
     model_asset_path="hand_landmarker.task",
     num_hands=2,
     running_mode=RunningMode.LIVE_STREAM,
+    #TODO modify box size based on the distance of the camera
+    #TODO draw based on the media pipe which returns hand landmarks 
+    #TODO maybe it returns the size of the hand landmark
     box_size=0.2,
     delay_frames=15,
 )
