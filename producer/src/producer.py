@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 
 from encoding import *
+from broadcasting import *
 import encoding as enc
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -14,6 +15,12 @@ from rich.console import Group
 
 import statslogger as log
 from rich.table import Table
+
+# Set up the server
+server = setup_server()
+thread = threading.Thread(target=server.run, daemon=True)
+thread.start()
+
 def main():
 
     # Setup RealSense
@@ -36,7 +43,7 @@ def main():
     win_name = "RealSense Color"
     cv2.namedWindow(win_name, cv2.WINDOW_AUTOSIZE)
 
-    mode = Mode[Mode.IMPORTANCE.name]
+    mode = Mode[Mode.FULL.name]
 
     statsROI = EncodingStats()
     statsOut = EncodingStats()
@@ -149,6 +156,9 @@ def main():
                         statsAll.encode_ms = (time.perf_counter() - encode_time_start) * 1000 # encoding end
                         statsAll.encoded_bytes = len(buf_all)
                         statsGeneral.true_enc_ms  = statsAll.encode_ms
+
+                        # Broadcast
+                        server.broadcast(buf_all)
                     
                     # Logging
                     tbl_general = log.make_general_stats_table(statsGeneral, "General Stats")

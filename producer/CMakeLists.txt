@@ -28,7 +28,7 @@ include(FetchContent)
 FetchContent_Declare(
   nanobind
   GIT_REPOSITORY https://github.com/wjakob/nanobind.git
-  GIT_TAG        v2.7.0     # or whatever release you want
+  GIT_TAG        v2.7.0     
 )
 FetchContent_MakeAvailable(nanobind)
 
@@ -121,7 +121,9 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(glm)
 
-# Add the executable
+add_subdirectory(${CMAKE_BINARY_DIR}/_deps/nanobind-src)
+
+# Add the executable for encoder
 nanobind_add_module(encoder
     src/bindings/draco_bindings.cpp
 )
@@ -136,21 +138,42 @@ set_target_properties(encoder PROPERTIES
   ARCHIVE_OUTPUT_DIRECTORY        "${ENCODER_OUTPUT_DIR}"
 )
 
+
 target_include_directories(encoder PRIVATE
   ${draco_SOURCE_DIR}/src      
   ${CMAKE_BINARY_DIR}/draco      
   ${CMAKE_BINARY_DIR}        
 )
 
-message(STATUS "Draco source dir: ${draco_SOURCE_DIR}")
-message(STATUS "Draco build dir:  ${draco_BINARY_DIR}")
-message(STATUS "Cmake build dir:  ${CMAKE_BINARY_DIR}")
-message(STATUS "Cmake source dir:  ${CMAKE_SOURCE_DIR}")
-
-
 target_link_libraries(encoder PRIVATE
   draco::draco
 )
+
+# Add the executable for the broadcaster
+nanobind_add_module(broadcaster
+    src/bindings/server_bindings.cpp
+)
+
+set(SERVER_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/src")
+
+set_target_properties(broadcaster PROPERTIES
+  PREFIX ""           
+  SUFFIX ".pyd"       
+  RUNTIME_OUTPUT_DIRECTORY        "${SERVER_OUTPUT_DIR}"
+  LIBRARY_OUTPUT_DIRECTORY        "${SERVER_OUTPUT_DIR}"
+  ARCHIVE_OUTPUT_DIRECTORY        "${SERVER_OUTPUT_DIR}"
+)
+
+target_include_directories(broadcaster PRIVATE
+  ${asio_SOURCE_DIR}/asio/include     
+  ${websocketpp_SOURCE_DIR}       
+)
+
+target_compile_definitions(broadcaster PRIVATE
+  ASIO_STANDALONE
+  _WEBSOCKETPP_CPP11_TYPE_TRAITS_
+)
+
 
 if (WIN32)
     
@@ -162,13 +185,13 @@ add_custom_command(TARGET encoder POST_BUILD
 
 endif()
 
-add_custom_command(TARGET encoder POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_SOURCE_DIR}/rsrc/certs/server.key"
-        "${CMAKE_BINARY_DIR}/server.key"
-)
-add_custom_command(TARGET encoder POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_SOURCE_DIR}/rsrc/certs/server.crt"
-        "${CMAKE_BINARY_DIR}/server.crt"
-)
+#add_custom_command(TARGET encoder POST_BUILD
+    #COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        #"${CMAKE_SOURCE_DIR}/rsrc/certs/server.key"
+        #"${CMAKE_BINARY_DIR}/server.key"
+#)
+#add_custom_command(TARGET encoder POST_BUILD
+    #COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      #  "${CMAKE_SOURCE_DIR}/rsrc/certs/server.crt"
+     #   "${CMAKE_BINARY_DIR}/server.crt"
+#)
