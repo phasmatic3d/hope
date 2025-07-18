@@ -1,7 +1,26 @@
 
 from rich.table import Table
-from encoding import EncodingStats
-from encoding import GeneralStats
+
+class EncodingStats:
+    def __init__(self):
+        self.encode_ms = 0
+        self.pts = 0
+        self.raw_bytes = 0
+        self.encoded_bytes = 0
+
+class GeneralStats:
+    def __init__(self):
+        self.frame_ms = 0
+        self.cull_ms = 0
+        self.pc_ms = 0
+        self.prep_ms = 0
+        self.true_enc_ms = 0
+        self.det_ms = 0
+
+    def get_total_time(self):
+        return self.pc_ms + self.prep_ms + self.det_ms
+
+
 def make_encoding_stats_table(stats: EncodingStats, section: str, show_headers = True) -> Table:
     title = f"==== {section} ===="
     table = Table(title=title,box=None, padding=(0,1), show_header = show_headers)
