@@ -158,7 +158,6 @@ async function loadAndUpdatePointCloudFromWS(scene: THREE.Scene) {
   openConnetion((data: ArrayBuffer) => {
     // Decode the point cloud data
     const positions = decodePointCloud(decoderModule, data);
-
     // Create/update the geometry
     if (pointCloudGeometry) {
       pointCloudGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -189,41 +188,81 @@ async function loadAndUpdatePointCloudFromWS(scene: THREE.Scene) {
 
 async function loadAndUpdatePointCloudFromWS_worker(scene: THREE.Scene) {
 
-  worker.onmessage = (event: MessageEvent<Float32Array>) => {
-    // Create/update the geometry
-    const positions = event.data;
-    if (pointCloudGeometry) {
-      pointCloudGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      pointCloudGeometry.attributes.position.needsUpdate = true; // Mark as needing update
-    } 
-    else 
-    {
-      pointCloudGeometry = new THREE.BufferGeometry();
-      pointCloudGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const pending: Array<{ positions: Float32Array; colors: Uint8Array }> = [];
+  let numPC = 0;
 
-      // Set up the material and create the point cloud object
-      const material = new THREE.PointsMaterial({ color: 0x00ff00, size: 0.1 });
-      pointCloud = new THREE.Points(pointCloudGeometry, material);
-      /*pointCloud.scale.x = 100;
-      pointCloud.scale.y = 100;
-      pointCloud.scale.z = 100;*/
+  worker.onmessage = (event: MessageEvent<{positions: Float32Array; colors: Uint8Array}>) => {
+    pending.push({ positions: event.data.positions, colors: event.data.colors });
 
-      pointCloud.position.y = -10
+    if (pending.length === numPC) {
+      // concatenate all N chunks
+      let totalPts = 0;
+      let totalCols = 0;
+      for (const c of pending) {
+        totalPts += c.positions.length;
+        totalCols += c.colors.length;
+      }
 
-      // Add to the scene
-      scene.add(pointCloud);
+      const mergedPos = new Float32Array(totalPts);
+      const mergedCol = new Uint8Array(totalCols);
+
+      let posOffset = 0, colorOffset = 0; // offsets for the buffers
+      for (const pc of pending) {
+        mergedPos.set(pc.positions, posOffset);
+        mergedCol.set(pc.colors, colorOffset);
+        posOffset += pc.positions.length;
+        colorOffset += pc.colors.length;
+      }
+
+      // update or create geometry
+      if (pointCloudGeometry) {
+        pointCloudGeometry.setAttribute(
+          'position', new THREE.BufferAttribute(mergedPos, 3)
+        );
+        pointCloudGeometry.setAttribute(
+          'color',    new THREE.BufferAttribute(mergedCol, 3, true)
+        );
+        pointCloudGeometry.attributes.position.needsUpdate = true;
+        pointCloudGeometry.attributes.color.needsUpdate    = true;
+      } else {
+        pointCloudGeometry = new THREE.BufferGeometry();
+        pointCloudGeometry.setAttribute(
+          'position', new THREE.BufferAttribute(mergedPos, 3)
+        );
+        pointCloudGeometry.setAttribute(
+          'color',    new THREE.BufferAttribute(mergedCol, 3, true)
+        );
+        const material = new THREE.PointsMaterial({
+          vertexColors: true,
+          size: 0.1,
+          sizeAttenuation: false
+        });
+        pointCloud = new THREE.Points(pointCloudGeometry, material);
+        pointCloud.scale.set(5, -5, 5);
+        pointCloud.position.y = -10;
+        scene.add(pointCloud);
+      }
+
+      numPC = 0;
+      pending.length = 0;
     }
   };
   
   openConnetion((data: ArrayBuffer) => {
-    // Decode the point cloud data
-    worker.postMessage({
-      //decoderModule: decoderModule, 
-      data: data});   
+    // first byte tells us how many chunks to expect
+    const dv = new DataView(data);
+    const count = dv.getUint8(0);
 
+    if (numPC === 0) {
+      numPC = count;
+    }
+
+    // slice off that prefix and send the raw Draco bytes to the worker
+    const dracoBuf = data.slice(1);
+    worker.postMessage({ data: dracoBuf });
   }, (msg) => {
-    console.log("Reject", msg)
-  })  
+    console.log("Reject", msg);
+  });
 }
 
 setupScene();
