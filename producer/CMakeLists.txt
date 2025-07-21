@@ -10,8 +10,9 @@ project(hope_producer VERSION 1.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-#find_package(OpenSSL REQUIRED)
-#find_package(realsense2 REQUIRED) 
+
+find_package(OpenSSL REQUIRED)
+find_package(realsense2 REQUIRED) 
 
 find_package(Python 3.11 EXACT COMPONENTS Interpreter Development)
 
@@ -128,13 +129,20 @@ nanobind_add_module(encoder
 
 set(ENCODER_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/src")
 
+if (WIN32)
+	  set(ENCODER_SUFFIX ".pyd")
+else()
+  	set(ENCODER_SUFFIX ".so")
+endif()
+
 set_target_properties(encoder PROPERTIES
-  PREFIX ""           
-  SUFFIX ".pyd"       
+  PREFIX ""
+  SUFFIX "${ENCODER_SUFFIX}"
   RUNTIME_OUTPUT_DIRECTORY        "${ENCODER_OUTPUT_DIR}"
   LIBRARY_OUTPUT_DIRECTORY        "${ENCODER_OUTPUT_DIR}"
   ARCHIVE_OUTPUT_DIRECTORY        "${ENCODER_OUTPUT_DIR}"
 )
+
 
 target_include_directories(encoder PRIVATE
   ${draco_SOURCE_DIR}/src      
