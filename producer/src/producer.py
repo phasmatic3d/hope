@@ -1,26 +1,37 @@
 import time
 
-
-import pyrealsense2 as rs
 import cv2
+import pyrealsense2 as rs
 import numpy as np
+import encoding as enc
 
 from encoding import *
-import encoding as enc
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from rich.live import Live
 from rich.console import Group
+from rich.table import Table
 
 import statslogger as log
-from rich.table import Table
+
+
+from mediapipe.tasks.python.vision import (
+    RunningMode,
+)
+
+from gesture_recognition import (
+    PointingGestureRecognizer,
+    NormalizedBoundingBox,
+    PixelBoundingBox
+)
+
 def main():
 
     # Setup RealSense
     pipeline = rs.pipeline()
     cfg = rs.config()
-    cfg.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, 30)
-    cfg.enable_stream(rs.stream.color, 848, 480, rs.format.rgb8, 30)
+    cfg.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+    cfg.enable_stream(rs.stream.color, 640, 480, rs.format.rgb8, 30)
     pipeline.start(cfg)
 
     align_to = rs.stream.color
@@ -49,6 +60,8 @@ def main():
     max_dist = 2.0
     depth_thresh = rs.threshold_filter(min_dist, max_dist)
     viz_mode = VizMode.COLOR
+
+    gesture_recognizer = PointingGestureRecognizer(model_asset_path="hand_landmarker.task", num_hands=1, running_mode=RunningMode.LIVE_STREAM, box_size=0.2, delay_frames=10)
 
     with Live(refresh_per_second=1, screen=False) as live:
         try:
@@ -82,7 +95,6 @@ def main():
                 
 
                 # Prepare image for display
-                
                 color_img = np.asanyarray(color_frame.get_data())        
                 color_bgr = cv2.cvtColor(color_img, cv2.COLOR_RGB2BGR)
                 depth_img = np.asanyarray(depth_frame.get_data())
@@ -161,14 +173,35 @@ def main():
                 else:
                     
                     #TODO: REPLACE WITH SAM/GEST DETECTION
+                    mediapipe_image = gesture_recognizer.convert_frame(rgb_frame=color_img)
+                    timestamp_ms = int(time.time() * 1000)
+                    gesture_recognizer.recognize(mediapipe_image, timestamp_ms)
+
+                    x0 = 0
+                    y0 = 0
+                    x1 = 0
+                    y1 = 0 
+
+                    pixel_space_bounding_box = None
+
+                    for bounding_box_normalized in gesture_recognizer.latest_bounding_boxes:
+                        if bounding_box_normalized:
+                            pixel_space_bounding_box: PixelBoundingBox = bounding_box_normalized.to_pixel(color_img.shape[1], color_img.shape[0])
+                            x0 = pixel_space_bounding_box.x1
+                            x1 = pixel_space_bounding_box.x2
+                            y0 = pixel_space_bounding_box.y1
+                            y1 = pixel_space_bounding_box.y2
+
+
+
                     yy, xx = np.divmod(np.arange(count), w) # 6 ms
                     
                     # Draw ROI 
-                    cx, cy = w // 2, h // 2
-                    rw, rh = dracoROI.roiWidth, dracoROI.roiHeight
-                    x0, y0 = max(0, cx - rw // 2), max(0, cy - rh // 2)
-                    x1, y1 = min(w, x0 + rw), min(h, y0 + rh)
-                    cv2.rectangle(display, (x0, y0), (x1, y1), (0,255,0), 2)
+                    #cx, cy = w // 2, h // 2
+                    #rw, rh = dracoROI.roiWidth, dracoROI.roiHeight
+                    #x0, y0 = max(0, cx - rw // 2), max(0, cy - rh // 2)
+                    #x1, y1 = min(w, x0 + rw), min(h, y0 + rh)
+                    #cv2.rectangle(display, (x0, y0), (x1, y1), (0,255,0), 2)
 
                     # Importance: bin ROI vs outside
                     
