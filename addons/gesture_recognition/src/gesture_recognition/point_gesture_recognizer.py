@@ -91,7 +91,8 @@ class PointingGestureRecognizer:
 
     # if either joint angle > this, we consider the finger “bent”
     BENT_ANGLE_THRESH = 60.0
-
+    # this is the average size from the wrist to the tip 
+    # of the index finger in adults
     DISTANCE_WRIST_TO_TIP = 0.20 # meters
 
     def __init__(
