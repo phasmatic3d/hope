@@ -34,6 +34,15 @@ def main():
     cfg.enable_stream(rs.stream.color, 640, 480, rs.format.rgb8, 30)
     pipeline.start(cfg)
 
+    profile = pipeline.get_active_profile()
+    video_profile = profile.get_stream(rs.stream.color) \
+                       .as_video_stream_profile()
+    color_intrinsics = video_profile.get_intrinsics()
+    width_px  = color_intrinsics.width
+    height_px = color_intrinsics.height
+    focal_width = color_intrinsics.fx
+    focal_height = color_intrinsics.fy
+
     align_to = rs.stream.color
     align     = rs.align(align_to)
 
@@ -61,7 +70,17 @@ def main():
     depth_thresh = rs.threshold_filter(min_dist, max_dist)
     viz_mode = VizMode.COLOR
 
-    gesture_recognizer = PointingGestureRecognizer(model_asset_path="hand_landmarker.task", num_hands=1, running_mode=RunningMode.LIVE_STREAM, box_size=0.2, delay_frames=10)
+    gesture_recognizer = PointingGestureRecognizer(
+        model_asset_path="hand_landmarker.task", 
+        num_hands=1, 
+        running_mode=RunningMode.LIVE_STREAM, 
+        image_width=width_px,
+        image_height=height_px,
+        focal_length_x=focal_width,
+        focal_length_y=focal_height,
+        box_size=0.02, 
+        delay_frames=10
+    )
 
     with Live(refresh_per_second=1, screen=False) as live:
         try:
@@ -173,6 +192,7 @@ def main():
                 else:
                     
                     #TODO: REPLACE WITH SAM/GEST DETECTION
+                    #Note currently we assume a single hand
                     mediapipe_image = gesture_recognizer.convert_frame(rgb_frame=color_img)
                     timestamp_ms = int(time.time() * 1000)
                     gesture_recognizer.recognize(mediapipe_image, timestamp_ms)
@@ -201,7 +221,7 @@ def main():
                     #rw, rh = dracoROI.roiWidth, dracoROI.roiHeight
                     #x0, y0 = max(0, cx - rw // 2), max(0, cy - rh // 2)
                     #x1, y1 = min(w, x0 + rw), min(h, y0 + rh)
-                    #cv2.rectangle(display, (x0, y0), (x1, y1), (0,255,0), 2)
+                    cv2.rectangle(display, (x0, y0), (x1, y1), (0,255,0), 2)
 
                     # Importance: bin ROI vs outside
                     

@@ -18,7 +18,7 @@ from mediapipe.tasks.python.vision import (
 
 from mediapipe.tasks.python import BaseOptions
 
-DEBUG = False
+DEBUG = True
 
 #copied from the library directly
 class HandLandmark(enum.IntEnum):
@@ -92,11 +92,17 @@ class PointingGestureRecognizer:
     # if either joint angle > this, we consider the finger “bent”
     BENT_ANGLE_THRESH = 60.0
 
+    DISTANCE_WRIST_TO_TIP = 0.20 # meters
+
     def __init__(
         self, 
         model_asset_path: str,
         num_hands: int,
         running_mode: RunningMode, # type: ignore
+        image_width: int,
+        image_height: int,
+        focal_length_x: float,
+        focal_length_y: float,
         box_size: float=0.05,
         delay_frames: int=15,
     ):
@@ -116,6 +122,11 @@ class PointingGestureRecognizer:
         self._seen_frames = [0] * num_hands
         # approx. half a second at 30 FPS
         self._delay_frames = delay_frames
+        self.image_width = image_width
+        self.image_height = image_height
+        self.focal_distance_x = focal_length_x
+        self.focal_distance_y = focal_length_y
+        self.box_size = box_size
 
     def recognize(self, image: Image, frame_timestamp_ms: int):
         self.landmarker.detect_async(image=image, timestamp_ms=frame_timestamp_ms)
@@ -188,6 +199,11 @@ class PointingGestureRecognizer:
                 HandLandmark.INDEX_FINGER_TIP
             ]
 
+            wrist = hand_landmarks[
+                HandLandmark.WRIST
+            ]
+
+
             vector_1 = to_vec(mcp, pip)
             vector_2 = to_vec(pip, dip)
             vector_3 = to_vec(dip, tip)
@@ -244,7 +260,24 @@ class PointingGestureRecognizer:
 
             self._seen_frames[hand_index] += 1
 
-            bounding_box_norm = self._get_normalized_bounding_box(tip, box_size=self.box_size)
+            distance_from_camera = PointingGestureRecognizer.estimate_hand_distance(
+                tip=tip,
+                wrist=wrist,
+                image_width=self.image_width,
+                image_height=self.image_height,
+                focal_length_x=self.focal_distance_x,
+                focal_length_y=self.focal_distance_y
+            )
+
+            if DEBUG:
+                print(f"Hand #{hand_index} is ~{distance_from_camera:.2f} m from camera")
+
+            #bounding_box_norm = self._get_normalized_bounding_box(tip, box_size=self.box_size)
+
+            bounding_box_norm = self._get_dynamic_bounding_box(
+                tip,
+                distance_from_camera,
+            )
 
             if DEBUG:
                 print(f"  normalized box: {bounding_box_norm}")
@@ -257,6 +290,37 @@ class PointingGestureRecognizer:
             else:
                 self.latest_bounding_boxes[hand_index] = None
 
+
+    def _get_dynamic_bounding_box(
+        self,
+        landmark,
+        distance_z: float,
+    ) -> NormalizedBoundingBox:
+        # if depth invalid/far, fall back to your fixed normalized size:
+        if distance_z <= 0 or not math.isfinite(distance_z):
+            half_norm = self.box_size / 2
+            return NormalizedBoundingBox(
+                landmark.x - half_norm,
+                landmark.y - half_norm,
+                landmark.x + half_norm,
+                landmark.y + half_norm,
+            )
+
+        # compute half-width in *pixels* via pinhole:  half_px = (f * W_real/2) / Z
+        half_px_x = (self.focal_distance_x * self.box_size/2) / distance_z
+        half_px_y = (self.focal_distance_y * self.box_size/2) / distance_z
+
+        # normalize by image dims to get [0..1] units
+        half_norm_x = half_px_x / self.image_width
+        half_norm_y = half_px_y / self.image_height
+
+        # clamp to [0..1]
+        xmin = max(landmark.x - half_norm_x, 0.0)
+        ymin = max(landmark.y - half_norm_y, 0.0)
+        xmax = min(landmark.x + half_norm_x, 1.0)
+        ymax = min(landmark.y + half_norm_y, 1.0)
+
+        return NormalizedBoundingBox(xmin, ymin, xmax, ymax)
 
     def get_masks(self, frame_shape: tuple[int,int]) -> "np.ndarray":
         """
@@ -300,3 +364,28 @@ class PointingGestureRecognizer:
             image_format=ImageFormat.SRGB,
             data=rgb_frame
         )
+
+    @staticmethod
+    def estimate_hand_distance(
+        tip: float, 
+        wrist: float,
+        image_width: int, 
+        image_height: int,
+        focal_length_x: float, 
+        focal_length_y: float,
+    ) -> float:
+
+        x1, y1 = int(tip.x * image_width), int(tip.y * image_height)
+        x2, y2 = int(wrist.x * image_width), int(wrist.y * image_height)
+
+        # Compute pixel‐space distance
+        distance_in_pixels = math.hypot(x2 - x1, y2 - y1)
+        if distance_in_pixels <= 0:
+            return float("inf")  # or some fallback
+
+        # Use average focal length
+        focal_length_pixels = (focal_length_x + focal_length_y) / 2.0
+
+        # Pinhole model: Z = f * D_real / d_px
+        z = (focal_length_pixels * PointingGestureRecognizer.DISTANCE_WRIST_TO_TIP) / distance_in_pixels
+        return z
