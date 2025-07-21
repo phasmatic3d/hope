@@ -21,6 +21,7 @@ def make_general_stats_table(stats: GeneralStats, section: str, show_headers = T
     table.add_row("Point Prep", f"{stats.pc_ms:.2f} ms")
     table.add_row("Draco Prep", f"{stats.prep_ms:.2f} ms")
     table.add_row("True Encoding Time ", f"{stats.true_enc_ms:.2f} ms")
+    table.add_row("Gesture Recognition", f"{stats.gesture_recognition_ms:.2f} ms")
     return table
 
 def make_total_time_table(total_time : float) -> Table:

@@ -41,9 +41,10 @@ class GeneralStats:
         self.prep_ms = 0
         self.true_enc_ms = 0
         self.det_ms = 0
+        self.gesture_recognition_ms = 0
 
     def get_total_time(self):
-        return self.pc_ms + self.prep_ms + self.det_ms
+        return self.pc_ms + self.prep_ms + self.det_ms + self.gesture_recognition_ms
 
 
 class DracoEncoder:

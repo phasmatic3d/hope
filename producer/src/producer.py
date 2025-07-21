@@ -193,6 +193,7 @@ def main():
                     
                     #TODO: REPLACE WITH SAM/GEST DETECTION
                     #Note currently we assume a single hand
+                    gesture_recognition_start_time = time.perf_counter()
                     mediapipe_image = gesture_recognizer.convert_frame(rgb_frame=color_img)
                     timestamp_ms = int(time.time() * 1000)
                     gesture_recognizer.recognize(mediapipe_image, timestamp_ms)
@@ -212,8 +213,7 @@ def main():
                             y0 = pixel_space_bounding_box.y1
                             y1 = pixel_space_bounding_box.y2
 
-
-
+                    statsGeneral.gesture_recognition_ms = (time.perf_counter() - gesture_recognition_start_time) * 1000
                     yy, xx = np.divmod(np.arange(count), w) # 6 ms
                     
                     # Draw ROI 

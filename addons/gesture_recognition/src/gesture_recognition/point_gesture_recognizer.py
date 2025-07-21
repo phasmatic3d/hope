@@ -296,7 +296,7 @@ class PointingGestureRecognizer:
         landmark,
         distance_z: float,
     ) -> NormalizedBoundingBox:
-        # if depth invalid/far, fall back to your fixed normalized size:
+        # if depth invalid/far, fall back the fixed normalized size:
         if distance_z <= 0 or not math.isfinite(distance_z):
             half_norm = self.box_size / 2
             return NormalizedBoundingBox(
