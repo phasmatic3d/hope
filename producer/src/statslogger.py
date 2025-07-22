@@ -15,10 +15,10 @@ class GeneralStats:
         self.pc_ms = 0
         self.prep_ms = 0
         self.true_enc_ms = 0
-        self.det_ms = 0
+        self.gest_rec_ms = 0
 
     def get_total_time(self):
-        return self.pc_ms + self.prep_ms + self.det_ms
+        return self.pc_ms + self.prep_ms + self.gest_rec_ms
 
 
 def make_encoding_stats_table(stats: EncodingStats, section: str, show_headers = True) -> Table:
@@ -34,11 +34,11 @@ def make_general_stats_table(stats: GeneralStats, section: str, show_headers = T
     title = f"==== {section} ===="
     table = Table(title = title, box=None, padding=(0,1), show_header = show_headers)
 
-    table.add_row("Obj Detection", f"{stats.det_ms:.2f} ms")
     table.add_row("Frame Prep", f"{stats.frame_ms:.2f} ms")
     table.add_row("Cull Prep", f"{stats.cull_ms:.2f} ms")
     table.add_row("Point Prep", f"{stats.pc_ms:.2f} ms")
     table.add_row("Draco Prep", f"{stats.prep_ms:.2f} ms")
+    table.add_row("Gesture Recognition", f"{stats.gest_rec_ms:.2f} ms")
     table.add_row("True Encoding Time ", f"{stats.true_enc_ms:.2f} ms")
     return table
 

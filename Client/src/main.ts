@@ -193,7 +193,7 @@ async function loadAndUpdatePointCloudFromWS_worker(scene: THREE.Scene) {
 
   worker.onmessage = (event: MessageEvent<{positions: Float32Array; colors: Uint8Array}>) => {
     pending.push({ positions: event.data.positions, colors: event.data.colors });
-
+    console.time("Rendering")
     if (pending.length === numPC) {
       // concatenate all N chunks
       let totalPts = 0;
@@ -234,17 +234,20 @@ async function loadAndUpdatePointCloudFromWS_worker(scene: THREE.Scene) {
         );
         const material = new THREE.PointsMaterial({
           vertexColors: true,
-          size: 0.1,
+          size: 3.0,
           sizeAttenuation: false
         });
         pointCloud = new THREE.Points(pointCloudGeometry, material);
         pointCloud.scale.set(5, -5, 5);
         pointCloud.position.y = -10;
+        pointCloud.position.z = 8;
+        pointCloud.position.x = -2;
         scene.add(pointCloud);
       }
 
       numPC = 0;
       pending.length = 0;
+      console.timeEnd("Rendering")
     }
   };
   

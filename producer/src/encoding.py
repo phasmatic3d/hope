@@ -20,6 +20,16 @@ from rich.console import Group
 import statslogger as log
 
 
+from mediapipe.tasks.python.vision import (
+    RunningMode,
+)
+
+from gesture_recognition import (
+    PointingGestureRecognizer,
+    NormalizedBoundingBox,
+    PixelBoundingBox
+)
+
 # Modes for processing
 class Mode(Enum):
     FULL = auto()          
@@ -86,6 +96,15 @@ def encode_point_cloud(server: bc.ProducerServer):
     cfg.enable_stream(rs.stream.color, 848, 480, rs.format.rgb8, 30)
     pipeline.start(cfg)
 
+    profile = pipeline.get_active_profile()
+    video_profile = profile.get_stream(rs.stream.color) \
+                       .as_video_stream_profile()
+    color_intrinsics = video_profile.get_intrinsics()
+    width_px  = color_intrinsics.width
+    height_px = color_intrinsics.height
+    focal_width = color_intrinsics.fx
+    focal_height = color_intrinsics.fy
+
     align_to = rs.stream.color
     align     = rs.align(align_to)
 
@@ -109,19 +128,37 @@ def encode_point_cloud(server: bc.ProducerServer):
     executor = ProcessPoolExecutor(max_workers=2)
 
     min_dist = 0.1
-    max_dist = 2.0
+    max_dist = 1.3
     depth_thresh = rs.threshold_filter(min_dist, max_dist)
     viz_mode = VizMode.COLOR
+
+    # Settings
+    dracoAll = DracoEncoder()
+    dracoROI = DracoEncoder()
+
+    dracoOut = DracoEncoder()
+
+    gesture_recognizer = PointingGestureRecognizer(
+        model_asset_path="hand_landmarker.task", 
+        num_hands=1, 
+        running_mode=RunningMode.LIVE_STREAM, 
+        image_width=width_px,
+        image_height=height_px,
+        focal_length_x=focal_width,
+        focal_length_y=focal_height,
+        box_size=0.02, 
+        delay_frames=10
+    )
 
     with Live(refresh_per_second=1, screen=False) as live:
         try:
             while True:
-                # Settings
-                dracoAll = DracoEncoder()
-                dracoROI = DracoEncoder()
+                dracoROI.posQuant = dracoAll.posQuant
+                dracoROI.colorQuant = dracoAll.colorQuant
+                dracoROI.speedEncode = dracoAll.speedEncode
+                dracoROI.speedDecode = dracoAll.speedDecode 
 
-                dracoOut = DracoEncoder()
-                dracoOut.posQuant = dracoROI.posQuant // 4
+                dracoOut.posQuant = dracoROI.posQuant // 2
                 dracoOut.colorQuant = dracoROI.colorQuant
                 dracoOut.speedEncode = dracoROI.speedEncode
                 dracoOut.speedDecode = dracoROI.speedDecode
@@ -227,13 +264,30 @@ def encode_point_cloud(server: bc.ProducerServer):
                 else:
                     
                     #TODO: REPLACE WITH SAM/GEST DETECTION
-                    yy, xx = np.divmod(np.arange(count), w) # 6 ms
+                    #Note currently we assume a single hand
+                    gesture_recognition_start_time = time.perf_counter()
+                    mediapipe_image = gesture_recognizer.convert_frame(rgb_frame=color_img)
+                    timestamp_ms = int(time.time() * 1000)
+                    gesture_recognizer.recognize(mediapipe_image, timestamp_ms)
+
+                    x0 = 0
+                    y0 = 0
+                    x1 = 0
+                    y1 = 0 
+
+                    pixel_space_bounding_box = None
+
+                    for bounding_box_normalized in gesture_recognizer.latest_bounding_boxes:
+                        if bounding_box_normalized:
+                            pixel_space_bounding_box: PixelBoundingBox = bounding_box_normalized.to_pixel(color_img.shape[1], color_img.shape[0])
+                            x0 = pixel_space_bounding_box.x1
+                            x1 = pixel_space_bounding_box.x2
+                            y0 = pixel_space_bounding_box.y1
+                            y1 = pixel_space_bounding_box.y2
+
+                    statsGeneral.gesture_recognition_ms = (time.perf_counter() - gesture_recognition_start_time) * 1000
                     
-                    # Draw ROI 
-                    cx, cy = w // 2, h // 2
-                    rw, rh = dracoROI.roiWidth, dracoROI.roiHeight
-                    x0, y0 = max(0, cx - rw // 2), max(0, cy - rh // 2)
-                    x1, y1 = min(w, x0 + rw), min(h, y0 + rh)
+                    yy, xx = np.divmod(np.arange(count), w) # 6 ms
                     cv2.rectangle(display, (x0, y0), (x1, y1), (0,255,0), 2)
 
                     # Importance: bin ROI vs outside
@@ -309,7 +363,7 @@ def encode_point_cloud(server: bc.ProducerServer):
                     prev_time = now
                     frame_count = 0
                 cv2.putText(display, f"FPS: {fps}", (10,50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
-                cv2.putText(display, dracoROI.to_string(), (10,20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
+                cv2.putText(display, dracoAll.to_string(), (10,20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
                 
                 cv2.imshow(win_name, display)      
                 key = cv2.waitKey(1) # this takes 20 ms
@@ -327,13 +381,19 @@ def encode_point_cloud(server: bc.ProducerServer):
                         else VizMode.COLOR
                     )
                 elif key == ord('='):
-                    dracoROI.posQuant = min(dracoROI.posQuant+1, 20)
+                    dracoAll.posQuant = min(dracoAll.posQuant+1, 20)
                 elif key == ord('-'):
-                    dracoROI.posQuant = max(dracoROI.posQuant-1, 1)
+                    dracoAll.posQuant = max(dracoAll.posQuant-1, 1)
                 elif key == ord(']'):
-                    dracoROI.colorQuant = min(dracoROI.colorQuant+1, 16)
+                    dracoAll.colorQuant = min(dracoAll.colorQuant+1, 16)
                 elif key == ord('['):
-                    dracoROI.colorQuant = max(dracoROI.colorQuant-1, 1)
+                    dracoAll.colorQuant = max(dracoAll.colorQuant-1, 1)
+                elif key == ord('.'):
+                    dracoAll.speedEncode = min(dracoAll.speedEncode+1, 10)
+                    dracoAll.speedDecode = dracoAll.speedEncode
+                elif key == ord(','):
+                    dracoAll.speedEncode = max(dracoAll.speedEncode-1, 0)
+                    dracoAll.speedDecode = dracoAll.speedEncode
                 elif key == ord(' '):
                     # save full point cloud PLY
                     points.export_to_ply("snapshot.ply", color_frame)
