@@ -18,7 +18,7 @@ from mediapipe.tasks.python.vision import (
 
 from mediapipe.tasks.python import BaseOptions
 
-DEBUG = True
+DEBUG = False
 
 #copied from the library directly
 class HandLandmark(enum.IntEnum):
