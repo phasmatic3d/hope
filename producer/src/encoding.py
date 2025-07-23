@@ -116,24 +116,19 @@ def encode_point_cloud(
     pipeline.start(cfg)
 
     profile = pipeline.get_active_profile()
+
     video_profile = profile.get_stream(rs.stream.color) \
                        .as_video_stream_profile()
+    
     color_intrinsics = video_profile.get_intrinsics()
-    width_px  = color_intrinsics.width
-    height_px = color_intrinsics.height
-    focal_width = color_intrinsics.fx
-    focal_height = color_intrinsics.fy
 
     align_to = rs.stream.color
-    align     = rs.align(align_to)
-
-
+    align = rs.align(align_to)
 
     prev_time = time.perf_counter()
     frame_count = 0
     fps = 0.0
 
-    
     win_name = "RealSense Color"
     cv2.namedWindow(win_name, cv2.WINDOW_AUTOSIZE)
 
@@ -161,10 +156,10 @@ def encode_point_cloud(
         model_asset_path="hand_landmarker.task", 
         num_hands=1, 
         running_mode=RunningMode.LIVE_STREAM, 
-        image_width=width_px,
-        image_height=height_px,
-        focal_length_x=focal_width,
-        focal_length_y=focal_height,
+        image_width=color_intrinsics.width,
+        image_height=color_intrinsics.height,
+        focal_length_x= color_intrinsics.fx,
+        focal_length_y=color_intrinsics.fy,
         box_size=0.02, 
         delay_frames=10
     )
@@ -243,8 +238,6 @@ def encode_point_cloud(
                 u_idx = np.clip(u, 0, w-1)
                 v_idx = np.clip(v, 0, h-1) # 1ms
 
-                
-                
                 pix_idx = v_idx * w + u_idx
                 bgr_flat = color_bgr.reshape(-1,3) 
                 colors = bgr_flat[pix_idx][:, ::-1]# 4ms
@@ -285,9 +278,7 @@ def encode_point_cloud(
                     
                     #Note currently we assume a single hand
                     gesture_recognition_start_time = time.perf_counter()
-                    mediapipe_image = gesture_recognizer.convert_frame(rgb_frame=color_img)
-                    timestamp_ms = int(time.time() * 1000)
-                    gesture_recognizer.recognize(mediapipe_image, timestamp_ms)
+                    gesture_recognizer.recognize(color_img, int(time.time() * 1000))
 
                     x0 = 0
                     y0 = 0
@@ -305,21 +296,24 @@ def encode_point_cloud(
                             y0 = pixel_space_bounding_box.y1
                             y1 = pixel_space_bounding_box.y2
 
-                    statsGeneral.gesture_recognition_ms = (time.perf_counter() - gesture_recognition_start_time) * 1000
+                    statsGeneral.gest_rec_ms = (time.perf_counter() - gesture_recognition_start_time) * 1000
                     
-                    if not if_sam_init and pixel_space_bounding_box is not None:
-                        if_sam_init = True
-                        predictor.load_first_frame(color_img)
+                    statsGeneral.sam2_ms = time.perf_counter()
 
-                        ann_frame_idx = 0
-                        ann_obj_id = (1,)
-                        labels = np.array([1], dtype=np.int32)
-                        points = np.array([[0.5 * (x0 + x1), 0.5 * (y0 + y1)]], dtype=np.float32)
+                    if False:
+                        if not if_sam_init and pixel_space_bounding_box is not None:
+                            if_sam_init = True
+                            predictor.load_first_frame(color_img)
 
-                        _, _, out_mask_logits = predictor.add_new_prompt(
-                            frame_idx=ann_frame_idx, obj_id=ann_obj_id, points=points, labels=labels)
-                    elif if_sam_init :
-                        _, out_mask_logits = predictor.track(display)
+                            ann_frame_idx = 0
+                            ann_obj_id = (1,)
+                            labels = np.array([1], dtype=np.int32)
+                            points = np.array([[0.5 * (x0 + x1), 0.5 * (y0 + y1)]], dtype=np.float32) #TODO: clip
+
+                            _, _, out_mask_logits = predictor.add_new_prompt(
+                                frame_idx=ann_frame_idx, obj_id=ann_obj_id, points=points, labels=labels)
+                        elif if_sam_init :
+                            _, out_mask_logits = predictor.track(display)
 
                     if out_mask_logits is not None:
                         all_mask = np.zeros_like(color_img, dtype=np.uint8)
@@ -330,6 +324,8 @@ def encode_point_cloud(
                         colored_mask[:, :, 2] = out_mask[:, :, 0] * 0
                         all_mask = cv2.addWeighted(all_mask, 0, colored_mask, 1, 0)
                         display = cv2.addWeighted(display, 1, all_mask, 1, 0)
+
+                    statsGeneral.sam2_ms = (time.perf_counter() - statsGeneral.sam2_ms) * 1000
 
                     cv2.rectangle(display, (x0, y0), (x1, y1), (0,255,0), 2)
 
