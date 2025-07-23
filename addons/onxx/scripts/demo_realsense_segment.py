@@ -14,7 +14,7 @@ from pathlib import Path
 def launch_demo(path_to_yaml: str,  path_to_chkp: str, device: str, image_size: int):
     
     config_name = Path(path_to_yaml).name
-    config_path = "configs"
+    config_path = str(Path(".", "configs", "sam2.1"))
     predictor = sam2_camera.build_sam2_camera_predictor(
         config_file=config_name, 
         config_path=config_path,
