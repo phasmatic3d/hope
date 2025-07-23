@@ -107,13 +107,15 @@ class PointingGestureRecognizer:
         box_size: float=0.05,
         delay_frames: int=15,
     ):
-
+        assert(focal_length_x > 0 and focal_length_y > 0)
+        assert(image_width > 0 and image_height > 0)
+        
         base_options = BaseOptions(model_asset_path=model_asset_path)
 
         self.options = HandLandmarkerOptions(
             base_options=base_options,
             running_mode=running_mode,
-            result_callback=self.on_landmarks,
+            result_callback=self.on_landmarks_v2,
             num_hands=num_hands,
         )
 
@@ -129,8 +131,121 @@ class PointingGestureRecognizer:
         self.focal_distance_y = focal_length_y
         self.box_size = box_size
 
-    def recognize(self, image: Image, frame_timestamp_ms: int):
-        self.landmarker.detect_async(image=image, timestamp_ms=frame_timestamp_ms)
+    def recognize(self, np_image: np.array, frame_timestamp_ms: int):
+        for box in self.latest_bounding_boxes:
+            box = None
+ 
+        self.landmarker.detect_async(image=Image(image_format=ImageFormat.SRGB, data=np_image), timestamp_ms=frame_timestamp_ms)
+
+    def on_landmarks_v2(self, result: HandLandmarkerResult, image: Image, timestamp_ms: int) -> None:
+        if not result.hand_landmarks:
+            for i in range(self.options.num_hands):
+                self.latest_bounding_boxes[i] = None
+            return
+
+        detected = result.hand_landmarks
+        for i in range(self.options.num_hands):
+            if i >= len(detected):
+                self.latest_bounding_boxes[i] = None
+
+        # get direction vector
+        def to_vec(a, b):
+            return (b.x - a.x, b.y - a.y)
+
+        # get the cosine using dot produce formula
+        def angle_degree(u, v, eps=1e-6):
+            dot_product = u[0]*v[0] + u[1]*v[1]
+            normal_u = math.hypot(*u)
+            normal_v = math.hypot(*v)
+            # if either vector is (almost) zero-length, bait out
+            if normal_u < eps or normal_v < eps:
+                return 180.0
+            # clamp dot/(nu*nv)
+            cosθ = max(-1.0, min(1.0, dot_product/(normal_u * normal_v)))
+            return math.degrees(math.acos(cosθ))
+
+        def is_finger_straight(angle_1, angle_2):
+            return angle_1 < self.STRAIGHT_ANGLE_THRESH and angle_2 < self.STRAIGHT_ANGLE_THRESH
+
+        def is_finger_bent(mcp, pip, dip, tip):
+            angle_1 = angle_degree(to_vec(mcp, pip), to_vec(pip, dip))
+            angle_2 = angle_degree(to_vec(pip, dip), to_vec(dip, tip))
+            # if *either* joint is bent past BENT_ANGLE_THRESH, we call the finger “bent”
+            return (angle_1 > self.BENT_ANGLE_THRESH or angle_2 > self.BENT_ANGLE_THRESH)
+
+        # run the for loop in case we want multiple hands later
+        for hand_index, hand_landmarks in enumerate(detected):
+            mcp = hand_landmarks[HandLandmark.INDEX_FINGER_MCP]
+            pip = hand_landmarks[HandLandmark.INDEX_FINGER_PIP]
+            dip = hand_landmarks[HandLandmark.INDEX_FINGER_DIP]
+            tip = hand_landmarks[HandLandmark.INDEX_FINGER_TIP]
+            wrist = hand_landmarks[HandLandmark.WRIST]
+
+            vector_1 = to_vec(mcp, pip)
+            vector_2 = to_vec(pip, dip)
+            vector_3 = to_vec(dip, tip)
+
+            angle_1 = angle_degree(vector_1, vector_2)
+            angle_2 = angle_degree(vector_2, vector_3)
+
+            # only count a frame if index finger is straight
+            is_index_straight: bool = is_finger_straight(angle_1=angle_1, angle_2=angle_2)
+
+            if not is_index_straight:
+                self.latest_bounding_boxes[hand_index] = None
+                continue
+
+            middle_finger_bent: bool = is_finger_bent(
+                hand_landmarks[HandLandmark.MIDDLE_FINGER_MCP], 
+                hand_landmarks[HandLandmark.MIDDLE_FINGER_PIP], 
+                hand_landmarks[HandLandmark.MIDDLE_FINGER_DIP],
+                hand_landmarks[HandLandmark.MIDDLE_FINGER_TIP],
+            )
+
+            if not middle_finger_bent: 
+                self.latest_bounding_boxes[hand_index] = None
+                continue
+
+            ring_finger_bent: bool = is_finger_bent(                
+                hand_landmarks[HandLandmark.RING_FINGER_MCP], 
+                hand_landmarks[HandLandmark.RING_FINGER_PIP], 
+                hand_landmarks[HandLandmark.RING_FINGER_DIP],
+                hand_landmarks[HandLandmark.RING_FINGER_TIP],
+            )
+
+            if not ring_finger_bent: 
+                self.latest_bounding_boxes[hand_index] = None
+                continue
+
+            pinky_finger_bent: bool = is_finger_bent(                
+                hand_landmarks[HandLandmark.PINKY_MCP], 
+                hand_landmarks[HandLandmark.PINKY_PIP], 
+                hand_landmarks[HandLandmark.PINKY_DIP],
+                hand_landmarks[HandLandmark.PINKY_TIP],
+            ) 
+
+            if not pinky_finger_bent: 
+                self.latest_bounding_boxes[hand_index] = None
+                continue
+            
+            #2% of width/height
+            minX = max(tip.x - 0.01, 0.0)
+            maxX = min(tip.x + 0.01, 1.0)
+            minY = max(tip.y - 0.01, 0.0)
+            maxY = min(tip.y + 0.01, 1.0)
+            tip_v = np.array([tip.x, tip.y])
+            dip_v = np.array([dip.x, dip.y])
+            bboxMin = np.array([minX, minY])
+            bboxMax = np.array([maxX, maxY])
+            DipToTip = tip_v - dip_v
+            DipToTipDist = np.linalg.norm(DipToTip)
+            DipToTip = DipToTip / DipToTipDist
+            bboxMin = bboxMin + DipToTip * DipToTipDist * 0.6
+            bboxMax = bboxMax + DipToTip * DipToTipDist * 0.6
+            bboxMin = np.clip(bboxMin, 0.0, 1.0)
+            bboxMax = np.clip(bboxMax, 0.0, 1.0)
+            bounding_box_norm = NormalizedBoundingBox(bboxMin[0], bboxMin[1], bboxMax[0], bboxMax[1])
+            self.latest_bounding_boxes[hand_index] = bounding_box_norm
 
     def on_landmarks(
         self,
@@ -203,7 +318,6 @@ class PointingGestureRecognizer:
             wrist = hand_landmarks[
                 HandLandmark.WRIST
             ]
-
 
             vector_1 = to_vec(mcp, pip)
             vector_2 = to_vec(pip, dip)
@@ -290,7 +404,6 @@ class PointingGestureRecognizer:
                 self.latest_bounding_boxes[hand_index] = bounding_box_norm
             else:
                 self.latest_bounding_boxes[hand_index] = None
-
 
     def _get_dynamic_bounding_box(
         self,
@@ -381,9 +494,10 @@ class PointingGestureRecognizer:
 
         # Compute pixel‐space distance
         distance_in_pixels = math.hypot(x2 - x1, y2 - y1)
+
         if distance_in_pixels <= 0:
             return float("inf")  # or some fallback
-
+        
         # Use average focal length
         focal_length_pixels = (focal_length_x + focal_length_y) / 2.0
 

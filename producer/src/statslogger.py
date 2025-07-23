@@ -40,7 +40,7 @@ def make_general_stats_table(stats: GeneralStats, section: str, show_headers = T
     table.add_row("Cull Prep", f"{stats.cull_ms:.2f} ms")
     table.add_row("Point Prep", f"{stats.pc_ms:.2f} ms")
     table.add_row("Draco Prep", f"{stats.prep_ms:.2f} ms")
-    table.add_row("Gesture Recognition", f"{stats.gest_rec_ms:.6f} ms")
+    table.add_row("Gesture Recognition", f"{stats.gest_rec_ms:.2f} ms")
     table.add_row("True Encoding Time ", f"{stats.true_enc_ms:.2f} ms")
     table.add_row("SAM2 Processing Time", f"{stats.sam2_ms:.2f} ms")
     return table
