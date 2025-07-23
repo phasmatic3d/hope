@@ -13,3 +13,4 @@ __pycache__/
 *.pyd
 /addons/gesture_recognition/src/gesture_recognition.egg-info
 /addons/gesture_recognition/src/gesture_recognition.egg-info
+producer/src/hand_landmarker.task
