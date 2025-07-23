@@ -139,13 +139,16 @@ class PointingGestureRecognizer:
 
     def on_landmarks_v2(self, result: HandLandmarkerResult, image: Image, timestamp_ms: int) -> None:
         if not result.hand_landmarks:
+            # no hand → reset
             for i in range(self.options.num_hands):
+                self._seen_frames[i] = 0
                 self.latest_bounding_boxes[i] = None
             return
 
         detected = result.hand_landmarks
         for i in range(self.options.num_hands):
             if i >= len(detected):
+                self._seen_frames[i] = 0
                 self.latest_bounding_boxes[i] = None
 
         # get direction vector
@@ -192,6 +195,7 @@ class PointingGestureRecognizer:
             is_index_straight: bool = is_finger_straight(angle_1=angle_1, angle_2=angle_2)
 
             if not is_index_straight:
+                self._seen_frames[hand_index] = 0
                 self.latest_bounding_boxes[hand_index] = None
                 continue
 
@@ -203,6 +207,7 @@ class PointingGestureRecognizer:
             )
 
             if not middle_finger_bent: 
+                self._seen_frames[hand_index] = 0
                 self.latest_bounding_boxes[hand_index] = None
                 continue
 
@@ -214,6 +219,7 @@ class PointingGestureRecognizer:
             )
 
             if not ring_finger_bent: 
+                self._seen_frames[hand_index] = 0
                 self.latest_bounding_boxes[hand_index] = None
                 continue
 
@@ -225,8 +231,11 @@ class PointingGestureRecognizer:
             ) 
 
             if not pinky_finger_bent: 
+                self._seen_frames[hand_index] = 0
                 self.latest_bounding_boxes[hand_index] = None
                 continue
+
+            self._seen_frames[hand_index] += 1
             
             #2% of width/height
             minX = max(tip.x - 0.01, 0.0)
@@ -238,14 +247,19 @@ class PointingGestureRecognizer:
             bboxMin = np.array([minX, minY])
             bboxMax = np.array([maxX, maxY])
             DipToTip = tip_v - dip_v
-            DipToTipDist = np.linalg.norm(DipToTip)
-            DipToTip = DipToTip / DipToTipDist
-            bboxMin = bboxMin + DipToTip * DipToTipDist * 0.6
-            bboxMax = bboxMax + DipToTip * DipToTipDist * 0.6
+            #DipToTipDist = np.linalg.norm(DipToTip)
+            #DipToTip = DipToTip / DipToTipDist
+            bboxMin = bboxMin + DipToTip * 0.6
+            bboxMax = bboxMax + DipToTip * 0.6
             bboxMin = np.clip(bboxMin, 0.0, 1.0)
             bboxMax = np.clip(bboxMax, 0.0, 1.0)
             bounding_box_norm = NormalizedBoundingBox(bboxMin[0], bboxMin[1], bboxMax[0], bboxMax[1])
             self.latest_bounding_boxes[hand_index] = bounding_box_norm
+
+            if self._seen_frames[hand_index] >= self._delay_frames:
+                self.latest_bounding_boxes[hand_index] = bounding_box_norm
+            else:
+                self.latest_bounding_boxes[hand_index] = None
 
     def on_landmarks(
         self,

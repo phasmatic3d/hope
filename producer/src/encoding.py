@@ -300,7 +300,7 @@ def encode_point_cloud(
                     
                     statsGeneral.sam2_ms = time.perf_counter()
 
-                    if False:
+                    if True:
                         if not if_sam_init and pixel_space_bounding_box is not None:
                             if_sam_init = True
                             predictor.load_first_frame(color_img)
