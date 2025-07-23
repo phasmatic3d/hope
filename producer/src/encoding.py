@@ -5,7 +5,7 @@ import numpy as np
 import encoder
 import encoding as enc
 
-
+from pathlib import Path
 from typing import Tuple
 from broadcasting import *
 
@@ -19,7 +19,6 @@ from rich.console import Group
 
 import statslogger as log
 
-
 from mediapipe.tasks.python.vision import (
     RunningMode,
 )
@@ -29,6 +28,8 @@ from gesture_recognition import (
     NormalizedBoundingBox,
     PixelBoundingBox
 )
+
+import sam2_camera_predictor as sam2_camera
 
 # Modes for processing
 class Mode(Enum):
@@ -88,12 +89,30 @@ def _encode_chunk(pts: np.ndarray,
     stats.encode_ms = (end - start) * 1000
     return buf, stats
 
-def encode_point_cloud(server: bc.ProducerServer):
+def encode_point_cloud(
+        server: bc.ProducerServer,
+        cmr_clr_width: int,
+        cmr_clr_height: int,
+        cmr_depth_width: int,
+        cmr_depth_height: int,
+        cmr_fps: int,
+        path_to_yaml: str,
+        path_to_chkp: str,
+        device: str,
+        image_size: int):
+
+    predictor = sam2_camera.build_sam2_camera_predictor(
+        config_file=Path(path_to_yaml).name, 
+        config_path=str(Path(".", "configs", "sam2.1")),
+        ckpt_path=path_to_chkp, 
+        device=device,
+        image_size=image_size)
+
     # Setup RealSense
     pipeline = rs.pipeline()
     cfg = rs.config()
-    cfg.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, 30)
-    cfg.enable_stream(rs.stream.color, 848, 480, rs.format.rgb8, 30)
+    cfg.enable_stream(rs.stream.depth, cmr_depth_width, cmr_depth_height, rs.format.z16, cmr_fps)
+    cfg.enable_stream(rs.stream.color, cmr_clr_width, cmr_clr_height, rs.format.rgb8, cmr_fps)
     pipeline.start(cfg)
 
     profile = pipeline.get_active_profile()
@@ -118,7 +137,7 @@ def encode_point_cloud(server: bc.ProducerServer):
     win_name = "RealSense Color"
     cv2.namedWindow(win_name, cv2.WINDOW_AUTOSIZE)
 
-    mode = Mode[Mode.FULL.name]
+    mode = Mode[Mode.IMPORTANCE.name]
 
     statsROI = log.EncodingStats()
     statsOut = log.EncodingStats()
@@ -150,6 +169,8 @@ def encode_point_cloud(server: bc.ProducerServer):
         delay_frames=10
     )
 
+    if_sam_init = False
+    
     with Live(refresh_per_second=1, screen=False) as live:
         try:
             while True:
@@ -184,7 +205,7 @@ def encode_point_cloud(server: bc.ProducerServer):
                 # Prepare image for display
                 
                 color_img = np.asanyarray(color_frame.get_data())        
-                color_bgr = cv2.cvtColor(color_img, cv2.COLOR_RGB2BGR)
+                color_bgr = cv2.cvtColor(color_img, cv2.COLOR_RGB2BGR) # ?
                 depth_img = np.asanyarray(depth_frame.get_data())
                 
 
@@ -231,12 +252,11 @@ def encode_point_cloud(server: bc.ProducerServer):
                 # find valid points
                 depth_flat = depth_img.ravel()
                 valid = (depth_flat>0) & np.isfinite(verts[:,2]) & (verts[:,2]>0) # 1ms
-                
-                
 
                 buf_all = None
                 buf_out = None
                 buf_roi = None
+
                 if mode is Mode.FULL:
                     # Encode entire valid cloud
                     pts_all = verts[valid]
@@ -263,7 +283,6 @@ def encode_point_cloud(server: bc.ProducerServer):
                     
                 else:
                     
-                    #TODO: REPLACE WITH SAM/GEST DETECTION
                     #Note currently we assume a single hand
                     gesture_recognition_start_time = time.perf_counter()
                     mediapipe_image = gesture_recognizer.convert_frame(rgb_frame=color_img)
@@ -276,6 +295,7 @@ def encode_point_cloud(server: bc.ProducerServer):
                     y1 = 0 
 
                     pixel_space_bounding_box = None
+                    out_mask_logits = None
 
                     for bounding_box_normalized in gesture_recognizer.latest_bounding_boxes:
                         if bounding_box_normalized:
@@ -287,16 +307,39 @@ def encode_point_cloud(server: bc.ProducerServer):
 
                     statsGeneral.gesture_recognition_ms = (time.perf_counter() - gesture_recognition_start_time) * 1000
                     
-                    yy, xx = np.divmod(np.arange(count), w) # 6 ms
+                    if not if_sam_init and pixel_space_bounding_box is not None:
+                        if_sam_init = True
+                        predictor.load_first_frame(color_img)
+
+                        ann_frame_idx = 0
+                        ann_obj_id = (1,)
+                        labels = np.array([1], dtype=np.int32)
+                        points = np.array([[0.5 * (x0 + x1), 0.5 * (y0 + y1)]], dtype=np.float32)
+
+                        _, _, out_mask_logits = predictor.add_new_prompt(
+                            frame_idx=ann_frame_idx, obj_id=ann_obj_id, points=points, labels=labels)
+                    elif if_sam_init :
+                        _, out_mask_logits = predictor.track(display)
+
+                    if out_mask_logits is not None:
+                        all_mask = np.zeros_like(color_img, dtype=np.uint8)
+                        out_mask = (out_mask_logits[0] > 0.0).permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+                        colored_mask = np.zeros_like(color_img, dtype=np.uint8)
+                        colored_mask[:, :, 0] = out_mask[:, :, 0] * 255
+                        colored_mask[:, :, 1] = out_mask[:, :, 0] * 0
+                        colored_mask[:, :, 2] = out_mask[:, :, 0] * 0
+                        all_mask = cv2.addWeighted(all_mask, 0, colored_mask, 1, 0)
+                        display = cv2.addWeighted(display, 1, all_mask, 1, 0)
+
                     cv2.rectangle(display, (x0, y0), (x1, y1), (0,255,0), 2)
 
                     # Importance: bin ROI vs outside
-                    
- 
-                    in_roi = valid&(xx>=x0) & (xx<x1) & (yy>=y0) & (yy<y1)
-                    out_roi = valid& ~in_roi
-                    pts_roi = verts[in_roi]; cols_roi = colors[in_roi]
-                    pts_out = verts[out_roi]; cols_out = colors[out_roi] # 10ms
+                    if True:
+                        yy, xx = np.divmod(np.arange(count), w) # 6 ms
+                        in_roi = valid&(xx>=x0) & (xx<x1) & (yy>=y0) & (yy<y1)
+                        out_roi = valid& ~in_roi
+                        pts_roi = verts[in_roi]; cols_roi = colors[in_roi]
+                        pts_out = verts[out_roi]; cols_out = colors[out_roi] # 10ms
                     
                     statsGeneral.prep_ms = (time.perf_counter() - prep_time_start) * 1000
                     
