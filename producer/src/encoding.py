@@ -343,35 +343,33 @@ def encode_point_cloud(
                     # MULTIPROCESSING IMPORTANCE
                     true_encoding_time = time.perf_counter()
                     futures = []
+
                     if pts_roi.size: # check if non empty
-                        futures.append(("roi",
-                            executor.submit(enc._encode_chunk,
+                        futures += [executor.submit(enc._encode_chunk,
                                             pts_roi, cols_roi,
-                                            dracoROI, statsROI)))
+                                            dracoROI, statsROI),]
                     else:
                         buf_roi = b""
 
                     if pts_out.size:
-                        futures.append(("out",
-                            executor.submit(enc._encode_chunk,
+                        futures += [executor.submit(enc._encode_chunk,
                                             pts_out, cols_out,
-                                            dracoOut, statsOut)))
+                                            dracoOut, statsOut),]
                     else:
                         buf_out = b""
 
-
-                    for name, fut in futures:
-                        
-                        buf, stats = fut.result()
-                        if name == "roi":
+                    for future in as_completed(futures):                        
+                        index = futures.index(future)
+                        buf, stats = future.result()
+                        if index == 0:
                             buf_roi , statsROI = buf, stats
-                        elif name == "out":
+                            statsROI.encoded_bytes = len(buf_roi)
+                        elif index == 1:
                             buf_out, statsOut = buf, stats
+                            statsOut.encoded_bytes = len(buf_out)
+
                     true_encoding_time = (time.perf_counter() - true_encoding_time) * 1000
                     statsGeneral.true_enc_ms = true_encoding_time
-                    statsROI.encoded_bytes = len(buf_roi)
-                    statsOut.encoded_bytes = len(buf_out)
-
                     pc_count = 0
                     # Broadcast
                     bufs = []
