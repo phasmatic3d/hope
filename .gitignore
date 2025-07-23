@@ -11,3 +11,5 @@ __pycache__/
 *.exp
 *.dll
 *.pyd
+/addons/gesture_recognition/src/gesture_recognition.egg-info
+/addons/gesture_recognition/src/gesture_recognition.egg-info
