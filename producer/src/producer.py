@@ -1,10 +1,12 @@
 
 from encoding import *
+import hope_server
 import torch
 import os
 import argparse
 
 import producer_cli as producer_cli
+import torch.multiprocessing as mp
 
 from pathlib import Path
 # Set up the server
@@ -49,7 +51,9 @@ def main():
     thread.start()
 
     with torch.autocast(device_type=DEVICE.__str__(), dtype=torch.bfloat16):
-        encode_point_cloud(server,
+        hope_server.launch_processes(
+        #encode_point_cloud(
+            server,
             args.realsense_clr_capture_width,
             args.realsense_clr_capture_height,
             args.realsense_depth_capture_width,
