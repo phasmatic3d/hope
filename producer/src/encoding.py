@@ -29,8 +29,6 @@ from gesture_recognition import (
     PixelBoundingBox
 )
 
-import sam2_camera_predictor as sam2_camera
-
 # Modes for processing
 class Mode(Enum):
     FULL = auto()          
@@ -100,14 +98,7 @@ def encode_point_cloud(
         path_to_chkp: str,
         device: str,
         image_size: int):
-
-    predictor = sam2_camera.build_sam2_camera_predictor(
-        config_file=Path(path_to_yaml).name, 
-        config_path=str(Path(".", "configs", "sam2.1")),
-        ckpt_path=path_to_chkp, 
-        device=device,
-        image_size=image_size)
-
+    
     # Setup RealSense
     pipeline = rs.pipeline()
     cfg = rs.config()
@@ -297,36 +288,7 @@ def encode_point_cloud(
                             y1 = pixel_space_bounding_box.y2
 
                     statsGeneral.gest_rec_ms = (time.perf_counter() - gesture_recognition_start_time) * 1000
-                    
-                    statsGeneral.sam2_ms = time.perf_counter()
-
-                    if True:
-                        if not if_sam_init and pixel_space_bounding_box is not None:
-                            if_sam_init = True
-                            predictor.load_first_frame(color_img)
-
-                            ann_frame_idx = 0
-                            ann_obj_id = (1,)
-                            labels = np.array([1], dtype=np.int32)
-                            points = np.array([[0.5 * (x0 + x1), 0.5 * (y0 + y1)]], dtype=np.float32) #TODO: clip
-
-                            _, _, out_mask_logits = predictor.add_new_prompt(
-                                frame_idx=ann_frame_idx, obj_id=ann_obj_id, points=points, labels=labels)
-                        elif if_sam_init :
-                            _, out_mask_logits = predictor.track(display)
-
-                    if out_mask_logits is not None:
-                        all_mask = np.zeros_like(color_img, dtype=np.uint8)
-                        out_mask = (out_mask_logits[0] > 0.0).permute(1, 2, 0).cpu().numpy().astype(np.uint8)
-                        colored_mask = np.zeros_like(color_img, dtype=np.uint8)
-                        colored_mask[:, :, 0] = out_mask[:, :, 0] * 255
-                        colored_mask[:, :, 1] = out_mask[:, :, 0] * 0
-                        colored_mask[:, :, 2] = out_mask[:, :, 0] * 0
-                        all_mask = cv2.addWeighted(all_mask, 0, colored_mask, 1, 0)
-                        display = cv2.addWeighted(display, 1, all_mask, 1, 0)
-
-                    statsGeneral.sam2_ms = (time.perf_counter() - statsGeneral.sam2_ms) * 1000
-
+ 
                     cv2.rectangle(display, (x0, y0), (x1, y1), (0,255,0), 2)
 
                     # Importance: bin ROI vs outside
