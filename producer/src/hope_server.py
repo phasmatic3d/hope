@@ -42,8 +42,8 @@ class DracoEncoder:
     def __init__(self):
         self.posQuant = 10
         self.colorQuant = 8
-        self.speedEncode = 9
-        self.speedDecode = 9
+        self.speedEncode = 10
+        self.speedDecode = 10
         self.roiWidth = 240
         self.roiHeight = 240
     def to_string(self):

@@ -51,8 +51,8 @@ def main():
     thread.start()
 
     with torch.autocast(device_type=DEVICE.__str__(), dtype=torch.bfloat16):
-        hope_server.launch_processes(
-        #encode_point_cloud(
+        #hope_server.launch_processes(
+        encode_point_cloud(
             server,
             args.realsense_clr_capture_width,
             args.realsense_clr_capture_height,
