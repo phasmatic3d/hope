@@ -188,11 +188,11 @@ async function loadAndUpdatePointCloudFromWS(scene: THREE.Scene) {
 
 async function loadAndUpdatePointCloudFromWS_worker(scene: THREE.Scene) {
 
-  const pending: Array<{ positions: Float32Array; colors: Uint8Array }> = [];
+  const pending: Array<{ positions: Float32Array; colors: Uint8Array; numPoints: number }> = [];
   let numPC = 0;
 
-  worker.onmessage = (event: MessageEvent<{positions: Float32Array; colors: Uint8Array}>) => {
-    pending.push({ positions: event.data.positions, colors: event.data.colors });
+  worker.onmessage = (event: MessageEvent<{positions: Float32Array; colors: Uint8Array; numPoints: number}>) => {
+    pending.push({ positions: event.data.positions, colors: event.data.colors, numPoints: event.data.numPoints });
     console.time("Rendering")
     if (pending.length === numPC) {
       // concatenate all N chunks
