@@ -5,7 +5,7 @@ import numpy as np
 import encoder
 import encoding as enc
 
-
+from pathlib import Path
 from typing import Tuple
 from broadcasting import *
 
@@ -18,7 +18,6 @@ from rich.live import Live
 from rich.console import Group
 
 import statslogger as log
-
 
 from mediapipe.tasks.python.vision import (
     RunningMode,
@@ -88,37 +87,43 @@ def _encode_chunk(pts: np.ndarray,
     stats.encode_ms = (end - start) * 1000
     return buf, stats
 
-def encode_point_cloud(server: bc.ProducerServer):
+def encode_point_cloud(
+        server: bc.ProducerServer,
+        cmr_clr_width: int,
+        cmr_clr_height: int,
+        cmr_depth_width: int,
+        cmr_depth_height: int,
+        cmr_fps: int,
+        path_to_yaml: str,
+        path_to_chkp: str,
+        device: str,
+        image_size: int):
+    
     # Setup RealSense
     pipeline = rs.pipeline()
     cfg = rs.config()
-    cfg.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, 30)
-    cfg.enable_stream(rs.stream.color, 848, 480, rs.format.rgb8, 30)
+    cfg.enable_stream(rs.stream.depth, cmr_depth_width, cmr_depth_height, rs.format.z16, cmr_fps)
+    cfg.enable_stream(rs.stream.color, cmr_clr_width, cmr_clr_height, rs.format.rgb8, cmr_fps)
     pipeline.start(cfg)
 
     profile = pipeline.get_active_profile()
+
     video_profile = profile.get_stream(rs.stream.color) \
                        .as_video_stream_profile()
+    
     color_intrinsics = video_profile.get_intrinsics()
-    width_px  = color_intrinsics.width
-    height_px = color_intrinsics.height
-    focal_width = color_intrinsics.fx
-    focal_height = color_intrinsics.fy
 
     align_to = rs.stream.color
-    align     = rs.align(align_to)
-
-
+    align = rs.align(align_to)
 
     prev_time = time.perf_counter()
     frame_count = 0
     fps = 0.0
 
-    
     win_name = "RealSense Color"
     cv2.namedWindow(win_name, cv2.WINDOW_AUTOSIZE)
 
-    mode = Mode[Mode.FULL.name]
+    mode = Mode[Mode.IMPORTANCE.name]
 
     statsROI = log.EncodingStats()
     statsOut = log.EncodingStats()
@@ -142,14 +147,16 @@ def encode_point_cloud(server: bc.ProducerServer):
         model_asset_path="hand_landmarker.task", 
         num_hands=1, 
         running_mode=RunningMode.LIVE_STREAM, 
-        image_width=width_px,
-        image_height=height_px,
-        focal_length_x=focal_width,
-        focal_length_y=focal_height,
+        image_width=color_intrinsics.width,
+        image_height=color_intrinsics.height,
+        focal_length_x= color_intrinsics.fx,
+        focal_length_y=color_intrinsics.fy,
         box_size=0.02, 
         delay_frames=10
     )
 
+    if_sam_init = False
+    
     with Live(refresh_per_second=1, screen=False) as live:
         try:
             while True:
@@ -184,7 +191,7 @@ def encode_point_cloud(server: bc.ProducerServer):
                 # Prepare image for display
                 
                 color_img = np.asanyarray(color_frame.get_data())        
-                color_bgr = cv2.cvtColor(color_img, cv2.COLOR_RGB2BGR)
+                color_bgr = cv2.cvtColor(color_img, cv2.COLOR_RGB2BGR) # ?
                 depth_img = np.asanyarray(depth_frame.get_data())
                 
 
@@ -222,8 +229,6 @@ def encode_point_cloud(server: bc.ProducerServer):
                 u_idx = np.clip(u, 0, w-1)
                 v_idx = np.clip(v, 0, h-1) # 1ms
 
-                
-                
                 pix_idx = v_idx * w + u_idx
                 bgr_flat = color_bgr.reshape(-1,3) 
                 colors = bgr_flat[pix_idx][:, ::-1]# 4ms
@@ -231,12 +236,11 @@ def encode_point_cloud(server: bc.ProducerServer):
                 # find valid points
                 depth_flat = depth_img.ravel()
                 valid = (depth_flat>0) & np.isfinite(verts[:,2]) & (verts[:,2]>0) # 1ms
-                
-                
 
                 buf_all = None
                 buf_out = None
                 buf_roi = None
+
                 if mode is Mode.FULL:
                     # Encode entire valid cloud
                     pts_all = verts[valid]
@@ -263,12 +267,9 @@ def encode_point_cloud(server: bc.ProducerServer):
                     
                 else:
                     
-                    #TODO: REPLACE WITH SAM/GEST DETECTION
                     #Note currently we assume a single hand
                     gesture_recognition_start_time = time.perf_counter()
-                    mediapipe_image = gesture_recognizer.convert_frame(rgb_frame=color_img)
-                    timestamp_ms = int(time.time() * 1000)
-                    gesture_recognizer.recognize(mediapipe_image, timestamp_ms)
+                    gesture_recognizer.recognize(color_img, int(time.time() * 1000))
 
                     x0 = 0
                     y0 = 0
@@ -276,6 +277,7 @@ def encode_point_cloud(server: bc.ProducerServer):
                     y1 = 0 
 
                     pixel_space_bounding_box = None
+                    out_mask_logits = None
 
                     for bounding_box_normalized in gesture_recognizer.latest_bounding_boxes:
                         if bounding_box_normalized:
@@ -285,18 +287,17 @@ def encode_point_cloud(server: bc.ProducerServer):
                             y0 = pixel_space_bounding_box.y1
                             y1 = pixel_space_bounding_box.y2
 
-                    statsGeneral.gesture_recognition_ms = (time.perf_counter() - gesture_recognition_start_time) * 1000
-                    
-                    yy, xx = np.divmod(np.arange(count), w) # 6 ms
+                    statsGeneral.gest_rec_ms = (time.perf_counter() - gesture_recognition_start_time) * 1000
+ 
                     cv2.rectangle(display, (x0, y0), (x1, y1), (0,255,0), 2)
 
                     # Importance: bin ROI vs outside
-                    
- 
-                    in_roi = valid&(xx>=x0) & (xx<x1) & (yy>=y0) & (yy<y1)
-                    out_roi = valid& ~in_roi
-                    pts_roi = verts[in_roi]; cols_roi = colors[in_roi]
-                    pts_out = verts[out_roi]; cols_out = colors[out_roi] # 10ms
+                    if True:
+                        yy, xx = np.divmod(np.arange(count), w) # 6 ms
+                        in_roi = valid&(xx>=x0) & (xx<x1) & (yy>=y0) & (yy<y1)
+                        out_roi = valid& ~in_roi
+                        pts_roi = verts[in_roi]; cols_roi = colors[in_roi]
+                        pts_out = verts[out_roi]; cols_out = colors[out_roi] # 10ms
                     
                     statsGeneral.prep_ms = (time.perf_counter() - prep_time_start) * 1000
                     
@@ -304,35 +305,33 @@ def encode_point_cloud(server: bc.ProducerServer):
                     # MULTIPROCESSING IMPORTANCE
                     true_encoding_time = time.perf_counter()
                     futures = []
+
                     if pts_roi.size: # check if non empty
-                        futures.append(("roi",
-                            executor.submit(enc._encode_chunk,
+                        futures += [executor.submit(enc._encode_chunk,
                                             pts_roi, cols_roi,
-                                            dracoROI, statsROI)))
+                                            dracoROI, statsROI),]
                     else:
                         buf_roi = b""
 
                     if pts_out.size:
-                        futures.append(("out",
-                            executor.submit(enc._encode_chunk,
+                        futures += [executor.submit(enc._encode_chunk,
                                             pts_out, cols_out,
-                                            dracoOut, statsOut)))
+                                            dracoOut, statsOut),]
                     else:
                         buf_out = b""
 
-
-                    for name, fut in futures:
-                        
-                        buf, stats = fut.result()
-                        if name == "roi":
+                    for future in as_completed(futures):                        
+                        index = futures.index(future)
+                        buf, stats = future.result()
+                        if index == 0:
                             buf_roi , statsROI = buf, stats
-                        elif name == "out":
+                            statsROI.encoded_bytes = len(buf_roi)
+                        elif index == 1:
                             buf_out, statsOut = buf, stats
+                            statsOut.encoded_bytes = len(buf_out)
+
                     true_encoding_time = (time.perf_counter() - true_encoding_time) * 1000
                     statsGeneral.true_enc_ms = true_encoding_time
-                    statsROI.encoded_bytes = len(buf_roi)
-                    statsOut.encoded_bytes = len(buf_out)
-
                     pc_count = 0
                     # Broadcast
                     bufs = []

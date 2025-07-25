@@ -16,9 +16,10 @@ class GeneralStats:
         self.prep_ms = 0
         self.true_enc_ms = 0
         self.gest_rec_ms = 0
+        self.sam2_ms = 0
 
     def get_total_time(self):
-        return self.pc_ms + self.prep_ms + self.gest_rec_ms
+        return self.pc_ms + self.prep_ms + self.gest_rec_ms + self.sam2_ms
 
 
 def make_encoding_stats_table(stats: EncodingStats, section: str, show_headers = True) -> Table:
@@ -30,6 +31,7 @@ def make_encoding_stats_table(stats: EncodingStats, section: str, show_headers =
     saved_pct = (stats.raw_bytes - stats.encoded_bytes) / stats.raw_bytes * 100 if stats.raw_bytes else 0
     table.add_row("Raw/Enc Bytes", f"{stats.raw_bytes}/{stats.encoded_bytes} ({saved_pct:.1f}%)")
     return table
+
 def make_general_stats_table(stats: GeneralStats, section: str, show_headers = True) -> Table:
     title = f"==== {section} ===="
     table = Table(title = title, box=None, padding=(0,1), show_header = show_headers)
@@ -40,6 +42,7 @@ def make_general_stats_table(stats: GeneralStats, section: str, show_headers = T
     table.add_row("Draco Prep", f"{stats.prep_ms:.2f} ms")
     table.add_row("Gesture Recognition", f"{stats.gest_rec_ms:.2f} ms")
     table.add_row("True Encoding Time ", f"{stats.true_enc_ms:.2f} ms")
+    table.add_row("SAM2 Processing Time", f"{stats.sam2_ms:.2f} ms")
     return table
 
 def make_total_time_table(total_time : float) -> Table:
