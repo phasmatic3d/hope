@@ -332,7 +332,7 @@ def encode_point_cloud(
 
                     true_encoding_time = (time.perf_counter() - true_encoding_time) * 1000
                     statsGeneral.true_enc_ms = true_encoding_time
-                    pc_count = 0
+
                     # Broadcast
                     bufs = []
                     if buf_roi:

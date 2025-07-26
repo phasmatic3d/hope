@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import { initDracoDecoder, decodePointCloud } from './dracoDecoder';
 import { openConnetion } from './transmissionWS';
+import { PI } from 'three/tsl';
 
 let decoderModule: any;
 let pointCloud: THREE.Points | null = null;
@@ -234,11 +235,12 @@ async function loadAndUpdatePointCloudFromWS_worker(scene: THREE.Scene) {
         );
         const material = new THREE.PointsMaterial({
           vertexColors: true,
-          size: 3.0,
+          size: 0.01,
           sizeAttenuation: false
         });
         pointCloud = new THREE.Points(pointCloudGeometry, material);
-        pointCloud.scale.set(5, -5, 5);
+        pointCloud.scale.set(20, 20, 20); 
+        pointCloud.rotateX(3.14) // HARDCODED ROTATION: TODO (AND ALL OF THE OTHER TRANSFORMATIONS)
         pointCloud.position.y = -10;
         pointCloud.position.z = 8;
         pointCloud.position.x = -2;
