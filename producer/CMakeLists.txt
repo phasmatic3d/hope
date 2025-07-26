@@ -10,10 +10,15 @@ project(hope_producer VERSION 1.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-#find_package(OpenSSL REQUIRED)
-#find_package(realsense2 REQUIRED) 
 
+find_package(OpenSSL REQUIRED)
+find_package(realsense2 REQUIRED) 
 find_package(Python 3.11 EXACT COMPONENTS Interpreter Development)
+
+message(STATUS "Python include dirs: ${Python_INCLUDE_DIRS}")
+message(STATUS "Python libraries: ${Python_LIBRARIES}")
+
+
 
 #####################################################################
 # Fetch and add Draco (encoder-decoder for 3D data)
@@ -28,15 +33,17 @@ include(FetchContent)
 FetchContent_Declare(
   nanobind
   GIT_REPOSITORY https://github.com/wjakob/nanobind.git
-  GIT_TAG        v2.7.0     
+  GIT_TAG        v2.7.0     # or whatever release you want
 )
 FetchContent_MakeAvailable(nanobind)
 
-
-
-include(FetchContent)
+add_subdirectory(${CMAKE_BINARY_DIR}/_deps/nanobind-src)
 
 set(BUILD_SHARED_LIBS ON CACHE BOOL "Build shared libraries" FORCE)
+
+#####################################################################
+# Fetch and add draco 
+#####################################################################
 
 FetchContent_Declare(
   draco
@@ -121,77 +128,100 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(glm)
 
-add_subdirectory(${CMAKE_BINARY_DIR}/_deps/nanobind-src)
+#####################################################################
+# Bindings for encoder
+#####################################################################
 
-# Add the executable for encoder
+set(ENCODER_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/src")
+
 nanobind_add_module(encoder
     src/bindings/draco_bindings.cpp
 )
 
-set(ENCODER_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/src")
+if (WIN32)
+	set(ENCODER_SUFFIX ".pyd")
+else()
+  	set(ENCODER_SUFFIX ".so")
+endif()
 
 set_target_properties(encoder PROPERTIES
-  PREFIX ""           
-  SUFFIX ".pyd"       
-  RUNTIME_OUTPUT_DIRECTORY        "${ENCODER_OUTPUT_DIR}"
-  LIBRARY_OUTPUT_DIRECTORY        "${ENCODER_OUTPUT_DIR}"
-  ARCHIVE_OUTPUT_DIRECTORY        "${ENCODER_OUTPUT_DIR}"
+  	PREFIX ""
+  	SUFFIX "${ENCODER_SUFFIX}"
+  	RUNTIME_OUTPUT_DIRECTORY        "${ENCODER_OUTPUT_DIR}"
+  	LIBRARY_OUTPUT_DIRECTORY        "${ENCODER_OUTPUT_DIR}"
+  	ARCHIVE_OUTPUT_DIRECTORY        "${ENCODER_OUTPUT_DIR}"
 )
 
-
 target_include_directories(encoder PRIVATE
-  ${draco_SOURCE_DIR}/src      
-  ${CMAKE_BINARY_DIR}/draco      
-  ${CMAKE_BINARY_DIR}        
+  	${draco_SOURCE_DIR}/src      
+  	${CMAKE_BINARY_DIR}/draco      
+  	${CMAKE_BINARY_DIR}        
 )
 
 target_link_libraries(encoder PRIVATE
-  draco::draco
+  	draco::draco
 )
+
+message(STATUS "Draco source dir: ${draco_SOURCE_DIR}")
+message(STATUS "Draco build dir:  ${draco_BINARY_DIR}")
+message(STATUS "Cmake build dir:  ${CMAKE_BINARY_DIR}")
+message(STATUS "Cmake source dir:  ${CMAKE_SOURCE_DIR}")
+
+if (WIN32)
+	add_custom_command(TARGET encoder POST_BUILD
+	  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+	    "$<TARGET_FILE:draco::draco>"
+	    "${ENCODER_OUTPUT_DIR}/draco.dll"
+	)
+endif()
+
+#####################################################################
+# Bindings for broadcaster
+#####################################################################
 
 # Add the executable for the broadcaster
 nanobind_add_module(broadcaster
     src/bindings/server_bindings.cpp
 )
 
-set(SERVER_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/src")
+set(BROADCASTER_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/src")
+
+if (WIN32)
+	set(BROADCASTER_SUFFIX ".pyd")
+else()
+  	set(BROADCASTER_SUFFIX ".so")
+endif()
+
 
 set_target_properties(broadcaster PROPERTIES
-  PREFIX ""           
-  SUFFIX ".pyd"       
-  RUNTIME_OUTPUT_DIRECTORY        "${SERVER_OUTPUT_DIR}"
-  LIBRARY_OUTPUT_DIRECTORY        "${SERVER_OUTPUT_DIR}"
-  ARCHIVE_OUTPUT_DIRECTORY        "${SERVER_OUTPUT_DIR}"
+  	PREFIX ""           
+  	SUFFIX "${BROADCASTER_SUFFIX}"    
+  	RUNTIME_OUTPUT_DIRECTORY        "${BROADCASTER_OUTPUT_DIR}"
+  	LIBRARY_OUTPUT_DIRECTORY        "${BROADCASTER_OUTPUT_DIR}"
+  	ARCHIVE_OUTPUT_DIRECTORY        "${BROADCASTER_OUTPUT_DIR}"
 )
 
 target_include_directories(broadcaster PRIVATE
-  ${asio_SOURCE_DIR}/asio/include     
-  ${websocketpp_SOURCE_DIR}       
+  	${asio_SOURCE_DIR}/asio/include     
+  	${websocketpp_SOURCE_DIR}       
 )
 
 target_compile_definitions(broadcaster PRIVATE
-  ASIO_STANDALONE
-  _WEBSOCKETPP_CPP11_TYPE_TRAITS_
+  	ASIO_STANDALONE
+  	_WEBSOCKETPP_CPP11_TYPE_TRAITS_
 )
 
-
-if (WIN32)
-    
-add_custom_command(TARGET encoder POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "$<TARGET_FILE:draco::draco>"
-    "${ENCODER_OUTPUT_DIR}/draco.dll"
-)
-
-endif()
+#####################################################################
+# Certificates
+#####################################################################
 
 #add_custom_command(TARGET encoder POST_BUILD
-    #COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        #"${CMAKE_SOURCE_DIR}/rsrc/certs/server.key"
-        #"${CMAKE_BINARY_DIR}/server.key"
+#    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+#        "${CMAKE_SOURCE_DIR}/rsrc/certs/server.key"
+#        "${CMAKE_BINARY_DIR}/server.key"
 #)
 #add_custom_command(TARGET encoder POST_BUILD
-    #COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      #  "${CMAKE_SOURCE_DIR}/rsrc/certs/server.crt"
-     #   "${CMAKE_BINARY_DIR}/server.crt"
+#    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+#        "${CMAKE_SOURCE_DIR}/rsrc/certs/server.crt"
+#        "${CMAKE_BINARY_DIR}/server.crt"
 #)
