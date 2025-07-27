@@ -132,7 +132,7 @@ FetchContent_MakeAvailable(glm)
 # Bindings for encoder
 #####################################################################
 
-set(ENCODER_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/src")
+set(ENCODER_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/src/draco_wrapper")
 
 nanobind_add_module(encoder
     src/bindings/draco_bindings.cpp
@@ -184,7 +184,7 @@ nanobind_add_module(broadcaster
     src/bindings/server_bindings.cpp
 )
 
-set(BROADCASTER_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/src")
+set(BROADCASTER_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/src/broadcaster")
 
 if (WIN32)
 	set(BROADCASTER_SUFFIX ".pyd")
