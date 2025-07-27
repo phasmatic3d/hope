@@ -8,7 +8,7 @@ import encoding as enc
 
 from pathlib import Path
 from typing import Tuple
-from broadcasting import *
+from producer.src.broadcaster.broadcasting import *
 
 import pyrealsense2 as rs
 import cv2

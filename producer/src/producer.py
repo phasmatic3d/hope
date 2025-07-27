@@ -1,5 +1,5 @@
 
-from encoding import *
+from producer.src.draco_wrapper.draco_wrapper import *
 import hope_server
 import torch
 import os
