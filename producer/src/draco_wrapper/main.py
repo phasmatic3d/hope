@@ -1,9 +1,10 @@
-import time
 import argparse
+import time
+import threading
 
 import cv2 
-import numpy as np
 import pyrealsense2 as rs
+import numpy as np
 
 from statslogger import (
     PipelineTiming,
@@ -145,6 +146,11 @@ def encode_point_cloud(
 
     process_executor = ProcessPoolExecutor(max_workers=2)
     thread_executor  = ThreadPoolExecutor(max_workers=2)
+
+    server.listen()
+    server_thread = threading.Thread(target=server.run, daemon=True)
+    server_thread.start()
+    print("Started running server thread")
 
     min_dist = 0.1
     max_dist = 2.0
@@ -545,6 +551,9 @@ def encode_point_cloud(
                 #    print("Saved full point cloud to snapshot.ply")
         finally:
             pipeline.stop()
+            # cleanly shut down the WebSocket server
+            server.stop()          # calls stop_listening() + stop() in C++
+            server_thread.join()   # wait for run() to return
 
 def main():
 

@@ -40,14 +40,14 @@ public:
         m_server.set_open_handler([this](connection_hdl h){
             std::lock_guard<std::mutex> lock(m_connection_mutex);
             m_connections.insert(h);
-            std::cout << "Client connected\n";
+            m_logger->info("Client connected");
         });
 
         // On WS close
         m_server.set_close_handler([this](connection_hdl h){
             std::lock_guard<std::mutex> lock(m_connection_mutex);
             m_connections.erase(h);
-            std::cout << "Client disconnected\n";
+            m_logger->info("Client disconnected");
         });
 
         // HTTP redirect  client
@@ -55,6 +55,7 @@ public:
             auto con = m_server.get_con_from_hdl(hdl);
             con->set_status(websocketpp::http::status_code::found);
             con->replace_header("Location", m_redirect_url);
+            m_logger->debug("Redirecting HTTP client to {}", m_redirect_url);
         });
 
     }
@@ -68,6 +69,14 @@ public:
     // Blocking run (typically spawn in a thread)
     void run() {
         m_server.run();
+    }
+
+    void stop() {
+        // Stop accepting any more incoming connections
+        m_server.stop_listening();
+        // Interrupt the ASIO loop so run() will return
+        m_server.stop();
+        m_logger->info("Server stopped");
     }
 
     // Broadcast a binary message to all clients
@@ -179,6 +188,8 @@ NB_MODULE(broadcaster, m) {
         .def("run", &ProducerServer::run,
          nb::call_guard<nb::gil_scoped_release>(),
          "Enter the ASIO event loop (blocking)")
+        .def("stop", &ProducerServer::stop,
+         "Stop accepting and shut down the server cleanly")
         .def("broadcast", &ProducerServer::broadcast,
              nb::arg("data"),
              "Broadcast raw binary data to all connected WebSocket clients")
