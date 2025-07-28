@@ -1,9 +1,13 @@
-#include <nanobind/nanobind.h>
-#include <nanobind/stl/string.h>
 #include <set>
 #include <string>
+
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/string.h>
+
 #include <websocketpp/config/asio_no_tls.hpp>
 #include <websocketpp/server.hpp>
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
 
 #ifndef ASIO_STANDALONE
 #define ASIO_STANDALONE
@@ -18,6 +22,12 @@ public:
     ProducerServer(int port)
     : m_port(port)
     {
+        m_logger = spdlog::stdout_color_mt("broadcaster");
+        m_logger->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [%n] %v");
+        m_logger->set_level(spdlog::level::debug);
+        m_logger->flush_on(spdlog::level::info);
+        m_logger->info("Initialized Broadcaster");
+
         m_server.init_asio();
         
         // disable logging
@@ -46,6 +56,7 @@ public:
             con->set_status(websocketpp::http::status_code::found);
             con->replace_header("Location", m_redirect_url);
         });
+
     }
 
     // Start listening on the given port
@@ -96,9 +107,33 @@ public:
         std::transform(lower.begin(), lower.end(), lower.begin(),
                        [](unsigned char c){ return std::tolower(c); });
 
-        // If they gave us a full URL, accept it
         if (lower.rfind("http://", 0) == 0 || lower.rfind("https://", 0) == 0) {
-            m_redirect_url = tmp + '/';
+            // tmp has no trailing slash now
+            const auto scheme_end = tmp.find("://") + 3;
+            const auto path_pos   = tmp.find('/', scheme_end);
+        
+            // authority = host[:port]
+            std::string authority = tmp.substr(
+                scheme_end,
+                (path_pos == std::string::npos ? tmp.size() : path_pos) - scheme_end
+            );
+            // rest = “/…” or empty
+            std::string rest = (path_pos == std::string::npos
+                                ? std::string{}
+                                : tmp.substr(path_pos));
+            
+            // if no “:port” in authority, append default
+            if (authority.find(':') == std::string::npos) {
+                authority += ":" + std::to_string(m_port);
+            }
+        
+            // rebuild (and re-append the slash we stripped earlier)
+            m_redirect_url = tmp.substr(0, scheme_end)
+                           + authority
+                           + rest
+                           + '/';
+        
+            m_logger->info("Constructed URL: {}", m_redirect_url);
             return;
         }
 
@@ -112,6 +147,7 @@ public:
             try {
                 port = std::stoi(port_str);
             } catch (...) {
+                m_logger->error("Invalid port in redirect URL: “" + port_str + "”");
                 throw std::invalid_argument("Invalid port in redirect URL: “" + port_str + "”");
             }
         } else {
@@ -120,10 +156,12 @@ public:
 
         // Build final URL
         m_redirect_url = "http://" + host + ":" + std::to_string(port) + "/";
+        m_logger->info("Constructed URL: {}", m_redirect_url);
     }
 
 private:
     int m_port;
+    std::shared_ptr<spdlog::logger> m_logger;
     websocketpp::server<websocketpp::config::asio> m_server;
     std::set<connection_hdl, std::owner_less<connection_hdl>> m_connections;
     std::mutex m_connection_mutex;

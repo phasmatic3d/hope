@@ -628,7 +628,7 @@ def main():
     parser.add_argument(
         "--server-host",        
         type=str, 
-        default="http://localhost",
+        default="https://localhost",
         help="Broadcast server host"
     )
 

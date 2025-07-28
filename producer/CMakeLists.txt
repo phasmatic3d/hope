@@ -206,6 +206,10 @@ target_include_directories(broadcaster PRIVATE
   	${websocketpp_SOURCE_DIR}       
 )
 
+target_link_libraries(broadcaster PRIVATE 
+ 	spdlog::spdlog
+)
+
 target_compile_definitions(broadcaster PRIVATE
   	ASIO_STANDALONE
   	_WEBSOCKETPP_CPP11_TYPE_TRAITS_
