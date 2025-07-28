@@ -72,7 +72,7 @@ class DracoWrapper:
         if self.compression_stats != None:
             self.compression_stats.raw_bytes = points.nbytes + colors.nbytes
 
-        if points.size() == 0: 
+        if points.size == 0: 
             return b"";
 
         start = time.perf_counter()
