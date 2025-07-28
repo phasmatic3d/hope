@@ -147,8 +147,8 @@ def encode_point_cloud(
     process_executor = ProcessPoolExecutor(max_workers=2)
     thread_executor  = ThreadPoolExecutor(max_workers=2)
 
-    min_dist = 0.1
-    max_dist = 2.0
+    min_dist = 0.3
+    max_dist = 1.3
     depth_thresh = rs.threshold_filter(min_dist, max_dist)
 
     # Settings
@@ -180,7 +180,7 @@ def encode_point_cloud(
 
     if_sam_init = False
     
-    with Live(refresh_per_second=1, screen=False) as live:
+    with Live(refresh_per_second=30, screen=False) as live:
         try:
             while True:
 
