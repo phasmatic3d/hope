@@ -156,6 +156,13 @@ def encode_point_cloud(
     )
 
     if_sam_init = False
+
+    # --- SUBSAMPLING LAYERS SETUP ---
+    # layer 0 = 60%, layer 1 = 15%, layer 2 = 25%
+    sampling_layers = [0.60, 0.15, 0.25]
+    active_layers   = [True,  True,  True]
+    
+
     
     with Live(refresh_per_second=1, screen=False) as live:
         try:
@@ -237,6 +244,17 @@ def encode_point_cloud(
                 depth_flat = depth_img.ravel()
                 valid = (depth_flat>0) & np.isfinite(verts[:,2]) & (verts[:,2]>0) # 1ms
 
+                # -----SUBSAMPLING-----
+                ss_start = time.perf_counter() # Subsampling logging start
+                effective_ratio = sum(r for r, on in zip(sampling_layers, active_layers) if on) # find probability based on layers
+                # roll one random array and reject ~ (1‑effective_ratio) of valid points
+                rnd = np.random.rand(valid.shape[0])
+                subsample_mask = rnd < effective_ratio
+
+                # final valid mask = must be valid _and_ pass the random threshold
+                valid &= subsample_mask
+                statsGeneral.subsampling_ms = (time.perf_counter() - ss_start) * 1000 # Subsampling logging end
+
                 buf_all = None
                 buf_out = None
                 buf_roi = None
@@ -245,6 +263,7 @@ def encode_point_cloud(
                     # Encode entire valid cloud
                     pts_all = verts[valid]
                     cols_all = colors[valid] # 8ms
+
                     statsGeneral.prep_ms = (time.perf_counter() - prep_time_start) * 1000 #prep end
 
                     encode_time_start = time.perf_counter()
@@ -363,6 +382,14 @@ def encode_point_cloud(
                     frame_count = 0
                 cv2.putText(display, f"FPS: {fps}", (10,50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
                 cv2.putText(display, dracoAll.to_string(), (10,20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
+
+                layer_str = " ".join(
+                    f"L{i}{'ON' if active_layers[i] else 'OFF'}({int(sampling_layers[i]*100)}%)"
+                    for i in range(len(sampling_layers))
+                )
+                cv2.putText(display,
+                            dracoAll.to_string() + "  " + layer_str,
+                            (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
                 
                 cv2.imshow(win_name, display)      
                 key = cv2.waitKey(1) # this takes 20 ms
@@ -397,6 +424,13 @@ def encode_point_cloud(
                     # save full point cloud PLY
                     points.export_to_ply("snapshot.ply", color_frame)
                     print("Saved full point cloud to snapshot.ply")
+                # Layer Toggles
+                elif key == ord('1'):
+                    active_layers[0] = not active_layers[0]
+                elif key == ord('2'):
+                    active_layers[1] = not active_layers[1]
+                elif key == ord('3'):
+                    active_layers[2] = not active_layers[2]
 
             
         finally:
