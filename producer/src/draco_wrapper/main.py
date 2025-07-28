@@ -1,5 +1,6 @@
 import time
 import argparse
+import threading
 
 import cv2 
 import numpy as np
@@ -40,9 +41,8 @@ from .draco_wrapper import (
     VizualizationMode
 )
 
-from broadcasting import (
-    broadcaster
-)
+import broadcasting as bc
+import broadcaster
 
 console = Console()
 
@@ -135,8 +135,6 @@ def encode_point_cloud(
     win_name = "RealSense Color"
     cv2.namedWindow(win_name, cv2.WINDOW_AUTOSIZE)
 
-    mode = EncodingMode[EncodingMode.FULL.name]
-
     compression_roi_stats  = CompressionStats()
     compression_out_stats  = CompressionStats()
     compression_full_stats = CompressionStats()
@@ -179,12 +177,16 @@ def encode_point_cloud(
 
 
     if_sam_init = False
+
+    # --- SUBSAMPLING LAYERS SETUP ---
+    # layer 0 = 60%, layer 1 = 15%, layer 2 = 25%
+    sampling_layers = [0.60, 0.15, 0.25]
+    active_layers   = [True,  True,  True]
     
-    with Live(refresh_per_second=30, screen=False) as live:
+    with Live(refresh_per_second=1, screen=False) as live:
         try:
             while True:
 
-                #TODO these are removed because I have removed the keybinding in the visualization
                 # ───────────────────────────────────────────────────────────────────────
                 # Propagate any user‐tweaked “full” encoder settings into the ROI encoder
                 # and the outside‐ROI encoder on every frame. Since we allow live key
@@ -195,20 +197,20 @@ def encode_point_cloud(
                 # E.g. if you press “=” to bump position_quantization up, this ensures the next
                 # frame’s ROI encoder uses that new value.
                 # ───────────────────────────────────────────────────────────────────────
-                # draco_roi_encoding.position_quantization_bits = draco_full_encoding.position_quantization_bits
-                # draco_roi_encoding.color_quantization_bits    = draco_full_encoding.color_quantization_bits
-                # draco_roi_encoding.speed_encode               = draco_full_encoding.speed_encode
-                # draco_roi_encoding.speed_decode               = draco_full_encoding.speed_decode
+                draco_roi_encoding.position_quantization_bits = draco_full_encoding.position_quantization_bits
+                draco_roi_encoding.color_quantization_bits    = draco_full_encoding.color_quantization_bits
+                draco_roi_encoding.speed_encode               = draco_full_encoding.speed_encode
+                draco_roi_encoding.speed_decode               = draco_full_encoding.speed_decode
                 # ───────────────────────────────────────────────────────────────────────
                 # Derive the “outside ROI” settings from the ROI encoder’s (or full’s)
                 # settings. We halve the position quantization here to trade off more
                 # accuracy inside the ROI vs. elsewhere. Must also run each frame so
                 # any full→ROI changes flow through to this encoder as well.
                 # ───────────────────────────────────────────────────────────────────────
-                # draco_outside_roi_encoding.position_quantization_bits = draco_roi_encoding.position_quantization_bits // 4
-                # draco_outside_roi_encoding.color_quantization_bits    = draco_roi_encoding.color_quantization_bits
-                # draco_outside_roi_encoding.speed_encode               = draco_roi_encoding.speed_encode
-                # draco_outside_roi_encoding.speed_decode               = draco_roi_encoding.speed_decode
+                draco_outside_roi_encoding.position_quantization_bits = draco_roi_encoding.position_quantization_bits - 2
+                draco_outside_roi_encoding.color_quantization_bits    = draco_roi_encoding.color_quantization_bits
+                draco_outside_roi_encoding.speed_encode               = draco_roi_encoding.speed_encode
+                draco_outside_roi_encoding.speed_decode               = draco_roi_encoding.speed_decode
 
                 
                 frames = pipeline.wait_for_frames()
@@ -317,23 +319,37 @@ def encode_point_cloud(
                 #    & np.isfinite(numpy_vertices[:, 2]) # Z isn’t NaN or ±Inf
                 #    & (numpy_vertices[:, 2] > 0)        # Z > 0 (in front of camera)
                 #)
+                pipeline_stats.build_valid_points_ms = (time.perf_counter() - build_valid_points_start_time) * 1000
+
+                subsampling_time_start = time.perf_counter()
+                effective_ratio = sum(r for r, on in zip(sampling_layers, active_layers) if on)
+
+                # roll one random array and reject ~ (1‑effective_ratio) of valid points
+                rnd = np.random.rand(valid.shape[0])
+                subsample_mask = rnd < effective_ratio
+
+                # Add the subsampling mask to the valid points
+                valid &= subsample_mask
+                pipeline_stats.subsampling_ms = (time.perf_counter() - subsampling_time_start ) * 1000
+
                 points_full_frame = numpy_vertices[valid]
                 colors_full_frame = colors[valid] # 8ms
-                pipeline_stats.build_valid_points_ms = (time.perf_counter() - build_valid_points_start_time) * 1000
+                
 
 
                 if encoding_mode is EncodingMode.FULL:
                     # Encode entire valid cloud
                     pipeline_stats.data_preparation_ms = (time.perf_counter() - data_preparation_time_start) * 1000 #prep end
 
-                    buffer_all = full_frame_compression(
-                        points=points_full_frame,
-                        colors=colors_full_frame,
-                        encoder_wrapper=draco_full_encoding,
-                    )
-
-                    # Broadcast
-                    # server.broadcast(bytes([1]) + buffer_all) # prefix with single byte to understand that we are sending one buffer
+                    if(points_full_frame.any()):
+                        buffer_all = full_frame_compression(
+                            points=points_full_frame,
+                            colors=colors_full_frame,
+                            encoder_wrapper=draco_full_encoding,
+                        )
+                        # Broadcast
+                        server.broadcast(bytes([1]) + buffer_all) # prefix with single byte to understand that we are sending one buffer
+                       
                     
                     # Logging
                     table_pipeline_stats = pipeline_stats.make_table(
@@ -361,6 +377,9 @@ def encode_point_cloud(
                         )
                     )
                 else:
+                    buf_roi = None
+                    buf_out = None
+
                     # Note currently we assume a single hand
                     gesture_recognition_start_time = time.perf_counter()
                     gesture_recognizer.recognize(color_img, int(time.time() * 1000))
@@ -430,6 +449,8 @@ def encode_point_cloud(
                             points_in_roi,
                             colors_in_roi,
                         )
+                    else:
+                        buf_roi = b""
                     
                     if points_out_roi.size:
                         futures["out_roi"] = thread_executor.submit(
@@ -437,24 +458,26 @@ def encode_point_cloud(
                             points_out_roi,
                             colors_out_roi,
                         )
+                    else:
+                        buf_out = b""
 
                     for label, future in futures.items():
-                        buffer = future.result()  
-
+                        if label == "roi":
+                            buf_roi = future.result()  
+                        if label == "out_roi":
+                            buf_out = future.result() 
                     pipeline_stats.multiprocessing_compression_ms = (time.perf_counter() - multiprocessing_compression_time_start) * 1000
 
-                #    true_encoding_time = (time.perf_counter() - true_encoding_time) * 1000
-                #    pipeline_stats.total_compression_time = true_encoding_time
-                #    pc_count = 0
-                #    # Broadcast
-                #    bufs = []
-                #    if buf_roi:
-                #        bufs.append(buf_roi)
-                #    if buf_out:
-                #        bufs.append(buf_out)
-                #    count = len(bufs)
-                #    for buf in bufs:
-                #        server.broadcast(bytes([count]) + buf) # Prefix with byte that tells us the length
+                    # Broadcast
+                    bufs = []
+                    if buf_roi:
+                        bufs.append(buf_roi)
+                    if buf_out:
+                        bufs.append(buf_out)
+                    count = len(bufs)
+                    for buf in bufs:
+                        server.broadcast(bytes([count]) + buf) # Prefix with byte that tells us the length
+
 
                     table_pipeline_stats = pipeline_stats.make_table(
                         section="End to End Pipeline Stats", 
@@ -498,7 +521,11 @@ def encode_point_cloud(
                     prev_time = now
                     frame_count = 0
 
-                cv2.putText(display, f"FPS: {fps}", (10,50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
+                # draw FPS
+                cv2.putText(display, f"FPS: {fps}", (10,50),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
+
+                # draw compression stats
                 text = str(draco_full_encoding.compression_stats)
                 x, y = 10, 20
                 line_height = 20
@@ -512,41 +539,65 @@ def encode_point_cloud(
                         (255, 255, 255),
                         2
                     )
+
+                # now draw layer_str just below the last stats line
+                layer_str = " ".join(
+                    f"L{i}{' ON' if active_layers[i] else ' OFF'}({int(sampling_layers[i]*100)}%)"
+                    for i in range(len(sampling_layers))
+                )
+                # compute start_y: one line below the last stats line
+                n_lines = len(text.splitlines())
+                start_y = y + n_lines * line_height
+                cv2.putText(
+                    display,
+                    layer_str,
+                    (x, start_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255, 255, 255),
+                    2
+                )
                 
                 cv2.imshow(win_name, display)      
                 key = cv2.waitKey(1) # this takes 20 ms
-                #TODO removed keybindings
-                #if key in (ord('q'), 27):  # q or Esc
-                #    break
+                if key in (ord('q'), 27):  # q or Esc
+                    break
                 ## Adjust settings
-                #elif key == ord('f'):
-                #    # Toggle mode (IMPORTANCE)
-                #    mode = Mode.FULL if mode is Mode.IMPORTANCE else Mode.IMPORTANCE
-                #elif key == ord('d'):
-                #    #Toggle mode (Visualization: Depth vs Color)
-                #    visualization_mode = (
-                #        visualization_mode.DEPTH
-                #        if visualization_mode is visualization_mode.COLOR
-                #        else visualization_mode.COLOR
-                #    )
-                #elif key == ord('='):
-                #    dracoAll.posQuant = min(dracoAll.posQuant+1, 20)
-                #elif key == ord('-'):
-                #    dracoAll.posQuant = max(dracoAll.posQuant-1, 1)
-                #elif key == ord(']'):
-                #    dracoAll.colorQuant = min(dracoAll.colorQuant+1, 16)
-                #elif key == ord('['):
-                #    dracoAll.colorQuant = max(dracoAll.colorQuant-1, 1)
-                #elif key == ord('.'):
-                #    dracoAll.speedEncode = min(dracoAll.speedEncode+1, 10)
-                #    dracoAll.speedDecode = dracoAll.speedEncode
-                #elif key == ord(','):
-                #    dracoAll.speedEncode = max(dracoAll.speedEncode-1, 0)
-                #    dracoAll.speedDecode = dracoAll.speedEncode
-                #elif key == ord(' '):
-                #    # save full point cloud PLY
-                #    points.export_to_ply("snapshot.ply", color_frame)
-                #    print("Saved full point cloud to snapshot.ply")
+                elif key == ord('f'):
+                    # Toggle mode (IMPORTANCE)
+                    encoding_mode = EncodingMode.FULL if encoding_mode is EncodingMode.IMPORTANCE else EncodingMode.IMPORTANCE
+                elif key == ord('d'):
+                    #Toggle mode (Visualization: Depth vs Color)
+                    visualization_mode = (
+                        visualization_mode.DEPTH
+                        if visualization_mode is visualization_mode.COLOR
+                        else visualization_mode.COLOR
+                    )
+                elif key == ord('='):
+                    draco_full_encoding.posQuant = min(draco_full_encoding.posQuant+1, 20)
+                elif key == ord('-'):
+                    draco_full_encoding.posQuant = max(draco_full_encoding.posQuant-1, 1)
+                elif key == ord(']'):
+                    draco_full_encoding.colorQuant = min(draco_full_encoding.colorQuant+1, 16)
+                elif key == ord('['):
+                    draco_full_encoding.colorQuant = max(draco_full_encoding.colorQuant-1, 1)
+                elif key == ord('.'):
+                    draco_full_encoding.speedEncode = min(draco_full_encoding.speedEncode+1, 10)
+                    draco_full_encoding.speedDecode = draco_full_encoding.speedEncode
+                elif key == ord(','):
+                    draco_full_encoding.speedEncode = max(draco_full_encoding.speedEncode-1, 0)
+                    draco_full_encoding.speedDecode = draco_full_encoding.speedEncode
+                elif key == ord(' '):
+                    # save full point cloud PLY
+                    points.export_to_ply("snapshot.ply", color_frame)
+                    print("Saved full point cloud to snapshot.ply")
+                # LAYERS TOGGLE
+                elif key == ord('1'):
+                    active_layers[0] = not active_layers[0]
+                elif key == ord('2'):
+                    active_layers[1] = not active_layers[1]
+                elif key == ord('3'):
+                    active_layers[2] = not active_layers[2]
         finally:
             pipeline.stop()
 
@@ -559,14 +610,14 @@ def main():
     parser.add_argument(
         "--camera-rgb-width",
         type=int,
-        default=1280,
+        default=848,
         help="Color stream width (pixels)",
     )
 
     parser.add_argument(
         "--camera-rgb-height",
         type=int,
-        default=720,
+        default=480,
         help="Color stream height (pixels)",
     )
 
@@ -639,7 +690,7 @@ def main():
     parser.add_argument(
         "--server-port",        
         type=int, 
-        default=5555,
+        default=9002,
         help="Broadcast server port"
     )
 
@@ -659,7 +710,10 @@ def main():
 
     args = parser.parse_args()
 
-    server = broadcaster.ProducerServer(port=args.server_port)
+
+    server = bc.setup_server(args.server_port)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
 
     if args.visualization_mode == "color":
         visualization_mode = VizualizationMode.COLOR

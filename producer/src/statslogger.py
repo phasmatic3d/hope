@@ -48,6 +48,7 @@ class PipelineTiming:
         self.depth_culling_ms               = 0
         self.gesture_recognition_ms         = 0
         self.data_preparation_ms            = 0
+        self.subsampling_ms                 = 0
         self.texture_scaling_ms             = 0
         self.build_valid_points_ms          = 0
         self.build_mask_for_roi_ms          = 0
@@ -60,7 +61,7 @@ class PipelineTiming:
             value
             for name, value in vars(self).items()
             if name.endswith('_ms') and name != "texture_scaling_ms" and name != "build_valid_points_ms" and name != "build_mask_for_roi_ms"
-            and name != "multiprocessing_compression_ms"
+            and name != "multiprocessing_compression_ms"  and name != "subsampling_ms"
         )
 
     def __str__(self):

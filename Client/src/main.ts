@@ -234,11 +234,12 @@ async function loadAndUpdatePointCloudFromWS_worker(scene: THREE.Scene) {
         );
         const material = new THREE.PointsMaterial({
           vertexColors: true,
-          size: 3.0,
+          size: 0.1,
           sizeAttenuation: false
         });
         pointCloud = new THREE.Points(pointCloudGeometry, material);
-        pointCloud.scale.set(5, -5, 5);
+        pointCloud.scale.set(20, 20, 20);
+        pointCloud.rotateX(Math.PI)
         pointCloud.position.y = -10;
         pointCloud.position.z = 8;
         pointCloud.position.x = -2;
