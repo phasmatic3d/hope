@@ -3,6 +3,7 @@ from rich.table import Table
 
 class CompressionStats:
     def __init__(self):
+        self.masking_ms       = 0
         self.compression_ms   = 0
         self.number_of_points = 0
         self.raw_bytes        = 0
@@ -46,11 +47,13 @@ class PipelineTiming:
         self.frame_alignment_ms             = 0
         self.point_cloud_creation_ms        = 0
         self.depth_culling_ms               = 0
+        self.spatial_filter_ms              = 0
         self.gesture_recognition_ms         = 0
         self.data_preparation_ms            = 0
-        self.texture_scaling_ms             = 0
+        self.color_lookup_ms                = 0
         self.build_valid_points_ms          = 0
-        self.build_mask_for_roi_ms          = 0
+        self.subsampling_ms                 = 0
+        self.texture_scaling_ms             = 0
         self.multiprocessing_compression_ms = 0
         self.sam2_ms = 0
 
@@ -60,7 +63,7 @@ class PipelineTiming:
             value
             for name, value in vars(self).items()
             if name.endswith('_ms') and name != "texture_scaling_ms" and name != "build_valid_points_ms" and name != "build_mask_for_roi_ms"
-            and name != "multiprocessing_compression_ms"
+            and name != "multiprocessing_compression_ms"  and name != "subsampling_ms" and name != "color_lookup_ms"
         )
 
     def __str__(self):

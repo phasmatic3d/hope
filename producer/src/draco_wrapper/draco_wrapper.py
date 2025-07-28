@@ -1,7 +1,5 @@
 import time
 import numpy as np
-#TODO what in the name of god Basilis
-#import encoding as enc
 from . import encoder # this is the cpp binary
 import statslogger as log
 from enum import Enum, auto
