@@ -72,7 +72,7 @@ class DracoWrapper:
         if self.compression_stats != None:
             self.compression_stats.raw_bytes = points.nbytes + colors.nbytes
 
-        start = time.time()
+        start = time.perf_counter()
         # note this calls the cpp binary
         buffer = encoder.encode_pointcloud(
             points,
@@ -82,7 +82,7 @@ class DracoWrapper:
             self.speed_encode,
             self.speed_decode
         )
-        end = time.time()
+        end = time.perf_counter()
 
         if self.compression_stats != None:
             self.compression_stats.compression_ms = (end - start) * 1000
