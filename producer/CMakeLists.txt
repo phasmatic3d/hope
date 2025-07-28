@@ -184,7 +184,7 @@ nanobind_add_module(broadcaster
     src/bindings/server_bindings.cpp
 )
 
-set(BROADCASTER_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/src/broadcaster")
+set(BROADCASTER_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/src/broadcaster_wrapper")
 
 if (WIN32)
 	set(BROADCASTER_SUFFIX ".pyd")

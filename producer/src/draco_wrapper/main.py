@@ -40,7 +40,8 @@ from .draco_wrapper import (
     VizualizationMode
 )
 
-from broadcasting import (
+from broadcaster_wrapper import (
+    setup_server,
     broadcaster
 )
 
@@ -627,7 +628,7 @@ def main():
     parser.add_argument(
         "--server-host",        
         type=str, 
-        default="localhost",
+        default="http://localhost",
         help="Broadcast server host"
     )
 
@@ -654,7 +655,7 @@ def main():
 
     args = parser.parse_args()
 
-    server = broadcaster.ProducerServer(port=args.server_port)
+    server = setup_server(url=args.server_host, port=args.server_port)
 
     if args.visualization_mode == "color":
         visualization_mode = VizualizationMode.COLOR

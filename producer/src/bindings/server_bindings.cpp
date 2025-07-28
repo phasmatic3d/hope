@@ -1,10 +1,13 @@
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/string.h>
 #include <set>
 #include <string>
-
-#define ASIO_STANDALONE
 #include <websocketpp/config/asio_no_tls.hpp>
 #include <websocketpp/server.hpp>
+
+#ifndef ASIO_STANDALONE
+#define ASIO_STANDALONE
+#endif
 
 namespace nb = nanobind;
 using websocketpp::connection_hdl;
@@ -74,7 +77,49 @@ public:
 
 
     void set_redirect(const std::string &url) {
-        m_redirect_url = url;
+        // Trim leading / trailing whitespace
+        //std::string tmp = url.cast<std::string>();
+        std::string tmp = url;
+        auto ws_front = tmp.find_first_not_of(" \t\r\n");
+        auto ws_back  = tmp.find_last_not_of (" \t\r\n");
+        if (ws_front == std::string::npos) {
+            throw std::invalid_argument("Redirect URL cannot be empty or whitespace");
+        }
+        tmp = tmp.substr(ws_front, ws_back - ws_front + 1);
+
+        // Strip a single trailing slash for parsing
+        bool had_slash = (!tmp.empty() && tmp.back() == '/');
+        if (had_slash) tmp.pop_back();
+
+        // Lower-case prefix to check for scheme
+        std::string lower = tmp;
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c){ return std::tolower(c); });
+
+        // If they gave us a full URL, accept it
+        if (lower.rfind("http://", 0) == 0 || lower.rfind("https://", 0) == 0) {
+            m_redirect_url = tmp + '/';
+            return;
+        }
+
+        // Otherwise treat as host[:port]
+        std::string host;
+        int port = m_port;  // default to constructor port
+        auto colon = tmp.find(':');
+        if (colon != std::string::npos) {
+            host = tmp.substr(0, colon);
+            std::string port_str = tmp.substr(colon + 1);
+            try {
+                port = std::stoi(port_str);
+            } catch (...) {
+                throw std::invalid_argument("Invalid port in redirect URL: “" + port_str + "”");
+            }
+        } else {
+            host = tmp;
+        }
+
+        // Build final URL
+        m_redirect_url = "http://" + host + ":" + std::to_string(port) + "/";
     }
 
 private:
@@ -99,7 +144,18 @@ NB_MODULE(broadcaster, m) {
         .def("broadcast", &ProducerServer::broadcast,
              nb::arg("data"),
              "Broadcast raw binary data to all connected WebSocket clients")
-        .def("set_redirect", &ProducerServer::set_redirect,
-             nb::arg("url"),
-             "Set HTTP redirect target for incoming browser requests");
+        .def
+        (
+            "set_redirect", 
+            [](ProducerServer &s, nb::str url_obj) {
+                // manually pull UTF-8 chars out of the Python str
+                auto py_ptr = (PyObject *) url_obj.ptr();
+                const char *cstr = PyUnicode_AsUTF8(py_ptr);
+                if (!cstr)
+                    throw std::runtime_error("Failed to convert redirect URL to UTF-8");
+                s.set_redirect(std::string(cstr));
+            },
+            nb::arg("url"),
+            "Set HTTP redirect target for incoming browser requests"
+        );
 }
