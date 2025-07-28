@@ -52,6 +52,7 @@ class PipelineTiming:
         self.build_valid_points_ms          = 0
         self.build_mask_for_roi_ms          = 0
         self.multiprocessing_compression_ms = 0
+        self.broadcast_ms                   = 0
         self.sam2_ms = 0
 
     def get_total_time(self):

@@ -81,6 +81,7 @@ public:
 
     // Broadcast a binary message to all clients
     void broadcast(const nb::bytes &data) {
+        //m_logger->debug("Broadcasting {} bytes", data.size());
         std::lock_guard<std::mutex> lock(m_connection_mutex);
         for (auto &hdl : m_connections) {
             websocketpp::lib::error_code ec;

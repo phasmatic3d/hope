@@ -337,7 +337,10 @@ def encode_point_cloud(
                     )
 
                     # Broadcast
-                    # server.broadcast(bytes([1]) + buffer_all) # prefix with single byte to understand that we are sending one buffer
+                    broadcast_start_time = time.perf_counter()
+                    server.broadcast(bytes([1]) + buffer_all) # prefix with single byte to understand that we are sending one buffer
+                    pipeline_stats.broadcast_ms = (time.perf_counter() - broadcast_start_time) * 1000
+                    
                     
                     # Logging
                     table_pipeline_stats = pipeline_stats.make_table(
