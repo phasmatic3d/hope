@@ -47,6 +47,22 @@ class HandLandmark(enum.IntEnum):
     PINKY_TIP = 20
 
 @dataclass
+class PixelBoundingBox:
+    """A bounding box in pixel coordinates."""
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+
+    @property
+    def width(self) -> int:
+        return self.x2 - self.x1
+
+    @property
+    def height(self) -> int:
+        return self.y2 - self.y1
+
+@dataclass
 class NormalizedBoundingBox:
     """A bounding box in normalized coordinates [0.0–1.0]."""
     xmin: float
@@ -62,29 +78,19 @@ class NormalizedBoundingBox:
     def height(self) -> float:
         return self.ymax - self.ymin
 
-    def to_pixel(self, img_w: int, img_h: int) -> "PixelBoundingBox":
-        return PixelBoundingBox(
-            x1=int(self.xmin * img_w),
-            y1=int(self.ymin * img_h),
-            x2=int(self.xmax * img_w),
-            y2=int(self.ymax * img_h),
-        )
-
-@dataclass
-class PixelBoundingBox:
-    """A bounding box in pixel coordinates."""
-    x1: int
-    y1: int
-    x2: int
-    y2: int
-
-    @property
-    def width(self) -> int:
-        return self.x2 - self.x1
-
-    @property
-    def height(self) -> int:
-        return self.y2 - self.y1
+    def to_pixel(self, img_w: int, img_h: int, as_arr: bool = False) -> PixelBoundingBox | np.ndarray:
+        if as_arr :
+            return np.array([
+                int(self.xmin * img_w),
+                int(self.ymin * img_h),
+                int(self.xmax * img_w),
+                int(self.ymax * img_h),], dtype=np.int32)
+        else :
+            return PixelBoundingBox(
+                x1=int(self.xmin * img_w),
+                y1=int(self.ymin * img_h),
+                x2=int(self.xmax * img_w),
+                y2=int(self.ymax * img_h),)
 
 class PointingGestureRecognizer:
 

@@ -1,10 +1,12 @@
 from enum import Enum, auto
 from pyexpat import model
 import time
-import numpy as np
-
+import os
 import encoder
+
+import numpy as np
 import encoding as enc
+import producer_cli as producer_cli
 
 from pathlib import Path
 from typing import Tuple
@@ -23,11 +25,12 @@ from rich.console import Group
 import statslogger as log
 import multiprocessing as mp
 from multiprocessing import shared_memory
+
 import queue
+
 from dataclasses import dataclass
-from mediapipe.tasks.python.vision import (
-    RunningMode,
-)
+
+from mediapipe.tasks.python.vision import (RunningMode,)
 
 from gesture_recognition import (
     PointingGestureRecognizer,
@@ -69,6 +72,7 @@ def camera_process(
         server: bc.ProducerServer,
         shared_frame_name,
         shared_cluster_name,
+        shared_roi_name,
         cmr_clr_width: int,
         cmr_clr_height: int,
         cmr_depth_width: int,
@@ -76,7 +80,8 @@ def camera_process(
         cmr_fps: int,
         stop_event: mp.Event,
         ready_frame_event: mp.Event,
-        ready_cluster_event: mp.Event) :
+        ready_cluster_event: mp.Event,
+        ready_roi_event: mp.Event) :
     
     draco_executor = ProcessPoolExecutor(max_workers=2)
     DEBUG = True
@@ -128,9 +133,11 @@ def camera_process(
 
     sf = shared_memory.SharedMemory(name=shared_frame_name)
     sc = shared_memory.SharedMemory(name=shared_cluster_name)
+    sroi = shared_memory.SharedMemory(name=shared_roi_name)
 
     shared_frame = np.ndarray((cmr_clr_height, cmr_clr_width, 3), dtype=np.uint8, buffer=sf.buf)
     shared_cluster = np.ndarray((cmr_clr_height, cmr_clr_width, 1), dtype=np.bool, buffer=sc.buf)
+    shared_roi = np.ndarray((4,), dtype=np.int32, buffer=sroi.buf)
 
     ready_frame_event.clear()
 
@@ -180,21 +187,11 @@ def camera_process(
             valid = (depth_flat>0) & np.isfinite(verts[:,2]) & (verts[:,2]>0)
 
             gesture_recognizer.recognize(display, frame_id)
-            pixel_space_bounding_box = None
             roi = None
 
             for bounding_box_normalized in gesture_recognizer.latest_bounding_boxes:
                 if bounding_box_normalized:
-                    pixel_space_bounding_box: PixelBoundingBox = bounding_box_normalized.to_pixel(display.shape[1], display.shape[0])
-                    roi = np.array([
-                        pixel_space_bounding_box.x1,
-                        pixel_space_bounding_box.y1,
-                        pixel_space_bounding_box.x2,
-                        pixel_space_bounding_box.y2,
-                    ], dtype=np.int32)
-
-            if roi is not None:
-                cv2.rectangle(display, (roi[0], roi[1]), (roi[2], roi[3]), (0,255,0), 2)
+                    roi: np.array = bounding_box_normalized.to_pixel(display.shape[1], display.shape[0], True)
 
             shared_frame[:] = display
             ready_frame_event.set()
@@ -210,59 +207,61 @@ def camera_process(
             pts_roi = verts[in_roi]; cols_roi = colors[in_roi]
             pts_out = verts[out_roi]; cols_out = colors[out_roi]
 
-            if True:
-                futures = []
+            futures = []
 
-                dracoROI.posQuant = dracoAll.posQuant
-                dracoROI.colorQuant = dracoAll.colorQuant
-                dracoROI.speedEncode = dracoAll.speedEncode
-                dracoROI.speedDecode = dracoAll.speedDecode 
+            dracoROI.posQuant = dracoAll.posQuant
+            dracoROI.colorQuant = dracoAll.colorQuant
+            dracoROI.speedEncode = dracoAll.speedEncode
+            dracoROI.speedDecode = dracoAll.speedDecode 
 
-                dracoOut.posQuant = dracoROI.posQuant // 2
-                dracoOut.colorQuant = dracoROI.colorQuant
-                dracoOut.speedEncode = dracoROI.speedEncode
-                dracoOut.speedDecode = dracoROI.speedDecode
-            
-                if pts_roi is not None and pts_roi.shape[0] > 0: # check if non empty
-                    futures += [draco_executor.submit(enc._encode_chunk,
-                                        pts_roi, cols_roi,
-                                        dracoROI, statsROI),]
+            dracoOut.posQuant = dracoROI.posQuant // 2
+            dracoOut.colorQuant = dracoROI.colorQuant
+            dracoOut.speedEncode = dracoROI.speedEncode
+            dracoOut.speedDecode = dracoROI.speedDecode
+        
+            if pts_roi is not None and pts_roi.shape[0] > 0: # check if non empty
+                futures += [draco_executor.submit(enc._encode_chunk,
+                                    pts_roi, cols_roi,
+                                    dracoROI, statsROI),]
+            else:
+                buf_roi = b""
+
+            if pts_out is not None:
+                futures += [draco_executor.submit(enc._encode_chunk,
+                                    pts_out, cols_out,
+                                    dracoOut, statsOut),]
+            else:
+                buf_out = b""
+
+            for future in as_completed(futures):                        
+                index = futures.index(future)
+                buf, stats = future.result()
+                if len(futures) == 1:
+                    buf_out, statsOut = buf, stats
+                    statsOut.encoded_bytes = len(buf_out)
                 else:
-                    buf_roi = b""
-
-                if pts_out is not None:
-                    futures += [draco_executor.submit(enc._encode_chunk,
-                                        pts_out, cols_out,
-                                        dracoOut, statsOut),]
-                else:
-                    buf_out = b""
-
-                for future in as_completed(futures):                        
-                    index = futures.index(future)
-                    buf, stats = future.result()
-                    if len(futures) == 1:
+                    if index == 0:
+                        buf_roi , statsROI = buf, stats
+                        statsROI.encoded_bytes = len(buf_roi)
+                    elif index == 1:
                         buf_out, statsOut = buf, stats
                         statsOut.encoded_bytes = len(buf_out)
-                    else:
-                        if index == 0:
-                            buf_roi , statsROI = buf, stats
-                            statsROI.encoded_bytes = len(buf_roi)
-                        elif index == 1:
-                            buf_out, statsOut = buf, stats
-                            statsOut.encoded_bytes = len(buf_out)
 
-                bufs = []
-                if buf_roi:
-                    bufs.append(buf_roi)
+            bufs = []
+            if buf_roi:
+                bufs.append(buf_roi)
 
-                if buf_out:
-                    bufs.append(buf_out)
+            if buf_out:
+                bufs.append(buf_out)
 
-                count = len(bufs)
-                for buf in bufs:
-                    server.broadcast(bytes([count]) + buf) # Prefix with byte that tells us the length
+            count = len(bufs)
+            for buf in bufs:
+                server.broadcast(bytes([count]) + buf) # Prefix with byte that tells us the length
 
             if DEBUG:
+                if roi is not None:
+                    cv2.rectangle(display, (roi[0], roi[1]), (roi[2], roi[3]), (0,255,0), 2)
+            
                 cv2.imshow(win_name, cv2.cvtColor(display, cv2.COLOR_RGB2BGR))
 
                 if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -340,16 +339,21 @@ def main_thread_worker_yolo(
         model: YOLOE,
         shared_frame_name,
         shared_cluster_name,
+        shared_roi_name,
         frame_shape,
         stop_event: mp.Event,
         ready_frame_event: mp.Event,
-        ready_cluster_event: mp.Event) :
+        ready_cluster_event: mp.Event,
+        ready_roi_event: mp.Event) :
 
     sf = shared_memory.SharedMemory(name=shared_frame_name)
     sc = shared_memory.SharedMemory(name=shared_cluster_name)
+    sroi = shared_memory.SharedMemory(name=shared_roi_name)
 
     shared_frame = np.ndarray((frame_shape[0], frame_shape[1], 3), dtype=np.uint8, buffer=sf.buf)
     shared_cluster = np.ndarray((frame_shape[0], frame_shape[1], 1), dtype=np.bool, buffer=sc.buf)
+    shared_roi = np.ndarray((4,), dtype=np.int32, buffer=sroi.buf)
+    
     ready_cluster_event.clear()
     local_frame = np.zeros_like(shared_frame)
 
@@ -383,52 +387,83 @@ def main_thread_worker_yolo(
             ready_frame_event.clear()
             ready_cluster_event.set()
 
-def launch_processes(server: bc.ProducerServer,
-        cmr_clr_width: int,
-        cmr_clr_height: int,
-        cmr_depth_width: int,
-        cmr_depth_height: int,
-        cmr_fps: int,
-        path_to_yaml: str,
-        path_to_chkp: str,
-        device: str,
-        image_size: int) -> None:
-    
+def launch_processes(server: bc.ProducerServer, args, device : str) -> None:
+    cmr_clr_width = args.realsense_clr_capture_width
+    cmr_clr_height = args.realsense_clr_capture_height
+    cmr_depth_width = args.realsense_depth_capture_width
+    cmr_depth_height = args.realsense_depth_capture_height
+    cmr_fps = args.realsense_target_fps
+
     stop_event = mp.Event()
     ready_frame_event = mp.Event()
     ready_cluster_event = mp.Event()
+    ready_roi_event = mp.Event()
 
     shm_cluster = shared_memory.SharedMemory(create=True, size=cmr_clr_width * cmr_clr_height * np.dtype(np.bool).itemsize)
     shm_frame = shared_memory.SharedMemory(create=True, size=cmr_clr_width * cmr_clr_height * 3 * np.dtype(np.uint8).itemsize)
-    
+    shm_roi = shared_memory.SharedMemory(create=True, size= 4 * np.dtype(np.int32).itemsize)
+
     shared_frame = np.ndarray((cmr_clr_height, cmr_clr_width, 3), dtype=np.uint8, buffer=shm_frame.buf)
     shared_cluster = np.ndarray((cmr_clr_height, cmr_clr_width, 1), dtype=np.bool, buffer=shm_cluster.buf)
+    shared_roi = np.ndarray((4,), dtype=np.int32, buffer=shm_roi.buf)
 
     shared_frame[:] = 0
     shared_cluster[:] = False
+    shared_roi[:] = 0
 
-    if False:
+    if args.cluster_predictor == 'sam2':
+        enum = producer_cli.map_to_enum[args.sam2_checkpoint]
+        link = producer_cli.map_to_config[enum]
+        path_to_yaml = os.path.join(producer_cli.CONFIG_PATH, link[0])
+        print(f"Received path_to_yaml: {path_to_yaml}")
+        path_to_chkp = os.path.join(producer_cli.CHECKPOINT_PATH, Path(link[1]).name)
+
+        if args.sam2_image_size % 32 != 0:
+            print(f'Requested image size {args.sam2_image_size} is not a multple of 32 falling back to SAM2.1 default 1024')
+            args.sam2_image_size = 1024
+
+        if not os.path.exists(producer_cli.CONFIG_PATH):
+            print('Config path for sam2.1 does not exist, exiting...')
+            return
+        
+        if not os.path.exists(path_to_yaml):
+            print(f'Config {link[0]} for sam2.1 does not exist, You need to download them from https://github.com/facebookresearch/sam2/tree/main/sam2/configs/sam2.1, exiting...')
+            return
+        
+        if not os.path.exists(path_to_chkp):
+            print(f'Checkpoint {path_to_chkp} is missing, downloading...')
+            os.makedirs(producer_cli.CHECKPOINT_PATH, exist_ok=True)
+            producer_cli.getRequest(producer_cli.CHECKPOINT_PATH, link[1])
+
         predictor = sam2_camera.build_sam2_camera_predictor(
             config_file=Path(path_to_yaml).name, 
             config_path=str(Path(".", "configs", "sam2.1")),
             ckpt_path=path_to_chkp, 
             device=device,
-            image_size=image_size)
+            image_size=args.sam2_image_size)
     else:
-        predictor = YOLOE("yoloe-11l-seg.pt", verbose=False)
+        predictor = None
+        if args.yolo_size == 'large':
+            predictor = YOLOE("yoloe-11l-seg.pt", verbose=False)
+        elif args.yolo_size == 'medium':
+            predictor = YOLOE("yoloe-11m-seg.pt", verbose=False)
+        else:
+            predictor = YOLOE("yoloe-11s-seg.pt", verbose=False)
+
         names = ["glasses", "shirt", "hat", "shorts"]
         predictor.set_classes(names, predictor.get_text_pe(names))
 
     predictor_proc = mp.Process(target=main_thread_worker_yolo, 
-        args=(predictor, shm_frame.name, shm_cluster.name, (cmr_clr_height, cmr_clr_width), stop_event, ready_frame_event, ready_cluster_event))
+        args=(predictor, shm_frame.name, shm_cluster.name, shm_roi.name, (cmr_clr_height, cmr_clr_width), stop_event, ready_frame_event, ready_cluster_event, ready_roi_event))
 
     try:
         predictor_proc.start()
         #main_thread_worker_yolo(predictor, frame_queue, result_queue, stop_event)
 
-        camera_process(server, shm_frame.name, shm_cluster.name, cmr_clr_width, cmr_clr_height,
+        camera_process(server, shm_frame.name, shm_cluster.name, shm_roi.name,
+            cmr_clr_width, cmr_clr_height,
             cmr_depth_width, cmr_depth_height, cmr_fps,
-            stop_event, ready_frame_event, ready_cluster_event)
+            stop_event, ready_frame_event, ready_cluster_event, ready_roi_event)
         
         predictor_proc.terminate()
         predictor_proc.join()
