@@ -143,6 +143,7 @@ def camera_process(
     shared_roi = np.ndarray((4,), dtype=np.int32, buffer=sroi.buf)
 
     ready_frame_event.clear()
+    prev_cluster = shared_cluster.copy()
 
     try:
         while not stop_event.is_set():
@@ -204,10 +205,11 @@ def camera_process(
             #TODO: we need to find some work todo here in order to hide latency between processes
 
             if ready_cluster_event.is_set():
+                prev_cluster = shared_cluster.copy()
                 ready_cluster_event.clear()
 
             if DEBUG:
-                display[shared_cluster[:, :, 0], 2] = 255
+                display[prev_cluster[:, :, 0], 2] = 255
 
             flat_cluster = shared_cluster.flatten()
             in_roi = valid & flat_cluster
@@ -291,6 +293,11 @@ def thread_worker_sam2(
         ready_roi_event: mp.Event,
         predictor_ready: mp.Event) :
 
+    if torch.cuda.is_available():
+        if torch.cuda.get_device_properties(0).major >= 8:
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+
     with torch.autocast(device_type=device.__str__(), dtype=torch.bfloat16):
         predictor = sam2_camera.build_sam2_camera_predictor(
             config_file=Path(path_to_yaml).name, 
@@ -317,14 +324,23 @@ def thread_worker_sam2(
         while not stop_event.is_set():
             if ready_frame_event.is_set():
                 local_frame[:] = shared_frame
+                shared_binary_mask[:] = False
 
                 if ready_roi_event.is_set():
                     roi_local = shared_roi.copy()
-                    roi_center = np.array([[0.5 * (roi_local[0, 0] + roi_local[0, 2]), 0.5 * (roi_local[0, 1] + roi_local[0, 3])]], dtype=np.float32)
+                    
+                    roi_center = np.array([
+                        [0.5 * (roi_local[0, 0] + roi_local[0, 2]), 0.5 * (roi_local[0, 1] + roi_local[0, 3])],
+                        [roi_local[0, 0], roi_local[0, 1]],
+                        [roi_local[0, 0], roi_local[0, 3]],
+                        [roi_local[0, 2], roi_local[0, 1]],
+                        [roi_local[0, 2], roi_local[0, 3]],
+                    ], dtype=np.float32)
+                    
                     predictor.load_first_frame(local_frame)
                     ann_frame_idx = 0
                     ann_obj_id = (1,)
-                    labels = np.array([1], dtype=np.int32)
+                    labels = np.array([1, 1, 1, 1, 1], dtype=np.int32)
                     roi_init = True
                     _, _, out_mask_logits = predictor.add_new_prompt(frame_idx=ann_frame_idx, obj_id=ann_obj_id, points=roi_center, labels=labels)
                     shared_binary_mask[:] = (out_mask_logits[0] > 0.0).permute(1, 2, 0).cpu().numpy().astype(np.bool)
@@ -349,6 +365,11 @@ def thread_worker_yoloe(
         ready_cluster_event: mp.Event,
         ready_roi_event: mp.Event,
         predictor_ready: mp.Event) :
+
+    if torch.cuda.is_available():
+        if torch.cuda.get_device_properties(0).major >= 8:
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
 
     with torch.autocast(device_type=device.__str__(), dtype=torch.bfloat16):
         sf = shared_memory.SharedMemory(name=shared_frame_name)

@@ -189,7 +189,7 @@ class PointingGestureRecognizer:
 
         def is_partial_fist(thump_tip, index_mcp, middle_finger_tip, ring_finder_tip, pinky_tip, wrist):
             def dist(a, b) :
-                aTob = np.array([b.x, b.y, b.z]) - np.array([a.x, a.y, a.z])
+                aTob = np.array([b.x, b.y]) - np.array([a.x, a.y])
                 return np.linalg.norm(aTob)
             
             #wrist_dist_thump = dist(thump_tip, wrist)
@@ -200,8 +200,9 @@ class PointingGestureRecognizer:
 
             return \
                 wrist_dist_middle < wrist_dist_index and \
-                wrist_dist_ring < wrist_dist_index and \
-                wrist_dist_pinky < wrist_dist_index
+                wrist_dist_ring < wrist_dist_index
+            #and \
+            #   wrist_dist_pinky < wrist_dist_index
 
         # run the for loop in case we want multiple hands later
         for hand_index, hand_landmarks in enumerate(detected):

@@ -16,11 +16,6 @@ def main():
     
     print(f"Using device: {DEVICE}")
 
-    if torch.cuda.is_available():
-        if torch.cuda.get_device_properties(0).major >= 8:
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
-
     args = producer_cli.producer_cli.parse_args()
 
     server = setup_server()
