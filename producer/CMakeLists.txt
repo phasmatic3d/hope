@@ -11,8 +11,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 
-find_package(OpenSSL REQUIRED)
-find_package(realsense2 REQUIRED) 
+#find_package(OpenSSL REQUIRED)
+#find_package(realsense2 REQUIRED) 
 find_package(Python 3.11 EXACT COMPONENTS Interpreter Development)
 
 message(STATUS "Python include dirs: ${Python_INCLUDE_DIRS}")

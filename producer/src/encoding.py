@@ -1,3 +1,4 @@
+'''
 from enum import Enum, auto
 import time
 import numpy as np
@@ -59,7 +60,7 @@ class DracoEncoder:
     def to_string(self):
         return f"Qpos:{self.posQuant:2d} Qcol:{self.colorQuant:2d} Spd:{self.speedEncode}/10 ROI:{self.roiWidth}x{self.roiHeight}"
 
-    def encode(self, points, colors, stats: log.EncodingStats):
+    def encode(self, points, colors, stats: log.CompressionStats):
 
         stats.pts = points.shape[0]
         stats.raw_bytes = stats.pts * (3 * 4 + 3 * 1)
@@ -401,3 +402,4 @@ def encode_point_cloud(
             
         finally:
             pipeline.stop()
+'''

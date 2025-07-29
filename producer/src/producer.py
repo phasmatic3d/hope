@@ -1,5 +1,5 @@
 
-from encoding import *
+from broadcasting import *
 import hope_server
 import torch
 import os
@@ -22,7 +22,7 @@ def main():
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
 
-    if True:
+    if False:
         encode_point_cloud(
             server,
             args.realsense_clr_capture_width,
