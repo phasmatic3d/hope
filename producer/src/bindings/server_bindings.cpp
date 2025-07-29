@@ -131,11 +131,21 @@ public:
     void broadcast(const nb::bytes &data) 
     {
         //m_logger->debug("Broadcasting {} bytes", data.size());
-        size_t broadcast_round = ++m_broadcast_counter;
-        size_t message_size = data.size();
-        size_t connections_size = m_connections.size();
 
         std::lock_guard<std::mutex> lock(m_connection_mutex);
+
+        size_t broadcast_round   = 0;
+        size_t message_size      = 0;
+        size_t connections_size  = 0;
+
+
+        if (!m_connections.empty()) 
+        {
+            broadcast_round = m_broadcast_counter++;
+            message_size = data.size();
+            connections_size = m_connections.size();
+        }
+
         for (auto &hdl : m_connections) 
         {
 
