@@ -1,6 +1,7 @@
 import math
 import enum
 import numpy as np
+import mediapipe as mp
 
 from dataclasses import dataclass
 
@@ -88,7 +89,7 @@ class PixelBoundingBox:
 class PointingGestureRecognizer:
 
     STRAIGHT_ANGLE_THRESH = 15.0
-
+    STRAIGHT_COS_THREASH = np.cos(np.radians(155))
     # if either joint angle > this, we consider the finger “bent”
     BENT_ANGLE_THRESH = 60.0
     # this is the average size from the wrist to the tip 
@@ -151,92 +152,63 @@ class PointingGestureRecognizer:
                 self._seen_frames[i] = 0
                 self.latest_bounding_boxes[i] = None
 
-        # get direction vector
-        def to_vec(a, b):
-            return (b.x - a.x, b.y - a.y)
+        def is_finger_straight(mcp, pip, dip, tip):
+            def to_vec(a, b):
+                aTob = np.array([b.x, b.y]) - np.array([a.x, a.y])
+                aTob /= (np.linalg.norm(aTob) + 1.e-6)
+                return aTob
+        
+            #angle_1 = angle_degree(to_vec(dip, tip), to_vec(dip, pip))
+            #angle_2 = angle_degree(to_vec(pip, dip), to_vec(pip, mcp))
+            #print(f'{angle_1} {angle_2}')
+            #return angle_1 > 155 and angle_2 > 155
+            costheta1 = np.dot(to_vec(dip, tip), to_vec(dip, pip))
+            costheta2 = np.dot(to_vec(pip, dip), to_vec(pip, mcp))
+            #print(f'{self.STRAIGHT_COS_THREASH} {costheta1} {costheta2}')
+            return costheta1 < self.STRAIGHT_COS_THREASH and costheta2 < self.STRAIGHT_COS_THREASH
 
-        # get the cosine using dot produce formula
-        def angle_degree(u, v, eps=1e-6):
-            dot_product = u[0]*v[0] + u[1]*v[1]
-            normal_u = math.hypot(*u)
-            normal_v = math.hypot(*v)
-            # if either vector is (almost) zero-length, bait out
-            if normal_u < eps or normal_v < eps:
-                return 180.0
-            # clamp dot/(nu*nv)
-            cosθ = max(-1.0, min(1.0, dot_product/(normal_u * normal_v)))
-            return math.degrees(math.acos(cosθ))
+        def is_partial_fist(thump_tip, index_mcp, middle_finger_tip, ring_finder_tip, pinky_tip, wrist):
+            def dist(a, b) :
+                aTob = np.array([b.x, b.y]) - np.array([a.x, a.y])
+                return np.linalg.norm(aTob)
+            
+            #wrist_dist_thump = dist(thump_tip, wrist)
+            wrist_dist_index = dist(index_mcp, wrist)
+            wrist_dist_middle = dist(middle_finger_tip, wrist)
+            wrist_dist_ring = dist(ring_finder_tip, wrist)
+            wrist_dist_pinky = dist(pinky_tip, wrist)
 
-        def is_finger_straight(angle_1, angle_2):
-            return angle_1 < self.STRAIGHT_ANGLE_THRESH and angle_2 < self.STRAIGHT_ANGLE_THRESH
-
-        def is_finger_bent(mcp, pip, dip, tip):
-            angle_1 = angle_degree(to_vec(mcp, pip), to_vec(pip, dip))
-            angle_2 = angle_degree(to_vec(pip, dip), to_vec(dip, tip))
-            # if *either* joint is bent past BENT_ANGLE_THRESH, we call the finger “bent”
-            return (angle_1 > self.BENT_ANGLE_THRESH or angle_2 > self.BENT_ANGLE_THRESH)
+            return \
+                wrist_dist_middle < wrist_dist_index and \
+                wrist_dist_ring < wrist_dist_index and \
+                wrist_dist_pinky < wrist_dist_index
 
         # run the for loop in case we want multiple hands later
         for hand_index, hand_landmarks in enumerate(detected):
-            mcp = hand_landmarks[HandLandmark.INDEX_FINGER_MCP]
-            pip = hand_landmarks[HandLandmark.INDEX_FINGER_PIP]
-            dip = hand_landmarks[HandLandmark.INDEX_FINGER_DIP]
-            tip = hand_landmarks[HandLandmark.INDEX_FINGER_TIP]
-            wrist = hand_landmarks[HandLandmark.WRIST]
+            is_pointing_hand: bool = \
+                is_finger_straight(
+                    hand_landmarks[HandLandmark.INDEX_FINGER_MCP],
+                    hand_landmarks[HandLandmark.INDEX_FINGER_PIP],
+                    hand_landmarks[HandLandmark.INDEX_FINGER_DIP],
+                    hand_landmarks[HandLandmark.INDEX_FINGER_TIP]) and \
+                is_partial_fist(
+                    hand_landmarks[HandLandmark.THUMB_TIP],
+                    hand_landmarks[HandLandmark.INDEX_FINGER_MCP],
+                    hand_landmarks[HandLandmark.MIDDLE_FINGER_TIP],
+                    hand_landmarks[HandLandmark.RING_FINGER_TIP],
+                    hand_landmarks[HandLandmark.PINKY_TIP],
+                    hand_landmarks[HandLandmark.WRIST])
 
-            vector_1 = to_vec(mcp, pip)
-            vector_2 = to_vec(pip, dip)
-            vector_3 = to_vec(dip, tip)
-
-            angle_1 = angle_degree(vector_1, vector_2)
-            angle_2 = angle_degree(vector_2, vector_3)
-
-            # only count a frame if index finger is straight
-            is_index_straight: bool = is_finger_straight(angle_1=angle_1, angle_2=angle_2)
-
-            if not is_index_straight:
-                self._seen_frames[hand_index] = 0
-                self.latest_bounding_boxes[hand_index] = None
-                continue
-
-            middle_finger_bent: bool = is_finger_bent(
-                hand_landmarks[HandLandmark.MIDDLE_FINGER_MCP], 
-                hand_landmarks[HandLandmark.MIDDLE_FINGER_PIP], 
-                hand_landmarks[HandLandmark.MIDDLE_FINGER_DIP],
-                hand_landmarks[HandLandmark.MIDDLE_FINGER_TIP],
-            )
-
-            if not middle_finger_bent: 
-                self._seen_frames[hand_index] = 0
-                self.latest_bounding_boxes[hand_index] = None
-                continue
-
-            ring_finger_bent: bool = is_finger_bent(                
-                hand_landmarks[HandLandmark.RING_FINGER_MCP], 
-                hand_landmarks[HandLandmark.RING_FINGER_PIP], 
-                hand_landmarks[HandLandmark.RING_FINGER_DIP],
-                hand_landmarks[HandLandmark.RING_FINGER_TIP],
-            )
-
-            if not ring_finger_bent: 
-                self._seen_frames[hand_index] = 0
-                self.latest_bounding_boxes[hand_index] = None
-                continue
-
-            pinky_finger_bent: bool = is_finger_bent(                
-                hand_landmarks[HandLandmark.PINKY_MCP], 
-                hand_landmarks[HandLandmark.PINKY_PIP], 
-                hand_landmarks[HandLandmark.PINKY_DIP],
-                hand_landmarks[HandLandmark.PINKY_TIP],
-            ) 
-
-            if not pinky_finger_bent: 
+            if not is_pointing_hand:
                 self._seen_frames[hand_index] = 0
                 self.latest_bounding_boxes[hand_index] = None
                 continue
 
             self._seen_frames[hand_index] += 1
-            
+
+            dip = hand_landmarks[HandLandmark.INDEX_FINGER_DIP]
+            tip = hand_landmarks[HandLandmark.INDEX_FINGER_TIP]
+
             #2% of width/height
             minX = max(tip.x - 0.01, 0.0)
             maxX = min(tip.x + 0.01, 1.0)
@@ -254,7 +226,6 @@ class PointingGestureRecognizer:
             bboxMin = np.clip(bboxMin, 0.0, 1.0)
             bboxMax = np.clip(bboxMax, 0.0, 1.0)
             bounding_box_norm = NormalizedBoundingBox(bboxMin[0], bboxMin[1], bboxMax[0], bboxMax[1])
-            self.latest_bounding_boxes[hand_index] = bounding_box_norm
 
             if self._seen_frames[hand_index] >= self._delay_frames:
                 self.latest_bounding_boxes[hand_index] = bounding_box_norm
@@ -302,7 +273,7 @@ class PointingGestureRecognizer:
             return math.degrees(math.acos(cosθ))
 
         def is_finger_straight(angle_1, angle_2):
-            return angle_1 < self.STRAIGHT_ANGLE_THRESH and angle_2 < self.STRAIGHT_ANGLE_THRESH
+            return angle_1 > self.STRAIGHT_ANGLE_THRESH and angle_2 < self.STRAIGHT_ANGLE_THRESH
 
         def is_finger_bent(mcp, pip, dip, tip):
             angle_1 = angle_degree(to_vec(mcp, pip), to_vec(pip, dip))
