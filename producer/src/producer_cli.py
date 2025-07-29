@@ -51,7 +51,7 @@ map_to_enum = {
     "large" : MODEL_SIZE.LARGE,}
 
 producer_cli = argparse.ArgumentParser(description="HOPE producer")
-producer_cli.add_argument("--sam2_checkpoint", type=str, default="large", choices=["tiny", "small", "base_plus", "large"])
+producer_cli.add_argument("--sam2_checkpoint", type=str, default="tiny", choices=["tiny", "small", "base_plus", "large"])
 producer_cli.add_argument("--sam2_image_size", type=int, default=1024, choices=[1024, 512, 256, 128])
 producer_cli.add_argument("--yolo_size", type=str, default="large", choices=["samll, medium, large"])
 producer_cli.add_argument("--realsense_clr_capture_width", type=int, default=848, choices=[848])
@@ -59,7 +59,7 @@ producer_cli.add_argument("--realsense_clr_capture_height", type=int, default=48
 producer_cli.add_argument("--realsense_depth_capture_width", type=int, default=848, choices=[848])
 producer_cli.add_argument("--realsense_depth_capture_height", type=int, default=480, choices=[480])
 producer_cli.add_argument("--realsense_target_fps", type=int, default=30, choices=[30])
-producer_cli.add_argument("--cluster_predictor", type=str, default="yolo", choices=["yolo", "sam2"])
+producer_cli.add_argument("--cluster_predictor", type=str, default="sam2", choices=["yolo", "sam2",])
 
 def getRequest(outputPath : Path, url : str) -> None:
     req = requests.get(url, stream=True, allow_redirects=True, timeout=10)

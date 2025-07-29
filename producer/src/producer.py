@@ -22,12 +22,12 @@ def main():
             torch.backends.cudnn.allow_tf32 = True
 
     args = producer_cli.producer_cli.parse_args()
-    
+
     server = setup_server()
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
 
-    if False:
+    if True:
         encode_point_cloud(
             server,
             args.realsense_clr_capture_width,
@@ -36,8 +36,7 @@ def main():
             args.realsense_depth_capture_height,
             args.realsense_target_fps)
     else:
-        with torch.autocast(device_type=DEVICE.__str__(), dtype=torch.bfloat16):
-            hope_server.launch_processes(server, args, DEVICE)
+        hope_server.launch_processes(server, args, DEVICE)
         
 
 if __name__ == "__main__":

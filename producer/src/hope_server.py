@@ -41,6 +41,8 @@ from gesture_recognition import (
 import torch
 import torch.nn.functional as F
 
+DEBUG = True
+
 class DracoEncoder:
     def __init__(self):
         self.posQuant = 10
@@ -83,9 +85,10 @@ def camera_process(
         ready_cluster_event: mp.Event,
         ready_roi_event: mp.Event) :
     
-    draco_executor = ProcessPoolExecutor(max_workers=2)
-    DEBUG = True
+    global DEBUG
 
+    draco_executor = ProcessPoolExecutor(max_workers=2)
+    
     if DEBUG:
         win_name = "RealSense vis"
         cv2.namedWindow(win_name, cv2.WINDOW_AUTOSIZE)
@@ -192,14 +195,19 @@ def camera_process(
             for bounding_box_normalized in gesture_recognizer.latest_bounding_boxes:
                 if bounding_box_normalized:
                     roi: np.array = bounding_box_normalized.to_pixel(display.shape[1], display.shape[0], True)
+                    shared_roi[:] = roi
+                    ready_roi_event.set()
 
             shared_frame[:] = display
             ready_frame_event.set()
 
+            #TODO: we need to find some work todo here in order to hide latency between processes
+
             if ready_cluster_event.is_set():
-                if DEBUG:
-                    display[shared_cluster[:, :, 0], 2] = 255
                 ready_cluster_event.clear()
+
+            if DEBUG:
+                display[shared_cluster[:, :, 0], 2] = 255
 
             flat_cluster = shared_cluster.flatten()
             in_roi = valid & flat_cluster
@@ -271,72 +279,8 @@ def camera_process(
         cv2.destroyAllWindows()
         print("Camera process stopped")
 
-def main_thread_worker_sam(
-        predictor: sam2_camera.SAM2CameraPredictor,
-        frame_queue: mp.Queue,
-        result_queue: mp.Queue,
-        stop_event: mp.Queue) :
-
-    win_name = "RealSense Color"
-    cv2.namedWindow(win_name, cv2.WINDOW_AUTOSIZE)
-
-    if_sam_init = False
-    out_mask_logits = None
-    frame_data = None
-
-    while not stop_event.is_set():
-        try :
-            cur_frame_data = frame_queue.get(block=True)
-            frame_data = cur_frame_data
-        except queue.Empty:
-            pass
-
-        if frame_data is None:
-            continue
-
-        frame = frame_data.frame
-   
-        if frame_data.roi is not None:
-            cv2.rectangle(frame, (frame_data.roi[0], frame_data.roi[1]), (frame_data.roi[2], frame_data.roi[3]), (0,255,0), 2)
-
-        if not if_sam_init and frame_data.roi is not None:
-            if_sam_init = True
-            predictor.load_first_frame(frame)
-
-            ann_frame_idx = 0
-            ann_obj_id = (1,)
-            labels = np.array([1], dtype=np.int32)
-            points = np.array([[0.5 * (frame_data.roi[0] + frame_data.roi[2]), 0.5 * (frame_data.roi[1] + frame_data.roi[3])]], dtype=np.float32)
-
-            _, _, out_mask_logits = predictor.add_new_prompt(
-                frame_idx=ann_frame_idx, obj_id=ann_obj_id, points=points, labels=labels)
-        elif if_sam_init :
-            _, out_mask_logits = predictor.track(frame)
-
-        if out_mask_logits is not None:
-            out_mask_logits = (out_mask_logits[0] > 0.0).permute(1, 2, 0).cpu().numpy()
-            out_mask = out_mask_logits.astype(np.uint8)
-            segmentaion_mask = np.zeros_like(frame, dtype=np.uint8)
-            segmentaion_mask[:, :, 0] = out_mask[:, :, 0] * 255
-            frame = cv2.addWeighted(frame, 1, segmentaion_mask, 1, 0)
-        
-            #try:
-            #    resultData = ProcessedData(out_mask_logits, time.time())
-            #    result_queue.put(resultData)
-            #except queue.Full:
-            #    print("Frame queue is full, skipping frame")
-
-            out_mask_logits = None
-
-        cv2.imshow(win_name, frame)
-
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-    
-    cv2.destroyAllWindows()
-
-def main_thread_worker_yolo(
-        model: YOLOE,
+def thread_worker_sam2(
+        path_to_yaml, path_to_chkp, device, image_size,
         shared_frame_name,
         shared_cluster_name,
         shared_roi_name,
@@ -344,48 +288,139 @@ def main_thread_worker_yolo(
         stop_event: mp.Event,
         ready_frame_event: mp.Event,
         ready_cluster_event: mp.Event,
-        ready_roi_event: mp.Event) :
+        ready_roi_event: mp.Event,
+        predictor_ready: mp.Event) :
 
-    sf = shared_memory.SharedMemory(name=shared_frame_name)
-    sc = shared_memory.SharedMemory(name=shared_cluster_name)
-    sroi = shared_memory.SharedMemory(name=shared_roi_name)
+    with torch.autocast(device_type=device.__str__(), dtype=torch.bfloat16):
+        predictor = sam2_camera.build_sam2_camera_predictor(
+            config_file=Path(path_to_yaml).name, 
+            config_path=str(Path(".", "configs", "sam2.1")),
+            ckpt_path=path_to_chkp, 
+            device=device,
+            image_size=image_size)
+        
+        sf = shared_memory.SharedMemory(name=shared_frame_name)
+        sc = shared_memory.SharedMemory(name=shared_cluster_name)
+        sroi = shared_memory.SharedMemory(name=shared_roi_name)
 
-    shared_frame = np.ndarray((frame_shape[0], frame_shape[1], 3), dtype=np.uint8, buffer=sf.buf)
-    shared_cluster = np.ndarray((frame_shape[0], frame_shape[1], 1), dtype=np.bool, buffer=sc.buf)
-    shared_roi = np.ndarray((4,), dtype=np.int32, buffer=sroi.buf)
-    
-    ready_cluster_event.clear()
-    local_frame = np.zeros_like(shared_frame)
+        shared_frame = np.ndarray((frame_shape[0], frame_shape[1], 3), dtype=np.uint8, buffer=sf.buf)
+        shared_binary_mask = np.ndarray((frame_shape[0], frame_shape[1], 1), dtype=np.bool, buffer=sc.buf)
+        shared_roi = np.ndarray((1, 4), dtype=np.int32, buffer=sroi.buf)
 
-    while not stop_event.is_set():
-        if ready_frame_event.is_set():
-            local_frame[:] = shared_frame
+        predictor_ready.clear()
+        ready_cluster_event.clear()
+        local_frame = np.zeros_like(shared_frame)
+        roi_init = False
+        shared_frame[:] = 0
+        predictor_ready.set()
 
-            #perf = time.perf_counter()
-            result = model.predict(local_frame, conf=0.1, verbose=False)[0]
+        while not stop_event.is_set():
+            if ready_frame_event.is_set():
+                local_frame[:] = shared_frame
 
-            #boxes = result.boxes.xyxy.cpu().numpy().astype(np.int32)
-            #cls = result.boxes.cls.cpu().numpy()
-            #binary_mask = np.zeros_like(frame, dtype=np.bool, buffer=shm.buf)
-            shared_cluster[:] = False
+                if ready_roi_event.is_set():
+                    roi_local = shared_roi.copy()
+                    roi_center = np.array([[0.5 * (roi_local[0, 0] + roi_local[0, 2]), 0.5 * (roi_local[0, 1] + roi_local[0, 3])]], dtype=np.float32)
+                    predictor.load_first_frame(local_frame)
+                    ann_frame_idx = 0
+                    ann_obj_id = (1,)
+                    labels = np.array([1], dtype=np.int32)
+                    roi_init = True
+                    _, _, out_mask_logits = predictor.add_new_prompt(frame_idx=ann_frame_idx, obj_id=ann_obj_id, points=roi_center, labels=labels)
+                    shared_binary_mask[:] = (out_mask_logits[0] > 0.0).permute(1, 2, 0).cpu().numpy().astype(np.bool)
+                    ready_roi_event.clear()
+                else :
+                    if roi_init:
+                        _, out_mask_logits = predictor.track(local_frame)
+                        shared_binary_mask[:] = (out_mask_logits[0] > 0.0).permute(1, 2, 0).cpu().numpy().astype(np.bool)
 
-            if result.masks is not None:
-                binary_mask = torch.zeros(size=(result.masks.data.shape[1], result.masks.data.shape[2]), dtype=torch.bool, device=result.masks.data.device)
-                for mask in result.masks.data:
-                    binary_mask |= mask > 0.5
+                ready_frame_event.clear()
+                ready_cluster_event.set()
 
-                binary_mask = binary_mask.type(torch.uint8)
-                binary_mask = F.interpolate(binary_mask[None, None, :, :], size=(result.masks.orig_shape[0], result.masks.orig_shape[1]), mode='nearest')
-                shared_cluster[:] = binary_mask.squeeze(0).permute(1, 2, 0).cpu().numpy().astype(np.bool)
+def thread_worker_yoloe(
+        model: YOLOE,
+        device,
+        shared_frame_name,
+        shared_cluster_name,
+        shared_roi_name,
+        frame_shape,
+        stop_event: mp.Event,
+        ready_frame_event: mp.Event,
+        ready_cluster_event: mp.Event,
+        ready_roi_event: mp.Event,
+        predictor_ready: mp.Event) :
 
-                #for (box, c) in zip(boxes, cls):
-                #    cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), (0, 255, 0), 1)
-                #    cv2.putText(frame, model.names[c], (box[0] - 1, box[1] - 1), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1)
-            #perf = (time.perf_counter() - perf) * 100
-            #print(f'time to finish {perf}')
-            
-            ready_frame_event.clear()
-            ready_cluster_event.set()
+    with torch.autocast(device_type=device.__str__(), dtype=torch.bfloat16):
+        sf = shared_memory.SharedMemory(name=shared_frame_name)
+        sc = shared_memory.SharedMemory(name=shared_cluster_name)
+        sroi = shared_memory.SharedMemory(name=shared_roi_name)
+
+        shared_frame = np.ndarray((frame_shape[0], frame_shape[1], 3), dtype=np.uint8, buffer=sf.buf)
+        shared_binary_mask = np.ndarray((frame_shape[0], frame_shape[1], 1), dtype=np.bool, buffer=sc.buf)
+        shared_roi = np.ndarray((1, 4), dtype=np.int32, buffer=sroi.buf)
+        
+        predictor_ready.clear()
+        ready_cluster_event.clear()
+        local_frame = np.zeros_like(shared_frame)
+        roi_init = False
+        cls_index = 0
+        shared_frame[:] = 0
+        result = model.predict(shared_frame, conf=0.1, verbose=False) #warmup
+        binary_mask = torch.zeros(size=(384, 640), dtype=torch.bool, device=model.device)  #this wont work in the future...
+        predictor_ready.set()
+
+        while not stop_event.is_set():
+            if ready_frame_event.is_set():
+                local_frame[:] = shared_frame
+
+                result = model.predict(local_frame, conf=0.1, verbose=False)[0]
+                #class_names = result.names
+
+                if ready_roi_event.is_set():
+                    if result.boxes:
+                        roi_local = shared_roi.copy()
+                        roi_center = np.array([0.5 * (roi_local[0, 0] + roi_local[0, 2]), 0.5 * (roi_local[0, 1] + roi_local[0, 3])], dtype=np.float32)
+                        boxes = result.boxes.xyxy.cpu().numpy().astype(np.float32)
+                        x_interval = (boxes[:, 0] <= roi_center[0]) & (roi_center[0] <= boxes[:, 2])
+                        y_interval = (boxes[:, 1] <= roi_center[1]) & (roi_center[1] <= boxes[:, 3])
+                        roi_isects = x_interval & y_interval
+
+                        for roi_i, roi_isect in enumerate(roi_isects):
+                            if roi_isect:
+                                cls_index = int(result.boxes.cls.cpu().numpy()[roi_i])
+                                roi_init = True
+
+                    ready_roi_event.clear()
+
+                if not roi_init:
+                    shared_binary_mask[:] = False
+                    if result.masks is not None:
+                        binary_mask[:] = False
+                        for mask in result.masks.data:
+                            binary_mask |= mask > 0.5
+
+                        binary_mask = binary_mask.type(torch.uint8)
+                        out_mask = F.interpolate(binary_mask[None, None, :, :], size=(result.masks.orig_shape[0], result.masks.orig_shape[1]), mode='nearest')
+                        shared_binary_mask[:] = out_mask.squeeze(0).permute(1, 2, 0).cpu().numpy().astype(np.bool)
+                else:
+                    shared_binary_mask[:] = False
+
+                    if result.masks is not None :
+                        binary_mask[:] = False
+                        classes = result.boxes.cls.cpu().numpy().astype(np.int32)
+
+                        for box_i, cls_i in enumerate(classes):
+                            if cls_i != cls_index:
+                                continue
+
+                            binary_mask |= result.masks.data[box_i, ::] > 0.5
+
+                        binary_mask = binary_mask.type(torch.uint8)
+                        out_mask = F.interpolate(binary_mask[None, None, :, :], size=(result.masks.orig_shape[0], result.masks.orig_shape[1]), mode='nearest')
+                        shared_binary_mask[:] = out_mask.squeeze(0).permute(1, 2, 0).cpu().numpy().astype(np.bool)
+                
+                ready_frame_event.clear()
+                ready_cluster_event.set()
 
 def launch_processes(server: bc.ProducerServer, args, device : str) -> None:
     cmr_clr_width = args.realsense_clr_capture_width
@@ -398,6 +433,7 @@ def launch_processes(server: bc.ProducerServer, args, device : str) -> None:
     ready_frame_event = mp.Event()
     ready_cluster_event = mp.Event()
     ready_roi_event = mp.Event()
+    predictor_event = mp.Event()
 
     shm_cluster = shared_memory.SharedMemory(create=True, size=cmr_clr_width * cmr_clr_height * np.dtype(np.bool).itemsize)
     shm_frame = shared_memory.SharedMemory(create=True, size=cmr_clr_width * cmr_clr_height * 3 * np.dtype(np.uint8).itemsize)
@@ -434,14 +470,10 @@ def launch_processes(server: bc.ProducerServer, args, device : str) -> None:
             print(f'Checkpoint {path_to_chkp} is missing, downloading...')
             os.makedirs(producer_cli.CHECKPOINT_PATH, exist_ok=True)
             producer_cli.getRequest(producer_cli.CHECKPOINT_PATH, link[1])
-
-        predictor = sam2_camera.build_sam2_camera_predictor(
-            config_file=Path(path_to_yaml).name, 
-            config_path=str(Path(".", "configs", "sam2.1")),
-            ckpt_path=path_to_chkp, 
-            device=device,
-            image_size=args.sam2_image_size)
-    else:
+        
+        predictor_proc = mp.Process(target=thread_worker_sam2, 
+            args=(path_to_yaml, path_to_chkp, device, args.sam2_image_size, shm_frame.name, shm_cluster.name, shm_roi.name, (cmr_clr_height, cmr_clr_width), stop_event, ready_frame_event, ready_cluster_event, ready_roi_event, predictor_event))
+    elif args.cluster_predictor == 'yolo':
         predictor = None
         if args.yolo_size == 'large':
             predictor = YOLOE("yoloe-11l-seg.pt", verbose=False)
@@ -453,12 +485,18 @@ def launch_processes(server: bc.ProducerServer, args, device : str) -> None:
         names = ["glasses", "shirt", "hat", "shorts"]
         predictor.set_classes(names, predictor.get_text_pe(names))
 
-    predictor_proc = mp.Process(target=main_thread_worker_yolo, 
-        args=(predictor, shm_frame.name, shm_cluster.name, shm_roi.name, (cmr_clr_height, cmr_clr_width), stop_event, ready_frame_event, ready_cluster_event, ready_roi_event))
-
+        predictor_proc = mp.Process(target=thread_worker_yoloe, 
+            args=(predictor, device, shm_frame.name, shm_cluster.name, shm_roi.name, (cmr_clr_height, cmr_clr_width), stop_event, ready_frame_event, ready_cluster_event, ready_roi_event, predictor_event))
+    else:
+        print('Failed to parse predictor')
+        return
+    
     try:
         predictor_proc.start()
         #main_thread_worker_yolo(predictor, frame_queue, result_queue, stop_event)
+
+        while not predictor_event.is_set():
+            continue
 
         camera_process(server, shm_frame.name, shm_cluster.name, shm_roi.name,
             cmr_clr_width, cmr_clr_height,

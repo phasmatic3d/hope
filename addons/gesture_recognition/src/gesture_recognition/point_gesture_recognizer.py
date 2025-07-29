@@ -70,6 +70,12 @@ class NormalizedBoundingBox:
     xmax: float
     ymax: float
 
+    def __init__(self, xmin, ymin, xmax, ymax):
+        self.xmin = np.clip(xmin, 0.0, 1.0)
+        self.ymin = np.clip(ymin, 0.0, 1.0)
+        self.xmax = np.clip(xmax, 0.0, 1.0)
+        self.ymax= np.clip(ymax, 0.0, 1.0)
+
     @property
     def width(self) -> float:
         return self.xmax - self.xmin
@@ -78,6 +84,13 @@ class NormalizedBoundingBox:
     def height(self) -> float:
         return self.ymax - self.ymin
 
+    @property
+    def center(self) -> np.ndarray:
+        return np.array([0.5 * (self.xmax + self.xmin), 0.5 * (self.ymax + self.ymin),], dtype=np.float32)
+        
+    def contains(self, p : np.ndarray) -> bool:
+        return self.xmin <= p[0] and p[0] <= self.xmax and self.ymin <= p[1] and p[1] <= self.ymax
+    
     def to_pixel(self, img_w: int, img_h: int, as_arr: bool = False) -> PixelBoundingBox | np.ndarray:
         if as_arr :
             return np.array([
@@ -87,10 +100,10 @@ class NormalizedBoundingBox:
                 int(self.ymax * img_h),], dtype=np.int32)
         else :
             return PixelBoundingBox(
-                x1=int(self.xmin * img_w),
-                y1=int(self.ymin * img_h),
-                x2=int(self.xmax * img_w),
-                y2=int(self.ymax * img_h),)
+                int(self.xmin * img_w),
+                int(self.ymin * img_h),
+                int(self.xmax * img_w),
+                int(self.ymax * img_h),)
 
 class PointingGestureRecognizer:
 
@@ -137,6 +150,7 @@ class PointingGestureRecognizer:
         self.focal_distance_x = focal_length_x
         self.focal_distance_y = focal_length_y
         self.box_size = box_size
+        self.query_area = None
 
     def recognize(self, np_image: np.array, frame_timestamp_ms: int):
         for box in self.latest_bounding_boxes:
@@ -175,7 +189,7 @@ class PointingGestureRecognizer:
 
         def is_partial_fist(thump_tip, index_mcp, middle_finger_tip, ring_finder_tip, pinky_tip, wrist):
             def dist(a, b) :
-                aTob = np.array([b.x, b.y]) - np.array([a.x, a.y])
+                aTob = np.array([b.x, b.y, b.z]) - np.array([a.x, a.y, a.z])
                 return np.linalg.norm(aTob)
             
             #wrist_dist_thump = dist(thump_tip, wrist)
@@ -210,8 +224,6 @@ class PointingGestureRecognizer:
                 self.latest_bounding_boxes[hand_index] = None
                 continue
 
-            self._seen_frames[hand_index] += 1
-
             dip = hand_landmarks[HandLandmark.INDEX_FINGER_DIP]
             tip = hand_landmarks[HandLandmark.INDEX_FINGER_TIP]
 
@@ -227,11 +239,22 @@ class PointingGestureRecognizer:
             DipToTip = tip_v - dip_v
             #DipToTipDist = np.linalg.norm(DipToTip)
             #DipToTip = DipToTip / DipToTipDist
-            bboxMin = bboxMin + DipToTip * 0.6
-            bboxMax = bboxMax + DipToTip * 0.6
+            bboxMin = bboxMin + DipToTip * 0.7
+            bboxMax = bboxMax + DipToTip * 0.7
             bboxMin = np.clip(bboxMin, 0.0, 1.0)
             bboxMax = np.clip(bboxMax, 0.0, 1.0)
             bounding_box_norm = NormalizedBoundingBox(bboxMin[0], bboxMin[1], bboxMax[0], bboxMax[1])
+
+            if self._seen_frames[hand_index] == 0:
+                self.query_area = NormalizedBoundingBox(bboxMin[0] - 0.03, bboxMin[1] - 0.03, bboxMax[0] + 0.03, bboxMax[1] + 0.03)
+                self._seen_frames[hand_index] = 1
+            else:
+                if self.query_area.contains(bounding_box_norm.center):
+                    self._seen_frames[hand_index] += 1
+                else :
+                    self.latest_bounding_boxes[hand_index] = None
+                    self._seen_frames[hand_index] = 0
+                    continue
 
             if self._seen_frames[hand_index] >= self._delay_frames:
                 self.latest_bounding_boxes[hand_index] = bounding_box_norm
