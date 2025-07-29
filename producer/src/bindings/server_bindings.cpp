@@ -26,6 +26,7 @@ namespace nb = nanobind;
 using websocketpp::connection_hdl;
 
 
+
 class ProducerServer 
 {
 public:
@@ -130,6 +131,10 @@ public:
     void broadcast(const nb::bytes &data) 
     {
         //m_logger->debug("Broadcasting {} bytes", data.size());
+        size_t broadcast_round = ++m_broadcast_counter;
+        size_t message_size = data.size();
+        size_t connections_size = m_connections.size();
+
         std::lock_guard<std::mutex> lock(m_connection_mutex);
         for (auto &hdl : m_connections) 
         {
@@ -148,7 +153,8 @@ public:
 
             auto t1 = Clock::now();
 
-            if (ec) {
+            if (ec) 
+            {
                 throw std::runtime_error("Send failed: " + ec.message());
             }
 
@@ -158,7 +164,32 @@ public:
                 auto dur_us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
                 double dur_ms = static_cast<double>(dur_us) / 1000.0;
                 // enqueue (timestamp, duration, connection_id)
-                enqueueLogEntry(t0, dur_ms, hdl);
+                //struct CsvFileEntry 
+                //{
+                //    Timestamp timestamp,
+                //    double duration_ms,
+                //    std::string connection_id,
+                //    std::string error
+                //    size_t broadcast_round,
+                //    size_t message_size, 
+                //    size_t connections_size,
+                //}
+                //HEADER="timestamp_ms_since_epoch,duration_ms,connection_id,error,broadcast_round,message_size,connections_size";
+
+                std::ostringstream ss;
+                ss << hdl.lock().get();
+
+                CsvFileEntry entry = {
+                    t0, 
+                    dur_ms, 
+                    ss.str(), 
+                    ec ? ec.message() : "no error occured",
+                    broadcast_round, 
+                    message_size, 
+                    connections_size
+                };
+
+                enqueueLogEntry(entry);
             }
         }
     }
@@ -259,8 +290,8 @@ public:
     }
 
 private:
-    int m_port;
-
+    size_t m_port;
+    size_t m_broadcast_counter = 0;
     std::shared_ptr<spdlog::logger> m_logger;
     websocketpp::server<websocketpp::config::asio> m_server;
     std::set<connection_hdl, std::owner_less<connection_hdl>> m_connections;
@@ -269,21 +300,34 @@ private:
 
     // --- Members for writing to csv ---
     using Clock     = std::chrono::system_clock;
-    using TimePoint = Clock::time_point;
-    using LogEntry  = std::tuple<TimePoint, double,    std::string>;
+    using Timestamp = Clock::time_point;
+
+    struct CsvFileEntry
+    {
+        Timestamp timestamp;
+        double duration_ms;
+        std::string connection_id;
+        std::string error;
+        size_t broadcast_round;
+        size_t message_size;
+        size_t connections_size;
+    };
+
     bool                            write_to_csv;
     std::ofstream                   csv;
     std::mutex                      log_mutex;
     std::condition_variable         log_cv;
-    std::queue<LogEntry>            log_queue;
+    std::queue<CsvFileEntry>        log_queue;
     std::thread                     log_thread;
     bool                            stop_logging;
+
+    static constexpr const char* HEADER="timestamp_ms_since_epoch,duration_ms,connection_id,error,broadcast_round,message_size,connections_size";
+
 
     void startLoggingThread() 
     {
         // open CSV file and write header
         const std::string path = "./broadcaster_wrapper/send_times.csv";
-        const std::string header = "timestamp_ms_since_epoch,duration_ms,connection_id";
 
         bool need_header = true;
         {
@@ -291,7 +335,7 @@ private:
             if (in.is_open()) 
             {
                 std::string first;
-                if (std::getline(in, first) && first == header) 
+                if (std::getline(in, first) && first == HEADER) 
                 {
                     need_header = false;
                 }
@@ -309,8 +353,8 @@ private:
 
         if (need_header) 
         {
-            m_logger->info("Writing header...");
-            csv << header << "\n";
+            m_logger->info("Writing header {} to csv", HEADER);
+            csv << HEADER << "\n";
         }
 
         // spawn background thread
@@ -330,14 +374,33 @@ private:
                 // flush all entries
                 while (!log_queue.empty()) 
                 {
-                    auto [ts, dur, conn] = std::move(log_queue.front());
+                    auto entry = std::move(log_queue.front());
                     log_queue.pop();
 
                     // convert timestamp to milliseconds since epoch
-                    auto epoch = std::chrono::time_point_cast<std::chrono::milliseconds>(ts).time_since_epoch().count();
+                    auto epoch = std::chrono::time_point_cast<std::chrono::milliseconds>(entry.timestamp).time_since_epoch().count();
 
-                    csv << epoch << "," << dur << "," << conn << "\n";
+                    //struct CsvFileEntry 
+                    //{
+                    //    Timestamp timestamp,
+                    //    double duration_ms,
+                    //    connection_id,
+                    //    error
+                    //    size_t broadcast_round,
+                    //    size_t message_size, 
+                    //    size_t connections_size,
+                    //}
+                    //HEADER="timestamp_ms_since_epoch,duration_ms,connection_id,error,broadcast_round,message_size,connections_size";
+                    csv 
+                        << epoch << "," 
+                        << entry.duration_ms << "," 
+                        << entry.connection_id << "," 
+                        << entry.error << ","
+                        << entry.broadcast_round << "," 
+                        << entry.message_size << "," 
+                        << entry.connections_size << "\n";
                 }
+
                 csv.flush();
 
                 if (stop_logging) break;
@@ -345,19 +408,10 @@ private:
         });
     }
 
-    void enqueueLogEntry
-    (
-        TimePoint ts,
-        double duration_ms,
-        connection_hdl hdl
-    )
+    void enqueueLogEntry(const CsvFileEntry& entry)
     {
-        std::ostringstream ss;
-        ss << hdl.lock().get(); 
-        {
-            std::lock_guard<std::mutex> lg(log_mutex);
-            log_queue.emplace(ts, duration_ms, ss.str());
-        }
+        std::lock_guard<std::mutex> lg(log_mutex);
+        log_queue.push(entry);
         log_cv.notify_one();
     }
 
