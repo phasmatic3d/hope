@@ -1,5 +1,14 @@
 #include <set>
 #include <string>
+#include <chrono>
+#include <condition_variable>
+#include <fstream>
+#include <sstream>
+#include <mutex>
+#include <queue>
+#include <thread>
+#include <tuple>
+#include <vector>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
@@ -17,10 +26,17 @@ namespace nb = nanobind;
 using websocketpp::connection_hdl;
 
 
-class ProducerServer {
+class ProducerServer 
+{
 public:
-    ProducerServer(int port)
-    : m_port(port)
+    ProducerServer
+    (
+        int port, 
+        bool write_to_csv=false
+    )
+    :m_port(port), 
+    stop_logging(false), 
+    write_to_csv(write_to_csv)
     {
         m_logger = spdlog::stdout_color_mt("broadcaster");
         m_logger->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [%n] %v");
@@ -28,50 +44,81 @@ public:
         m_logger->flush_on(spdlog::level::info);
         m_logger->info("Initialized Broadcaster");
 
+        if(write_to_csv) startLoggingThread();
+
         m_server.init_asio();
         
         // disable logging
-        m_server.clear_access_channels(
-        websocketpp::log::alevel::frame_header   
-        | websocketpp::log::alevel::frame_payload  
+        m_server.clear_access_channels
+        (
+            websocketpp::log::alevel::frame_header | websocketpp::log::alevel::frame_payload  
         );
 
         // On new WS connection
-        m_server.set_open_handler([this](connection_hdl h){
-            std::lock_guard<std::mutex> lock(m_connection_mutex);
-            m_connections.insert(h);
-            m_logger->info("Client connected");
-        });
+        m_server.set_open_handler
+        (
+            [this](connection_hdl h)
+            {
+                std::lock_guard<std::mutex> lock(m_connection_mutex);
+                m_connections.insert(h);
+                m_logger->info("Client connected");
+            }
+        );
 
         // On WS close
-        m_server.set_close_handler([this](connection_hdl h){
-            std::lock_guard<std::mutex> lock(m_connection_mutex);
-            m_connections.erase(h);
-            m_logger->info("Client disconnected");
-        });
+        m_server.set_close_handler
+        (
+            [this](connection_hdl h)
+            {
+                std::lock_guard<std::mutex> lock(m_connection_mutex);
+                m_connections.erase(h);
+                m_logger->info("Client disconnected");
+            }
+        );
 
         // HTTP redirect  client
-        m_server.set_http_handler([this](connection_hdl hdl){
-            auto con = m_server.get_con_from_hdl(hdl);
-            con->set_status(websocketpp::http::status_code::found);
-            con->replace_header("Location", m_redirect_url);
-            m_logger->debug("Redirecting HTTP client to {}", m_redirect_url);
-        });
+        m_server.set_http_handler
+        (
+            [this](connection_hdl hdl)
+            {
+                auto con = m_server.get_con_from_hdl(hdl);
+                con->set_status(websocketpp::http::status_code::found);
+                con->replace_header("Location", m_redirect_url);
+                m_logger->debug("Redirecting HTTP client to {}", m_redirect_url);
+            }
+        );
 
     }
 
+    ~ProducerServer() 
+    {
+        if(write_to_csv)
+        {
+            // Signal logging thread to exit, then join it
+            {
+                std::lock_guard<std::mutex> lg(log_mutex);
+                stop_logging = true;
+            }
+            log_cv.notify_one();
+            if (log_thread.joinable()) log_thread.join();
+        }
+    }
+
     // Start listening on the given port
-    void listen() {
+    void listen() 
+    {
         m_server.listen(m_port);
         m_server.start_accept();
     }
 
     // Blocking run (typically spawn in a thread)
-    void run() {
+    void run() 
+    {
         m_server.run();
     }
 
-    void stop() {
+    void stop() 
+    {
         // Stop accepting any more incoming connections
         m_server.stop_listening();
         // Interrupt the ASIO loop so run() will return
@@ -80,30 +127,52 @@ public:
     }
 
     // Broadcast a binary message to all clients
-    void broadcast(const nb::bytes &data) {
+    void broadcast(const nb::bytes &data) 
+    {
         //m_logger->debug("Broadcasting {} bytes", data.size());
         std::lock_guard<std::mutex> lock(m_connection_mutex);
-        for (auto &hdl : m_connections) {
+        for (auto &hdl : m_connections) 
+        {
+
+            auto t0 = Clock::now();
+
             websocketpp::lib::error_code ec;
-            m_server.send(hdl,
-                          (const void*)data.data(),
-                          data.size(),
-                          websocketpp::frame::opcode::binary,
-                          ec);
+            m_server.send
+            (
+                hdl,
+                (const void*)data.data(),
+                data.size(),
+                websocketpp::frame::opcode::binary,
+                ec
+            );
+
+            auto t1 = Clock::now();
+
             if (ec) {
                 throw std::runtime_error("Send failed: " + ec.message());
+            }
+
+            if(write_to_csv)
+            {
+                // compute duration in milliseconds
+                auto dur_us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+                double dur_ms = static_cast<double>(dur_us) / 1000.0;
+                // enqueue (timestamp, duration, connection_id)
+                enqueueLogEntry(t0, dur_ms, hdl);
             }
         }
     }
 
 
-    void set_redirect(const std::string &url) {
+    void set_redirect(const std::string &url) 
+    {
         // Trim leading / trailing whitespace
         //std::string tmp = url.cast<std::string>();
         std::string tmp = url;
         auto ws_front = tmp.find_first_not_of(" \t\r\n");
         auto ws_back  = tmp.find_last_not_of (" \t\r\n");
-        if (ws_front == std::string::npos) {
+        if (ws_front == std::string::npos) 
+        {
             throw std::invalid_argument("Redirect URL cannot be empty or whitespace");
         }
         tmp = tmp.substr(ws_front, ws_back - ws_front + 1);
@@ -114,26 +183,40 @@ public:
 
         // Lower-case prefix to check for scheme
         std::string lower = tmp;
-        std::transform(lower.begin(), lower.end(), lower.begin(),
-                       [](unsigned char c){ return std::tolower(c); });
+        std::transform
+        (
+            lower.begin(), 
+            lower.end(), 
+            lower.begin(),
+            [](unsigned char c)
+            { 
+                return std::tolower(c); 
+            }
+        );
 
-        if (lower.rfind("http://", 0) == 0 || lower.rfind("https://", 0) == 0) {
+        if (lower.rfind("http://", 0) == 0 || lower.rfind("https://", 0) == 0) 
+        {
             // tmp has no trailing slash now
             const auto scheme_end = tmp.find("://") + 3;
             const auto path_pos   = tmp.find('/', scheme_end);
         
             // authority = host[:port]
-            std::string authority = tmp.substr(
+            std::string authority = tmp.substr
+            (
                 scheme_end,
                 (path_pos == std::string::npos ? tmp.size() : path_pos) - scheme_end
             );
             // rest = “/…” or empty
-            std::string rest = (path_pos == std::string::npos
-                                ? std::string{}
-                                : tmp.substr(path_pos));
+            std::string rest = 
+            (
+                path_pos == std::string::npos
+                ? std::string{}
+                : tmp.substr(path_pos)
+            );
             
             // if no “:port” in authority, append default
-            if (authority.find(':') == std::string::npos) {
+            if (authority.find(':') == std::string::npos) 
+            {
                 authority += ":" + std::to_string(m_port);
             }
         
@@ -151,16 +234,22 @@ public:
         std::string host;
         int port = m_port;  // default to constructor port
         auto colon = tmp.find(':');
-        if (colon != std::string::npos) {
+        if (colon != std::string::npos) 
+        {
             host = tmp.substr(0, colon);
             std::string port_str = tmp.substr(colon + 1);
-            try {
+            try 
+            {
                 port = std::stoi(port_str);
-            } catch (...) {
+            } 
+            catch (...) 
+            {
                 m_logger->error("Invalid port in redirect URL: “" + port_str + "”");
                 throw std::invalid_argument("Invalid port in redirect URL: “" + port_str + "”");
             }
-        } else {
+        } 
+        else 
+        {
             host = tmp;
         }
 
@@ -171,18 +260,116 @@ public:
 
 private:
     int m_port;
+
     std::shared_ptr<spdlog::logger> m_logger;
     websocketpp::server<websocketpp::config::asio> m_server;
     std::set<connection_hdl, std::owner_less<connection_hdl>> m_connections;
     std::mutex m_connection_mutex;
     std::string m_redirect_url = "/";
+
+    // --- Members for writing to csv ---
+    using Clock     = std::chrono::system_clock;
+    using TimePoint = Clock::time_point;
+    using LogEntry  = std::tuple<TimePoint, double,    std::string>;
+    bool                            write_to_csv;
+    std::ofstream                   csv;
+    std::mutex                      log_mutex;
+    std::condition_variable         log_cv;
+    std::queue<LogEntry>            log_queue;
+    std::thread                     log_thread;
+    bool                            stop_logging;
+
+    void startLoggingThread() 
+    {
+        // open CSV file and write header
+        const std::string path = "./broadcaster_wrapper/send_times.csv";
+        const std::string header = "timestamp_ms_since_epoch,duration_ms,connection_id";
+
+        bool need_header = true;
+        {
+            std::ifstream in(path);
+            if (in.is_open()) 
+            {
+                std::string first;
+                if (std::getline(in, first) && first == header) 
+                {
+                    need_header = false;
+                }
+            }
+            in.close();
+        }
+
+        csv.open(path, std::ios::out | std::ios::app);
+
+        if (!csv.is_open()) 
+        {
+            m_logger->error("Failed to open log CSV at {}", path);
+            throw std::runtime_error("Failed to open log CSV at " + path);
+        }
+
+        if (need_header) 
+        {
+            m_logger->info("Writing header...");
+            csv << header << "\n";
+        }
+
+        // spawn background thread
+        log_thread = std::thread([this] {
+            std::unique_lock<std::mutex> lk(log_mutex);
+            while (true) 
+            {
+                // wait until there is data or we should stop
+                log_cv.wait
+                (
+                    lk, [&]
+                    {
+                        return !log_queue.empty() || stop_logging;
+                    }
+                );
+
+                // flush all entries
+                while (!log_queue.empty()) 
+                {
+                    auto [ts, dur, conn] = std::move(log_queue.front());
+                    log_queue.pop();
+
+                    // convert timestamp to milliseconds since epoch
+                    auto epoch = std::chrono::time_point_cast<std::chrono::milliseconds>(ts).time_since_epoch().count();
+
+                    csv << epoch << "," << dur << "," << conn << "\n";
+                }
+                csv.flush();
+
+                if (stop_logging) break;
+            }
+        });
+    }
+
+    void enqueueLogEntry
+    (
+        TimePoint ts,
+        double duration_ms,
+        connection_hdl hdl
+    )
+    {
+        std::ostringstream ss;
+        ss << hdl.lock().get(); 
+        {
+            std::lock_guard<std::mutex> lg(log_mutex);
+            log_queue.emplace(ts, duration_ms, ss.str());
+        }
+        log_cv.notify_one();
+    }
+
 };
 
 NB_MODULE(broadcaster, m) {
     m.doc() = "WebSocket++ Producer server binding";
 
     nb::class_<ProducerServer>(m, "ProducerServer")
-        .def(nb::init<int>(), nb::arg("port"))
+        .def(nb::init<int, bool>(),
+         nb::arg("port"),
+         nb::arg("write_to_csv"))
         .def("listen", &ProducerServer::listen,
          nb::call_guard<nb::gil_scoped_release>(),
          "Begin listening on the configured port")

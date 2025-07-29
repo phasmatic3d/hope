@@ -91,7 +91,7 @@ def encode_point_cloud(
     encoding_mode: EncodingMode
 ):
 
-    #list_realsense_modes() 
+    list_realsense_modes() 
     # Setup RealSense
     pipeline = rs.pipeline()
     cfg = rs.config()
@@ -133,7 +133,7 @@ def encode_point_cloud(
 
     # Settings
     draco_full_encoding = DracoWrapper(
-        compression_stats=compression_full_stats
+        compression_stats=compression_full_stats,
     )
 
     draco_roi_encoding = DracoWrapper(
@@ -187,20 +187,20 @@ def encode_point_cloud(
                 # E.g. if you press “=” to bump position_quantization up, this ensures the next
                 # frame’s ROI encoder uses that new value.
                 # ───────────────────────────────────────────────────────────────────────
-                draco_roi_encoding.position_quantization_bits = draco_full_encoding.position_quantization_bits
-                draco_roi_encoding.color_quantization_bits    = draco_full_encoding.color_quantization_bits
-                draco_roi_encoding.speed_encode               = draco_full_encoding.speed_encode
-                draco_roi_encoding.speed_decode               = draco_full_encoding.speed_decode
+                #draco_roi_encoding.position_quantization_bits = draco_full_encoding.position_quantization_bits
+                #draco_roi_encoding.color_quantization_bits    = draco_full_encoding.color_quantization_bits
+                #draco_roi_encoding.speed_encode               = draco_full_encoding.speed_encode
+                #draco_roi_encoding.speed_decode               = draco_full_encoding.speed_decode
                 # ───────────────────────────────────────────────────────────────────────
                 # Derive the “outside ROI” settings from the ROI encoder’s (or full’s)
                 # settings. We halve the position quantization here to trade off more
                 # accuracy inside the ROI vs. elsewhere. Must also run each frame so
                 # any full→ROI changes flow through to this encoder as well.
                 # ───────────────────────────────────────────────────────────────────────
-                draco_outside_roi_encoding.position_quantization_bits = draco_roi_encoding.position_quantization_bits
-                draco_outside_roi_encoding.color_quantization_bits    = draco_roi_encoding.color_quantization_bits
-                draco_outside_roi_encoding.speed_encode               = draco_roi_encoding.speed_encode
-                draco_outside_roi_encoding.speed_decode               = draco_roi_encoding.speed_decode
+                #draco_outside_roi_encoding.position_quantization_bits = draco_roi_encoding.position_quantization_bits
+                #draco_outside_roi_encoding.color_quantization_bits    = draco_roi_encoding.color_quantization_bits
+                #draco_outside_roi_encoding.speed_encode               = draco_roi_encoding.speed_encode
+                #draco_outside_roi_encoding.speed_decode               = draco_roi_encoding.speed_decode
 
                 
                 frames = pipeline.wait_for_frames()
@@ -332,11 +332,13 @@ def encode_point_cloud(
                     # Encode entire valid cloud
                     pipeline_stats.data_preparation_ms = (time.perf_counter() - data_preparation_time_start) * 1000 #prep end
 
-                    buffer_full = draco_full_encoding.encode(points_full_frame, colors_full_frame)
-                    # Broadcast
-                    # prefix with single byte to understand that we are sending one buffer
-                    if len(buffer_full) != 0: 
-                        server.broadcast(bytes([1]) + buffer_full)
+                    if(points_full_frame.any()):
+                        buffer_full = draco_full_encoding.encode(points_full_frame, colors_full_frame)
+
+                        # Broadcast
+                        # prefix with single byte to understand that we are sending one buffer
+                        if len(buffer_full) != 0: 
+                            server.broadcast(bytes([1]) + buffer_full)
                        
                     
                     # Logging
@@ -437,8 +439,6 @@ def encode_point_cloud(
                             points_in_roi,
                             colors_in_roi,
                         )
-                    else:
-                        buffer_roi = b""
                     
                     if points_out_roi.size:
                         futures["out_roi"] = thread_executor.submit(
@@ -446,14 +446,13 @@ def encode_point_cloud(
                             points_out_roi,
                             colors_out_roi,
                         )
-                    else:
-                        buffer_out = b""
 
                     for label, future in futures.items():
                         if label == "roi":
                             buffer_roi = future.result()  
                         if label == "out_roi":
                             buffer_out = future.result() 
+
                     pipeline_stats.multiprocessing_compression_ms = (time.perf_counter() - multiprocessing_compression_time_start) * 1000
 
                     # Broadcast
@@ -551,41 +550,41 @@ def encode_point_cloud(
                 if key in (ord('q'), 27):  # q or Esc
                     break
                 ## Adjust settings
-                elif key == ord('f'):
-                    # Toggle mode (IMPORTANCE)
-                    encoding_mode = EncodingMode.FULL if encoding_mode is EncodingMode.IMPORTANCE else EncodingMode.IMPORTANCE
-                elif key == ord('d'):
-                    #Toggle mode (Visualization: Depth vs Color)
-                    visualization_mode = (
-                        visualization_mode.DEPTH
-                        if visualization_mode is visualization_mode.COLOR
-                        else visualization_mode.COLOR
-                    )
-                elif key == ord('='):
-                    draco_full_encoding.posQuant = min(draco_full_encoding.posQuant+1, 20)
-                elif key == ord('-'):
-                    draco_full_encoding.posQuant = max(draco_full_encoding.posQuant-1, 1)
-                elif key == ord(']'):
-                    draco_full_encoding.colorQuant = min(draco_full_encoding.colorQuant+1, 16)
-                elif key == ord('['):
-                    draco_full_encoding.colorQuant = max(draco_full_encoding.colorQuant-1, 1)
-                elif key == ord('.'):
-                    draco_full_encoding.speedEncode = min(draco_full_encoding.speedEncode+1, 10)
-                    draco_full_encoding.speedDecode = draco_full_encoding.speedEncode
-                elif key == ord(','):
-                    draco_full_encoding.speedEncode = max(draco_full_encoding.speedEncode-1, 0)
-                    draco_full_encoding.speedDecode = draco_full_encoding.speedEncode
-                elif key == ord(' '):
-                    # save full point cloud PLY
-                    points.export_to_ply("snapshot.ply", color_frame)
-                    print("Saved full point cloud to snapshot.ply")
+                #elif key == ord('f'):
+                #    # Toggle mode (IMPORTANCE)
+                #    encoding_mode = EncodingMode.FULL if encoding_mode is EncodingMode.IMPORTANCE else EncodingMode.IMPORTANCE
+                #elif key == ord('d'):
+                #    #Toggle mode (Visualization: Depth vs Color)
+                #    visualization_mode = (
+                #        visualization_mode.DEPTH
+                #        if visualization_mode is visualization_mode.COLOR
+                #        else visualization_mode.COLOR
+                #    )
+                #elif key == ord('='):
+                #    draco_full_encoding.posQuant = min(draco_full_encoding.posQuant+1, 20)
+                #elif key == ord('-'):
+                #    draco_full_encoding.posQuant = max(draco_full_encoding.posQuant-1, 1)
+                #elif key == ord(']'):
+                #    draco_full_encoding.colorQuant = min(draco_full_encoding.colorQuant+1, 16)
+                #elif key == ord('['):
+                #    draco_full_encoding.colorQuant = max(draco_full_encoding.colorQuant-1, 1)
+                #elif key == ord('.'):
+                #    draco_full_encoding.speedEncode = min(draco_full_encoding.speedEncode+1, 10)
+                #    draco_full_encoding.speedDecode = draco_full_encoding.speedEncode
+                #elif key == ord(','):
+                #    draco_full_encoding.speedEncode = max(draco_full_encoding.speedEncode-1, 0)
+                #    draco_full_encoding.speedDecode = draco_full_encoding.speedEncode
+                #elif key == ord(' '):
+                #    # save full point cloud PLY
+                #    points.export_to_ply("snapshot.ply", color_frame)
+                #    print("Saved full point cloud to snapshot.ply")
                 # LAYERS TOGGLE
-                elif key == ord('1'):
-                    active_layers[0] = not active_layers[0]
-                elif key == ord('2'):
-                    active_layers[1] = not active_layers[1]
-                elif key == ord('3'):
-                    active_layers[2] = not active_layers[2]
+                #elif key == ord('1'):
+                #    active_layers[0] = not active_layers[0]
+                #elif key == ord('2'):
+                #    active_layers[1] = not active_layers[1]
+                #elif key == ord('3'):
+                #    active_layers[2] = not active_layers[2]
         finally:
             pipeline.stop()
             # cleanly shut down the WebSocket server
@@ -601,14 +600,14 @@ def main():
     parser.add_argument(
         "--camera-rgb-width",
         type=int,
-        default=1280,
+        default=640,
         help="Color stream width (pixels)",
     )
 
     parser.add_argument(
         "--camera-rgb-height",
         type=int,
-        default=720,
+        default=480,
         help="Color stream height (pixels)",
     )
 
@@ -634,7 +633,7 @@ def main():
     parser.add_argument(
         "--camera-rgb-fps",
         type=int,
-        default=10,
+        default=30,
         help="Color stream framerate (fps)",
     )
 
