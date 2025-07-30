@@ -94,13 +94,13 @@ public:
                 ss << hdl.lock().get();
 
                 auto t1 = Clock::now();
-                double rtt = std::chrono::duration<double,std::milli>(t1 - meta.t0).count();
+                double rtt = std::chrono::duration<double,std::milli>(t1 - meta.send_time).count();
                 CsvFileEntry entry 
                 {
-                    meta.t0,
+                    meta.send_time,
                     rtt,
                     ss.str(),
-                    meta.ping_error,
+                    meta.error,
                     meta.round,
                     meta.message_size,
                     meta.connections_size
@@ -124,7 +124,7 @@ public:
 
                     if (parsed_json.value("type","") != "received-timestamp")
                     {
-                        m_logger->error("Message doesn't contain timestamp field...");
+                        m_logger->debug("Message doesn't contain timestamp field...");
                         return;
                     }
 
@@ -395,11 +395,11 @@ private:
 
     struct PendingPing 
     {
-        Timestamp          t0;
+        Timestamp          send_time;
         size_t             round;
         size_t             message_size;
         size_t             connections_size;
-        std::string        ping_error;
+        std::string        error;
     };
 
     // keep per-connection send metadata
@@ -527,21 +527,28 @@ private:
     )
     {
 
+        std::map<connection_hdl, PendingPing, std::owner_less<connection_hdl>> to_insert;
+
         for(auto& hdl: m_connections)
         {
             websocketpp::lib::error_code ec;
             m_server.ping(hdl, "", ec);
+            to_insert[hdl] = PendingPing
             {
-                std::lock_guard<std::mutex> lg(ping_mutex);
-                pending_pings[hdl] = PendingPing
-                {
-                    Clock::now(),
-                    broadcast_round,
-                    message_size,
-                    connections_size,
-                    ec ? ec.message() : "no ping error"
-                };
+                Clock::now(),
+                broadcast_round,
+                message_size,
+                connections_size,
+                ec ? ec.message() : "no ping error"
             };
+        }
+
+        {
+            std::lock_guard<std::mutex> lg(ping_mutex);
+            for (auto& kv : to_insert) 
+            {
+                pending_pings[kv.first] = kv.second;
+            }
         }
 
     }
