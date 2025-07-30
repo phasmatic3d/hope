@@ -9,6 +9,7 @@
 #include <thread>
 #include <tuple>
 #include <vector>
+#include <map>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
@@ -38,69 +39,86 @@ public:
         m_logger = spdlog::stdout_color_mt("broadcaster");
         m_logger->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [%n] %v");
         m_logger->set_level(spdlog::level::debug);
-        m_logger->flush_on(spdlog::level::info);
+        m_logger->flush_on(spdlog::level::debug);
         m_logger->info("Initialized Broadcaster");
 
-        if (write_to_csv)
-            startLoggingThread();
+        if (write_to_csv) startLoggingThread();
 
         m_server.init_asio();
 
         // disable logging
-        m_server.clear_access_channels(
-            websocketpp::log::alevel::frame_header | websocketpp::log::alevel::frame_payload);
+        m_server.clear_access_channels
+        (
+            websocketpp::log::alevel::frame_header   |
+            websocketpp::log::alevel::frame_payload  |
+            websocketpp::log::alevel::control       // ← disable control-frame logs
+        );
 
         // On new WS connection
-        m_server.set_open_handler(
+        m_server.set_open_handler
+        (
             [this](connection_hdl h)
             {
                 std::lock_guard<std::mutex> lock(m_connection_mutex);
                 m_connections.insert(h);
                 m_logger->info("Client connected");
-            });
+            }
+        );
 
         // On WS close
-        m_server.set_close_handler(
+        m_server.set_close_handler
+        (
             [this](connection_hdl h)
             {
                 std::lock_guard<std::mutex> lock(m_connection_mutex);
                 m_connections.erase(h);
                 m_logger->info("Client disconnected");
-            });
+            }
+        );
 
         m_server.set_pong_handler
         (
             [this](connection_hdl hdl, std::string _) 
             {
-                auto t1 = Clock::now();
-                Clock::time_point t0; 
-
+                PendingPing meta;
                 {
                     std::lock_guard<std::mutex> lg(ping_mutex);
-                    auto it = last_ping_time.find(hdl);
-                    if(it == last_ping_time.end()) return;
-                    t0 = it->second;
-                    last_ping_time.erase(it);
+                    auto it = pending_pings.find(hdl);
+                    if (it == pending_pings.end()) return;
+                    meta = it->second;
+                    pending_pings.erase(it);
                 }
 
-                double rtt = std::chrono::duration<double,std::milli>(t1 - t0).count();
+                std::ostringstream ss;
+                ss << hdl.lock().get();
 
+                auto t1 = Clock::now();
+                double rtt = std::chrono::duration<double,std::milli>(t1 - meta.t0).count();
+                CsvFileEntry entry 
                 {
-                    std::lock_guard<std::mutex> lg(rtt_mutex);
-                    last_rtt_ms[hdl] = rtt;
-                }
+                    meta.t0,
+                    rtt,
+                    ss.str(),
+                    meta.ping_error,
+                    meta.round,
+                    meta.message_size,
+                    meta.connections_size
+                };
+                enqueueLogEntry(entry);
             }
         );
 
         // HTTP redirect  client
-        m_server.set_http_handler(
+        m_server.set_http_handler
+        (
             [this](connection_hdl hdl)
             {
                 auto con = m_server.get_con_from_hdl(hdl);
                 con->set_status(websocketpp::http::status_code::found);
                 con->replace_header("Location", m_redirect_url);
-                m_logger->debug("Redirecting HTTP client to {}", m_redirect_url);
-            });
+                m_logger->info("Redirecting HTTP client to {}", m_redirect_url);
+            }
+        );
     }
 
     ~ProducerServer()
@@ -140,26 +158,6 @@ public:
         m_logger->info("Server stopped");
     }
 
-    void ping_each_client()
-    {
-
-        if(!write_to_csv)
-        {
-            return;
-        }
-
-        for(auto& hdl: m_connections)
-        {
-            websocketpp::lib::error_code ec;
-            {
-                std::lock_guard<std::mutex> lg(ping_mutex);
-                last_ping_time[hdl] = Clock::now();
-            }
-
-            m_server.ping(hdl, "", ec);
-        }
-
-    }
 
     // Broadcast a binary message to all clients
     void broadcast(const nb::bytes &data)
@@ -179,62 +177,27 @@ public:
             connections_size = m_connections.size();
         }
 
-        ping_each_client();
+        if(!m_connections.empty() && write_to_csv)
+        {
+            ping_async(broadcast_round, message_size, connections_size);
+        }
 
         for (auto &hdl : m_connections)
         {
 
             websocketpp::lib::error_code ec;
-            m_server.send(
+            m_server.send
+            (
                 hdl,
                 (const void *)data.data(),
                 data.size(),
                 websocketpp::frame::opcode::binary,
-                ec);
+                ec
+            );
 
             if (ec)
             {
                 throw std::runtime_error("Send failed: " + ec.message());
-            }
-
-            if (write_to_csv)
-            {
-                // compute duration in milliseconds
-                double rtt = 0;
-                {
-                    std::lock_guard<std::mutex> lg(rtt_mutex);
-                    auto it = last_rtt_ms.find(hdl);
-                    if (it != last_rtt_ms.end()) 
-                    {
-                        rtt = it->second;
-                        last_rtt_ms.erase(it);
-                    }
-                }
-                // struct CsvFileEntry
-                //{
-                //    Timestamp timestamp,
-                //    double ping_pong_rtt_ms,
-                //    std::string connection_id,
-                //    std::string error
-                //    size_t broadcast_round,
-                //    size_t message_size,
-                //    size_t connections_size,
-                //}
-                // HEADER="timestamp_ms_since_epoch,ping_pong_rtt_ms,connection_id,error,broadcast_round,message_size,connections_size";
-
-                std::ostringstream ss;
-                ss << hdl.lock().get();
-
-                CsvFileEntry entry = {
-                    t0,
-                    rtt,
-                    ss.str(),
-                    ec ? ec.message() : "no error occured",
-                    broadcast_round,
-                    message_size,
-                    connections_size};
-
-                enqueueLogEntry(entry);
             }
         }
     }
@@ -259,14 +222,16 @@ public:
 
         // Lower-case prefix to check for scheme
         std::string lower = tmp;
-        std::transform(
+        std::transform
+        (
             lower.begin(),
             lower.end(),
             lower.begin(),
             [](unsigned char c)
             {
                 return std::tolower(c);
-            });
+            }
+        );
 
         if (lower.rfind("http://", 0) == 0 || lower.rfind("https://", 0) == 0)
         {
@@ -334,16 +299,26 @@ private:
     std::mutex m_connection_mutex;
     std::string m_redirect_url = "/";
 
+
     // --- Members for writing to csv ---
     using Clock = std::chrono::system_clock;
     using Timestamp = Clock::time_point;
 
+    struct PendingPing 
+    {
+        Timestamp          t0;
+        size_t             round;
+        size_t             message_size;
+        size_t             connections_size;
+        std::string        ping_error;
+    };
+
     struct CsvFileEntry
     {
-        Timestamp timestamp;
+        Timestamp ping_timestamp;
         double ping_pong_rtt_ms;
         std::string connection_id;
-        std::string error;
+        std::string ping_error;
         size_t broadcast_round;
         size_t message_size;
         size_t connections_size;
@@ -358,12 +333,9 @@ private:
     bool stop_logging;
 
     std::mutex ping_mutex;
-    std::unordered_map<connection_hdl, Clock::time_point, std::owner_less<connection_hdl>> last_ping_time;
+    std::map<connection_hdl, PendingPing, std::owner_less<connection_hdl>> pending_pings;
 
-    std::mutex rtt_mutex;
-    std::unordered_map<connection_hdl, double, std::owner_less<connection_hdl>> last_rtt_ms;
-
-    static constexpr const char *HEADER = "timestamp_ms_since_epoch,ping_pong_rtt_ms,connection_id,error,broadcast_round,message_size,connections_size";
+    static constexpr const char *HEADER = "timestamp_ms_since_epoch,ping_pong_rtt_ms,connection_id,ping_error,broadcast_round,message_size,connections_size";
 
     void startLoggingThread()
     {
@@ -399,8 +371,7 @@ private:
         }
 
         // spawn background thread
-        log_thread = std::thread([this]
-                                 {
+        log_thread = std::thread([this]{
             std::unique_lock<std::mutex> lk(log_mutex);
             while (true) 
             {
@@ -420,24 +391,24 @@ private:
                     log_queue.pop();
 
                     // convert timestamp to milliseconds since epoch
-                    auto epoch = std::chrono::time_point_cast<std::chrono::milliseconds>(entry.timestamp).time_since_epoch().count();
+                    auto epoch = std::chrono::time_point_cast<std::chrono::milliseconds>(entry.ping_timestamp).time_since_epoch().count();
 
                     //struct CsvFileEntry 
                     //{
                     //    Timestamp timestamp,
                     //    double ping_pong_rtt_ms,
                     //    connection_id,
-                    //    error
+                    //    std::string ping_error
                     //    size_t broadcast_round,
                     //    size_t message_size, 
                     //    size_t connections_size,
                     //}
-                    //HEADER="timestamp_ms_since_epoch,ping_pong_rtt_ms,connection_id,error,broadcast_round,message_size,connections_size";
+                    //HEADER="timestamp_ms_since_epoch,ping_pong_rtt_ms,connection_id,ping_error,broadcast_round,message_size,connections_size";
                     csv 
                         << epoch << "," 
                         << entry.ping_pong_rtt_ms << "," 
                         << entry.connection_id << "," 
-                        << entry.error << ","
+                        << entry.ping_error << ","
                         << entry.broadcast_round << "," 
                         << entry.message_size << "," 
                         << entry.connections_size << "\n";
@@ -454,6 +425,33 @@ private:
         std::lock_guard<std::mutex> lg(log_mutex);
         log_queue.push(entry);
         log_cv.notify_one();
+    }
+
+    void ping_async
+    (
+        size_t broadcast_round,
+        size_t message_size, 
+        size_t connections_size
+    )
+    {
+
+        for(auto& hdl: m_connections)
+        {
+            websocketpp::lib::error_code ec;
+            m_server.ping(hdl, "", ec);
+            {
+                std::lock_guard<std::mutex> lg(ping_mutex);
+                pending_pings[hdl] = PendingPing
+                {
+                    Clock::now(),
+                    broadcast_round,
+                    message_size,
+                    connections_size,
+                    ec ? ec.message() : "no ping error"
+                };
+            };
+        }
+
     }
 };
 
