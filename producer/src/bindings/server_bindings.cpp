@@ -177,11 +177,6 @@ public:
             connections_size = m_connections.size();
         }
 
-        if(!m_connections.empty() && write_to_csv)
-        {
-            ping_async(broadcast_round, message_size, connections_size);
-        }
-
         for (auto &hdl : m_connections)
         {
 
@@ -197,8 +192,14 @@ public:
 
             if (ec)
             {
+                m_logger->error("Send Failed: {}", ec.message());
                 throw std::runtime_error("Send failed: " + ec.message());
             }
+        }
+
+        if(!m_connections.empty() && write_to_csv)
+        {
+            ping_async(broadcast_round, message_size, connections_size);
         }
     }
 
