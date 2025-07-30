@@ -686,9 +686,18 @@ def main():
 
     parser.add_argument(
         "--server-write-to-csv",        
-        type=bool, 
-        default=False,
+        type=int, 
+        choices=[0, 1],
+        default=0,
         help="Write latency values to csv"
+    )
+
+    parser.add_argument(
+        "--server-use-pings-for-rtt",        
+        type=int, 
+        choices=[0, 1],
+        default=1,
+        help="Calculate RTT using pings instead of timestamps."
     )
 
     parser.add_argument(
@@ -707,7 +716,12 @@ def main():
 
     args = parser.parse_args()
 
-    server = setup_server(url=args.server_host, port=args.server_port, write_to_csv=args.server_write_to_csv)
+    server = setup_server(
+        url=args.server_host, 
+        port=args.server_port, 
+        write_to_csv=bool(args.server_write_to_csv), 
+        use_pings_for_rtt=bool(args.server_use_pings_for_rtt)
+    )
 
     if args.visualization_mode == "color":
         visualization_mode = VizualizationMode.COLOR

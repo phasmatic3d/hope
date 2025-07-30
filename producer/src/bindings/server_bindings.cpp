@@ -30,18 +30,27 @@ using websocketpp::connection_hdl;
 class ProducerServer
 {
 public:
-    ProducerServer(
+    ProducerServer
+    (
         int port,
-        bool write_to_csv = false)
-        : m_port(port),
-          stop_logging(false),
-          write_to_csv(write_to_csv)
+        bool write_to_csv,
+        bool use_pings_for_rtt
+    ):
+    m_port(port),
+    stop_logging(false),
+    write_to_csv(write_to_csv),
+    use_pings_for_rtt(use_pings_for_rtt)
     {
         m_logger = spdlog::stdout_color_mt("broadcaster");
         m_logger->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [%n] %v");
         m_logger->set_level(spdlog::level::debug);
         m_logger->flush_on(spdlog::level::debug);
         m_logger->info("Initialized Broadcaster");
+
+
+        m_logger->info("Initialized port: {}", m_port);
+        m_logger->info("Write to CSV: {}", write_to_csv);
+        m_logger->info("Use Pings for RTT: {}", use_pings_for_rtt);
 
         if (write_to_csv) startLoggingThread();
 
@@ -81,6 +90,9 @@ public:
         (
             [this](connection_hdl hdl, std::string _) 
             {
+
+                if(!this->write_to_csv || !this->use_pings_for_rtt) return;
+
                 PendingPing meta;
                 {
                     std::lock_guard<std::mutex> lg(ping_mutex);
@@ -115,7 +127,7 @@ public:
             [this](connection_hdl hdl,  websocketpp::server<websocketpp::config::asio>::message_ptr message)
             {
 
-                if(!this->write_to_csv) return;
+                if(!this->write_to_csv || this->use_pings_for_rtt) return;
 
                 try
                 {
@@ -134,18 +146,24 @@ public:
                         std::chrono::milliseconds(client_ms)
                     );
 
+                    auto round = parsed_json.at("round").get<size_t>();
+                    std::ostringstream ss;
+                    ss << hdl.lock().get();
+                    MetaKey key{ hdl, round };
                     PendingMetadata metadata; 
                     {
                         std::lock_guard<std::mutex> lg(m_metadata_mutex);
-                        auto it = m_metadata.find(hdl);
-                        if (it == m_metadata.end()) return;
+                        auto it = m_metadata.find(key);
+                        if (it == m_metadata.end())
+                        {
+                            m_logger->warn("No metadata for hdl={} round={}", ss.str(), round);
+                            return;
+                        }
                         metadata = it->second;
                         m_metadata.erase(it);
                     }
                     auto t1 = Clock::now();
                     double rtt = std::chrono::duration<double,std::milli>(client_timestamp - metadata.send_time).count();
-                    std::ostringstream ss;
-                    ss << hdl.lock().get();
                     CsvFileEntry entry 
                     {
                         metadata.send_time,
@@ -238,12 +256,37 @@ public:
             bytes_sent       = message_size * connections_size;
         }
 
-        std::map<connection_hdl, PendingMetadata, std::owner_less<connection_hdl>> map_to_metadata; 
+        std::map<MetaKey, PendingMetadata, MetaKeyCompare> map_to_metadata; 
 
         for (auto &hdl : m_connections)
         {
 
             websocketpp::lib::error_code ec;
+
+            if(write_to_csv && !use_pings_for_rtt)
+            {
+                nlohmann::json info = 
+                {
+                    { "type",  "broadcast-info" },
+                    { "round", broadcast_round },
+                    { "size",  message_size }
+                };
+
+                m_server.send
+                (
+                    hdl,
+                    info.dump(),
+                    websocketpp::frame::opcode::text,
+                    ec
+                );
+
+                if (ec) 
+                {
+                    m_logger->error("Failed to send info JSON: {}", ec.message());
+                    continue;
+                }
+            }
+
             m_server.send
             (
                 hdl,
@@ -260,31 +303,38 @@ public:
 
             if(!write_to_csv) continue;
 
-            map_to_metadata[hdl] = PendingMetadata
+            if(!use_pings_for_rtt)
             {
-                Clock::now(),
-                broadcast_round,
-                message_size,  
-                connections_size, 
-                bytes_sent,
-                ec ? ec.message() : "no error"
-            };
+                map_to_metadata[{hdl, broadcast_round}] = PendingMetadata
+                {
+                    Clock::now(),
+                    broadcast_round,
+                    message_size,  
+                    connections_size, 
+                    bytes_sent,
+                    ec ? ec.message() : "no error"
+                };
+            }
         }
 
         if(!write_to_csv) return;
 
 
+        if(!use_pings_for_rtt)
         {
-            std::lock_guard<std::mutex> lg(m_metadata_mutex);
-            for(auto& entry: map_to_metadata) 
             {
-                m_metadata[entry.first] = entry.second;
+                std::lock_guard<std::mutex> lg(m_metadata_mutex);
+                for(auto& entry: map_to_metadata) 
+                {
+                    m_metadata[entry.first] = entry.second;
+                }
             }
         }
-        //if(!m_connections.empty() && write_to_csv)
-        //{
-        //    ping_async(broadcast_round, message_size, connections_size);
-        //}
+
+        if(!m_connections.empty() && write_to_csv && use_pings_for_rtt)
+        {
+            ping_async(broadcast_round, message_size, connections_size);
+        }
     }
 
     void set_redirect(const std::string &url)
@@ -425,6 +475,7 @@ private:
     };
 
     bool write_to_csv;
+    bool use_pings_for_rtt;
     std::ofstream csv;
     std::mutex log_mutex;
     std::condition_variable log_cv;
@@ -436,7 +487,20 @@ private:
     std::map<connection_hdl, PendingPing, std::owner_less<connection_hdl>> pending_pings;
 
     std::mutex m_metadata_mutex;
-    std::map<connection_hdl, PendingMetadata, std::owner_less<connection_hdl>> m_metadata;
+    using MetaKey = std::pair<connection_hdl, size_t>;
+    struct MetaKeyCompare 
+    {
+        bool operator()(MetaKey const &a, MetaKey const &b) const 
+        {
+            // first compare the weak_ptr identity
+            std::owner_less<connection_hdl> cmp;
+            if (cmp(a.first, b.first)) return true;
+            if (cmp(b.first, a.first)) return false;
+            // then compare the round number
+            return a.second < b.second;
+        }
+   };
+   std::map<MetaKey, PendingMetadata, MetaKeyCompare> m_metadata;
 
     static constexpr const char *HEADER = "timestamp_ms_since_epoch,approximate_rtt_ms,connection_id,error,broadcast_round,message_size,connections_size";
 
@@ -559,9 +623,10 @@ NB_MODULE(broadcaster, m)
     m.doc() = "WebSocket++ Producer server binding";
 
     nb::class_<ProducerServer>(m, "ProducerServer")
-        .def(nb::init<int, bool>(),
+        .def(nb::init<int, bool, bool>(),
              nb::arg("port"),
-             nb::arg("write_to_csv"))
+             nb::arg("write_to_csv"),
+             nb::arg("use_pings_for_rtt"))
         .def("listen", &ProducerServer::listen,
              nb::call_guard<nb::gil_scoped_release>(),
              "Begin listening on the configured port")

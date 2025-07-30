@@ -1,7 +1,8 @@
 // .vscode/settings.json
 {
   "files.associations": {
-    "*.py": "python"
+    "*.py": "python",
+    "system_error": "cpp"
   },
 
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",

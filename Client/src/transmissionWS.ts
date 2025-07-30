@@ -2,38 +2,51 @@ export function openConnetion(
     response : (data: ArrayBuffer) => void, 
     reject: (msg: string) => void
 ) {
-  console.warn("WebSockets")
-  // Connect to the WebSocket server
-  const socket = new WebSocket('ws://localhost:9002');
-  //const socket = new WebSocket('wss://192.168.1.155:9002');
+    console.warn("WebSockets")
+    // Connect to the WebSocket server
+    const socket = new WebSocket('ws://localhost:9002');
+    //const socket = new WebSocket('wss://192.168.1.155:9002');
   
-  // Set the binary type to 'arraybuffer'
-  socket.binaryType = 'arraybuffer';
+    let currentRound: number | null = null;
 
-  // Event handler for when the connection opens
-  socket.addEventListener('open', (event) => {
-      console.warn('WebSocket connection opened.');
-      // Optionally, you can send a message to the server here
-      socket.send('Hello Server!');
-  });
+    // Set the binary type to 'arraybuffer'
+    socket.binaryType = 'arraybuffer';
 
-  // Event handler for when a message is received
-  socket.addEventListener('message', (event) => {
-    //console.warn("Receive Message")
-    const receivedAt = Date.now();                      
+    // Event handler for when the connection opens
+    socket.addEventListener('open', (event) => {
+        console.warn('WebSocket connection opened.');
+        // Optionally, you can send a message to the server here
+        socket.send('Hello Server!');
+    });
+
+    // Event handler for when a message is received
+    socket.addEventListener('message', (event) => {
+      //console.warn("Receive Message")
+      if (typeof event.data === 'string') {
+        // this is our JSON info frame
+        let meta = JSON.parse(event.data);
+        if (meta.type === 'broadcast-info') {
+            currentRound = meta.round;
+        }
+        return;
+    }
 
     if (event.data instanceof ArrayBuffer) {
         //console.warn('Received ArrayBuffer:', event.data);
-        socket.send
-        (
+        const receivedAt = Date.now();
+
+        // send back timestamp *and* the round
+        socket.send(
             JSON.stringify
             (
-                { 
-                    type: 'received-timestamp', 
-                    timestamp: receivedAt 
+                {
+                    type:      'received-timestamp',
+                    timestamp: receivedAt,
+                    round:     currentRound
                 }
             )
-        ); 
+        );
+
         response(event.data);
 
     } else {
