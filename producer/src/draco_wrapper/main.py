@@ -685,6 +685,13 @@ def main():
     )
 
     parser.add_argument(
+        "--server-write-to-csv",        
+        type=bool, 
+        default=False,
+        help="Write latency values to csv"
+    )
+
+    parser.add_argument(
         "--visualization-mode",
         choices=["color", "depth"],
         default="color",
@@ -700,7 +707,7 @@ def main():
 
     args = parser.parse_args()
 
-    server = setup_server(url=args.server_host, port=args.server_port)
+    server = setup_server(url=args.server_host, port=args.server_port, write_to_csv=args.server_write_to_csv)
 
     if args.visualization_mode == "color":
         visualization_mode = VizualizationMode.COLOR
