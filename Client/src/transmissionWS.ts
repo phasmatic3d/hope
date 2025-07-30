@@ -1,4 +1,7 @@
-export function openConnetion(response : (data: ArrayBuffer) => void, reject: (msg: string) => void) {
+export function openConnetion(
+    response : (data: ArrayBuffer) => void, 
+    reject: (msg: string) => void
+) {
   console.warn("WebSockets")
   // Connect to the WebSocket server
   const socket = new WebSocket('ws://localhost:9002');
@@ -17,14 +20,25 @@ export function openConnetion(response : (data: ArrayBuffer) => void, reject: (m
   // Event handler for when a message is received
   socket.addEventListener('message', (event) => {
     //console.warn("Receive Message")
-      if (event.data instanceof ArrayBuffer) {
-          //console.warn('Received ArrayBuffer:', event.data);
+    const receivedAt = Date.now();                      
 
-          response(event.data);
+    if (event.data instanceof ArrayBuffer) {
+        //console.warn('Received ArrayBuffer:', event.data);
+        socket.send
+        (
+            JSON.stringify
+            (
+                { 
+                    type: 'received-timestamp', 
+                    timestamp: receivedAt 
+                }
+            )
+        ); 
+        response(event.data);
 
-      } else {
-          console.warn('Received non-ArrayBuffer message:', event.data);
-      }
+    } else {
+        console.warn('Received non-ArrayBuffer message:', event.data);
+    }
   });
 
   // Error handling

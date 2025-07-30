@@ -18,6 +18,7 @@
 #include <websocketpp/server.hpp>
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
+#include <nlohmann/json.hpp>
 
 #ifndef ASIO_STANDALONE
 #define ASIO_STANDALONE
@@ -108,6 +109,63 @@ public:
             }
         );
 
+
+        m_server.set_message_handler
+        (
+            [this](connection_hdl hdl,  websocketpp::server<websocketpp::config::asio>::message_ptr message)
+            {
+
+                if(!this->write_to_csv) return;
+
+                try
+                {
+                    auto parsed_json = nlohmann::json::parse(message->get_payload());
+                    m_logger->debug("Received message: {}", parsed_json.dump());
+
+                    if (parsed_json.value("type","") != "received-timestamp")
+                    {
+                        m_logger->error("Message doesn't contain timestamp field...");
+                        return;
+                    }
+
+                    uint64_t client_ms = parsed_json.at("timestamp").get<uint64_t>();
+                    auto client_timestamp = Timestamp
+                    (
+                        std::chrono::milliseconds(client_ms)
+                    );
+
+                    PendingMetadata metadata; 
+                    {
+                        std::lock_guard<std::mutex> lg(m_metadata_mutex);
+                        auto it = m_metadata.find(hdl);
+                        if (it == m_metadata.end()) return;
+                        metadata = it->second;
+                        m_metadata.erase(it);
+                    }
+                    auto t1 = Clock::now();
+                    double rtt = std::chrono::duration<double,std::milli>(client_timestamp - metadata.send_time).count();
+                    std::ostringstream ss;
+                    ss << hdl.lock().get();
+                    CsvFileEntry entry 
+                    {
+                        metadata.send_time,
+                        rtt,
+                        ss.str(),
+                        metadata.error,
+                        metadata.round,
+                        metadata.message_size,
+                        metadata.connections_size
+                    };
+                    enqueueLogEntry(entry);
+                }
+                catch(const std::exception& e)
+                {
+                    m_logger->error("Bad JSON on timestamp message: {}", e.what());
+                }
+
+            }
+        );
+
         // HTTP redirect  client
         m_server.set_http_handler
         (
@@ -166,16 +224,21 @@ public:
 
         std::lock_guard<std::mutex> lock(m_connection_mutex);
 
-        size_t broadcast_round = 0;
-        size_t message_size = 0;
+        size_t broadcast_round  = 0;
+        size_t message_size     = 0;
         size_t connections_size = 0;
+        //TODO this assumes the bytes are received by all connections with no errors
+        size_t bytes_sent       = 0;
 
         if (!m_connections.empty())
         {
-            broadcast_round = m_broadcast_counter++;
-            message_size = data.size();
+            broadcast_round  = m_broadcast_counter++;
+            message_size     = data.size();
             connections_size = m_connections.size();
+            bytes_sent       = message_size * connections_size;
         }
+
+        std::map<connection_hdl, PendingMetadata, std::owner_less<connection_hdl>> map_to_metadata; 
 
         for (auto &hdl : m_connections)
         {
@@ -193,14 +256,35 @@ public:
             if (ec)
             {
                 m_logger->error("Send Failed: {}", ec.message());
-                throw std::runtime_error("Send failed: " + ec.message());
             }
+
+            if(!write_to_csv) continue;
+
+            map_to_metadata[hdl] = PendingMetadata
+            {
+                Clock::now(),
+                broadcast_round,
+                message_size,  
+                connections_size, 
+                bytes_sent,
+                ec ? ec.message() : "no error"
+            };
         }
 
-        if(!m_connections.empty() && write_to_csv)
+        if(!write_to_csv) return;
+
+
         {
-            ping_async(broadcast_round, message_size, connections_size);
+            std::lock_guard<std::mutex> lg(m_metadata_mutex);
+            for(auto& entry: map_to_metadata) 
+            {
+                m_metadata[entry.first] = entry.second;
+            }
         }
+        //if(!m_connections.empty() && write_to_csv)
+        //{
+        //    ping_async(broadcast_round, message_size, connections_size);
+        //}
     }
 
     void set_redirect(const std::string &url)
@@ -301,9 +385,13 @@ private:
     std::string m_redirect_url = "/";
 
 
-    // --- Members for writing to csv ---
+    // --- Members for metric calculation ---
     using Clock = std::chrono::system_clock;
     using Timestamp = Clock::time_point;
+
+    // --- Retrieve the data rate for the last broadcast round ---
+    Clock::time_point   m_last_broadcast_time = Clock::now();
+    size_t              m_last_bytes_sent     = 0;
 
     struct PendingPing 
     {
@@ -314,12 +402,23 @@ private:
         std::string        ping_error;
     };
 
+    // keep per-connection send metadata
+    struct PendingMetadata
+    {
+        Timestamp send_time;
+        size_t round;
+        size_t message_size;
+        size_t connections_size;
+        size_t bytes_sent;
+        std::string error;
+    };
+
     struct CsvFileEntry
     {
-        Timestamp ping_timestamp;
-        double ping_pong_rtt_ms;
+        Timestamp timestamp;
+        double approximate_rtt_ms;
         std::string connection_id;
-        std::string ping_error;
+        std::string error;
         size_t broadcast_round;
         size_t message_size;
         size_t connections_size;
@@ -336,7 +435,10 @@ private:
     std::mutex ping_mutex;
     std::map<connection_hdl, PendingPing, std::owner_less<connection_hdl>> pending_pings;
 
-    static constexpr const char *HEADER = "timestamp_ms_since_epoch,ping_pong_rtt_ms,connection_id,ping_error,broadcast_round,message_size,connections_size";
+    std::mutex m_metadata_mutex;
+    std::map<connection_hdl, PendingMetadata, std::owner_less<connection_hdl>> m_metadata;
+
+    static constexpr const char *HEADER = "timestamp_ms_since_epoch,approximate_rtt_ms,connection_id,error,broadcast_round,message_size,connections_size";
 
     void startLoggingThread()
     {
@@ -392,24 +494,13 @@ private:
                     log_queue.pop();
 
                     // convert timestamp to milliseconds since epoch
-                    auto epoch = std::chrono::time_point_cast<std::chrono::milliseconds>(entry.ping_timestamp).time_since_epoch().count();
+                    auto epoch = std::chrono::time_point_cast<std::chrono::milliseconds>(entry.timestamp).time_since_epoch().count();
 
-                    //struct CsvFileEntry 
-                    //{
-                    //    Timestamp timestamp,
-                    //    double ping_pong_rtt_ms,
-                    //    connection_id,
-                    //    std::string ping_error
-                    //    size_t broadcast_round,
-                    //    size_t message_size, 
-                    //    size_t connections_size,
-                    //}
-                    //HEADER="timestamp_ms_since_epoch,ping_pong_rtt_ms,connection_id,ping_error,broadcast_round,message_size,connections_size";
                     csv 
                         << epoch << "," 
-                        << entry.ping_pong_rtt_ms << "," 
+                        << entry.approximate_rtt_ms << "," 
                         << entry.connection_id << "," 
-                        << entry.ping_error << ","
+                        << entry.error << ","
                         << entry.broadcast_round << "," 
                         << entry.message_size << "," 
                         << entry.connections_size << "\n";
