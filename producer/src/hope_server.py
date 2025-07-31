@@ -74,6 +74,7 @@ def camera_process(
     
     # Hyperparameters to move to argparse
     visualization_mode = VizualizationMode.COLOR
+    encoding_mode      = EncodingMode.IMPORTANCE
 
     global DEBUG
 
@@ -163,6 +164,7 @@ def camera_process(
     try:
         while not stop_event.is_set():
             frame_id += 1
+            frame_count += 1
             frames = pipeline.wait_for_frames()
             pipeline_stats.frame_alignment_ms = time.perf_counter()
             frames = align.process(frames)
@@ -285,7 +287,6 @@ def camera_process(
 
             pipeline_stats.data_preparation_ms = (time.perf_counter() - data_preparation_time_start) * 1000 #prep end
 
-            print("IN ROI", points_in_roi.size)
             draco_roi_encoding.position_quantization_bits = draco_full_encoding.position_quantization_bits
             draco_roi_encoding.color_quantization_bits    = draco_full_encoding.color_quantization_bits
             draco_roi_encoding.speed_encode               = draco_full_encoding.speed_encode
@@ -300,42 +301,61 @@ def camera_process(
             multiprocessing_compression_time_start = time.perf_counter()
             futures: dict[str, concurrent.futures.Future] = {}
             
-            buffer_roi = None
-            buffer_out = None
-            if points_in_roi.size:
-                futures["roi"] = thread_executor.submit(
-                    draco_roi_encoding.encode,
-                    points_in_roi,
-                    colors_in_roi,
-                )
-            else:
-                buffer_roi = b""
+            if(encoding_mode == EncodingMode.IMPORTANCE):
+                buffer_roi = None
+                buffer_out = None
+                if points_in_roi.size:
+                    futures["roi"] = thread_executor.submit(
+                        draco_roi_encoding.encode,
+                        points_in_roi,
+                        colors_in_roi,
+                    )
+                else:
+                    buffer_roi = b""
+                
+                if points_out_roi.size:
+                    futures["out_roi"] = thread_executor.submit(
+                        draco_outside_roi_encoding.encode,
+                        points_out_roi,
+                        colors_out_roi,
+                    )
+                else:
+                    buffer_out = b""
+
+                for label, future in futures.items():
+                    if label == "roi":
+                        buffer_roi = future.result()  
+                    if label == "out_roi":
+                        buffer_out = future.result() 
+                pipeline_stats.multiprocessing_compression_ms = (time.perf_counter() - multiprocessing_compression_time_start) * 1000
+
+                # Broadcast
+                buffers = []
+                if buffer_roi:
+                    buffers.append(buffer_roi)
+                if buffer_out:
+                    buffers.append(buffer_out)
+                count = len(buffers)
+                for buffer in buffers:
+                    server.broadcast(bytes([count]) + buffer) # Prefix with byte that tells us the length
+            else: # ENCODE THE FULL FRAME
+                # Masking
+                compression_full_stats.masking_ms = time.perf_counter()
+                points_full_frame = vertices[valid]
+                colors_full_frame = colors[valid] # 8ms
+                compression_full_stats.masking_ms = (time.perf_counter() - compression_full_stats.masking_ms ) * 1000
             
-            if points_out_roi.size:
-                futures["out_roi"] = thread_executor.submit(
-                    draco_outside_roi_encoding.encode,
-                    points_out_roi,
-                    colors_out_roi,
-                )
-            else:
-                buffer_out = b""
 
-            for label, future in futures.items():
-                if label == "roi":
-                    buffer_roi = future.result()  
-                if label == "out_roi":
-                    buffer_out = future.result() 
-            pipeline_stats.multiprocessing_compression_ms = (time.perf_counter() - multiprocessing_compression_time_start) * 1000
+                # Encode entire valid cloud
+                pipeline_stats.data_preparation_ms = (time.perf_counter() - data_preparation_time_start) * 1000 #prep end
 
-            # Broadcast
-            buffers = []
-            if buffer_roi:
-                buffers.append(buffer_roi)
-            if buffer_out:
-                buffers.append(buffer_out)
-            count = len(buffers)
-            for buffer in buffers:
-                server.broadcast(bytes([count]) + buffer) # Prefix with byte that tells us the length
+                if(points_full_frame.any()):
+                    buffer_full = draco_full_encoding.encode(points_full_frame, colors_full_frame)
+                    # Broadcast
+                    server.broadcast(bytes([1]) + buffer_full) # prefix with single byte to understand that we are sending one buffer
+                       
+                    
+
 
             # Logging and display
             if DEBUG:
