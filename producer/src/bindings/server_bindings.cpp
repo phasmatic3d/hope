@@ -83,8 +83,8 @@ public:
                     asio::ssl::context::single_dh_use
                 );
                 //TODO how to generate keys and use them
-                ctx->use_certificate_chain_file("./broadcaster_wrapper/server.crt");
-                ctx->use_private_key_file("./broadcaster_wrapper/server.key", asio::ssl::context::pem);
+                ctx->use_certificate_chain_file("./broadcaster_wrapper/cert/server.crt");
+                ctx->use_private_key_file("./broadcaster_wrapper/cert/server.key", asio::ssl::context::pem);
 
                 return ctx;
             }
@@ -92,12 +92,12 @@ public:
         #endif
 
         // disable logging
-        m_server.clear_access_channels
-        (
-            websocketpp::log::alevel::frame_header   |
-            websocketpp::log::alevel::frame_payload  |
-            websocketpp::log::alevel::control       // ← disable control-frame logs
-        );
+        //m_server.clear_access_channels
+        //(
+        //    websocketpp::log::alevel::frame_header   |
+        //    websocketpp::log::alevel::frame_payload  |
+        //    websocketpp::log::alevel::control       // ← disable control-frame logs
+        //);
 
         // On new WS connection
         m_server.set_open_handler

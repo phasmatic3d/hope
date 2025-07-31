@@ -11,7 +11,7 @@ def setup_server(
     print(f"URL: {url}")
     print(f"Port: {port}")
     server = broadcaster.ProducerServer(port=port, write_to_csv=write_to_csv, use_pings_for_rtt=use_pings_for_rtt)
-    server.set_redirect(url=url)
+    #server.set_redirect(url=url)
     return server
 
 

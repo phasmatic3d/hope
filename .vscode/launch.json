@@ -1,17 +1,37 @@
 {
+  // Use the JSONC schema so we can keep comments
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Launch No-Debug",
-      "type": "debugpy",
+      "name": "Debug hope_server_exec",
+      "type": "cppdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/producer/src/producer.py",
-      "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}/producer/src",
-      "env": {
-        "PYTHONPATH": ""
-      }
+      // Point this at your server executable in your build directory
+      "program": "${workspaceFolder}/producer/build/hope_server_exec",
+      "args": [
+        // if your server takes any CLI args, list them here
+      ],
+      "stopAtEntry": false,
+      // Make sure cwd is where your code expects to find certificates, etc.
+      // If you load "./server.crt" and "./server.key", put your certs
+      // into the build folder or change this to the folder that contains them.
+      "cwd": "${workspaceFolder}/producer/src/",
+      "environment": [],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "miDebuggerPath": "/usr/bin/gdb",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        },
+        {
+          "description": "Use Intel syntax",
+          "text": "-gdb-set disassembly-flavor intel",
+          "ignoreFailures": true
+        }
+      ]
     }
   ]
-  
 }

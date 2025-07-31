@@ -3,9 +3,20 @@ export function openConnetion(
     reject: (msg: string) => void
 ) {
     console.warn("WebSockets")
+    // toggle this to switch between ws:// and wss://
+    const USE_TLS = true;
+
+    // host + port for each mode
+    const HOST = 'localhost';
+    const PORT = USE_TLS ? 9003 : 9002; // e.g. 9003 for TLS, 9002 for plain
+
+    // pick the right protocol
+    const protocol = USE_TLS ? 'wss' : 'ws';
+    const url = `${protocol}://${HOST}:${PORT}`;
     // Connect to the WebSocket server
-    const socket = new WebSocket('ws://localhost:9002');
-    //const socket = new WebSocket('wss://192.168.1.155:9002');
+    console.warn(`Connecting over ${protocol.toUpperCase()} to ${url}`);
+
+    const socket = new WebSocket(url);
   
     let currentRound: number | null = null;
 
