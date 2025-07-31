@@ -673,7 +673,7 @@ def main():
     parser.add_argument(
         "--server-host",        
         type=str, 
-        default="https://localhost",
+        default="wss://localhost",
         help="Broadcast server host"
     )
 

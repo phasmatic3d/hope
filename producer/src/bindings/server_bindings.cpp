@@ -403,31 +403,35 @@ public:
             }
         );
 
-        if (lower.rfind("http://", 0) == 0 || lower.rfind("https://", 0) == 0)
+        // accept http, https, ws, or wss
+        if (lower.rfind("http://",0) == 0 ||
+            lower.rfind("https://",0) == 0 ||
+            lower.rfind("ws://",0)   == 0 ||
+            lower.rfind("wss://",0)  == 0)
         {
-            // tmp has no trailing slash now
             const auto scheme_end = tmp.find("://") + 3;
-            const auto path_pos = tmp.find('/', scheme_end);
+            const auto path_pos   = tmp.find('/', scheme_end);
 
-            // authority = host[:port]
+            // grab “host[:port]”
             std::string authority = tmp.substr(
                 scheme_end,
-                (path_pos == std::string::npos ? tmp.size() : path_pos) - scheme_end);
-            // rest = “/…” or empty
-            std::string rest =
-                (path_pos == std::string::npos
-                     ? std::string{}
-                     : tmp.substr(path_pos));
+                (path_pos == std::string::npos ? tmp.size() : path_pos) - scheme_end
+            );
 
-            // if no “:port” in authority, append default
-            if (authority.find(':') == std::string::npos)
-            {
+            std::string rest = (path_pos == std::string::npos
+                                ? std::string{}
+                                : tmp.substr(path_pos));
+
+            // if no “:port” add the server’s port
+            if (authority.find(':') == std::string::npos) {
                 authority += ":" + std::to_string(m_port);
             }
 
-            // rebuild (and re-append the slash we stripped earlier)
-            m_redirect_url = tmp.substr(0, scheme_end) + authority + rest + '/';
-
+            // rebuild and re‐append the trailing slash
+            m_redirect_url = tmp.substr(0, scheme_end)
+                           + authority
+                           + rest
+                           + "/";
             m_logger->info("Constructed URL: {}", m_redirect_url);
             return;
         }
