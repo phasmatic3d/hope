@@ -242,11 +242,11 @@ target_compile_definitions(broadcaster PRIVATE
 
 #add_custom_command(TARGET encoder POST_BUILD
 #    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-#        "${CMAKE_SOURCE_DIR}/rsrc/certs/server.key"
-#        "${CMAKE_BINARY_DIR}/server.key"
+#        "${BROADCASTER_OUTPUT_DIR}/certs/server.key"
+#        "${BROADCASTER_OUTPUT_DIR}/server.key"
 #)
 #add_custom_command(TARGET encoder POST_BUILD
 #    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-#        "${CMAKE_SOURCE_DIR}/rsrc/certs/server.crt"
-#        "${CMAKE_BINARY_DIR}/server.crt"
+#        "${BROADCASTER_OUTPUT_DIR}/certs/server.crt"
+#        "${BROADCASTER_OUTPUT_DIR}/server.crt"
 #)

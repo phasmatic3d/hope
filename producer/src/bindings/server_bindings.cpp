@@ -14,15 +14,26 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 
-#include <websocketpp/config/asio_no_tls.hpp>
+
+//#ifndef ASIO_STANDALONE
+//#define ASIO_STANDALONE
+//#endif
+
+#include <websocketpp/config/asio.hpp>
 #include <websocketpp/server.hpp>
+
+#define USE_TLS
+#ifdef USE_TLS
+    #include <websocketpp/config/asio.hpp>    // TLS‐enabled config
+    typedef websocketpp::config::asio_tls asio_config;
+#else
+    #include <websocketpp/config/asio_no_tls.hpp>
+    typedef websocketpp::config::asio asio_config;
+#endif
+
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <nlohmann/json.hpp>
-
-#ifndef ASIO_STANDALONE
-#define ASIO_STANDALONE
-#endif
 
 namespace nb = nanobind;
 using websocketpp::connection_hdl;
@@ -55,6 +66,36 @@ public:
         if (write_to_csv) startLoggingThread();
 
         m_server.init_asio();
+
+        #ifdef USE_TLS
+		m_server.set_tls_init_handler
+        (
+            [this](websocketpp::connection_hdl h) -> websocketpp::lib::shared_ptr<websocketpp::lib::asio::ssl::context>
+            {
+                namespace asio = websocketpp::lib::asio;
+                websocketpp::lib::shared_ptr<websocketpp::lib::asio::ssl::context> ctx = std::make_shared<asio::ssl::context>(asio::ssl::context::sslv23);
+
+                try 
+                {
+                    ctx->set_options
+                    (
+                        asio::ssl::context::default_workarounds |
+                        asio::ssl::context::no_sslv2 |
+                        asio::ssl::context::no_sslv3 |
+                        asio::ssl::context::no_tlsv1 |
+                        asio::ssl::context::single_dh_use
+                    );
+                    //TODO how to generate keys and use them
+                    ctx->use_certificate_chain_file("server.crt");
+                    ctx->use_private_key_file("server.key", asio::ssl::context::pem);
+                } 
+                catch (std::exception& e) 
+                {
+                    this->m_logger->info("Error occured while parsing ssl: {}", e.what());
+                }
+            }
+        );
+        #endif
 
         // disable logging
         m_server.clear_access_channels
@@ -429,7 +470,7 @@ private:
     size_t m_port;
     size_t m_broadcast_counter = 0;
     std::shared_ptr<spdlog::logger> m_logger;
-    websocketpp::server<websocketpp::config::asio> m_server;
+    websocketpp::server<asio_config> m_server;
     std::set<connection_hdl, std::owner_less<connection_hdl>> m_connections;
     std::mutex m_connection_mutex;
     std::string m_redirect_url = "/";
@@ -445,33 +486,33 @@ private:
 
     struct PendingPing 
     {
-        Timestamp          send_time;
-        size_t             round;
-        size_t             message_size;
-        size_t             connections_size;
-        std::string        error;
+        Timestamp   send_time;
+        size_t      round;
+        size_t      message_size;
+        size_t      connections_size;
+        std::string error;
     };
 
     // keep per-connection send metadata
     struct PendingMetadata
     {
-        Timestamp send_time;
-        size_t round;
-        size_t message_size;
-        size_t connections_size;
-        size_t bytes_sent;
+        Timestamp   send_time;
+        size_t      round;
+        size_t      message_size;
+        size_t      connections_size;
+        size_t      bytes_sent;
         std::string error;
     };
 
     struct CsvFileEntry
     {
-        Timestamp timestamp;
-        double approximate_rtt_ms;
+        Timestamp   timestamp;
+        double      approximate_rtt_ms;
         std::string connection_id;
         std::string error;
-        size_t broadcast_round;
-        size_t message_size;
-        size_t connections_size;
+        size_t      broadcast_round;
+        size_t      message_size;
+        size_t      connections_size;
     };
 
     bool write_to_csv;
@@ -573,7 +614,8 @@ private:
                 csv.flush();
 
                 if (stop_logging) break;
-            } });
+            } 
+        });
     }
 
     void enqueueLogEntry(const CsvFileEntry &entry)
