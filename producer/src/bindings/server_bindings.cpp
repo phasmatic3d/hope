@@ -15,12 +15,10 @@
 #include <nanobind/stl/string.h>
 
 
-//#ifndef ASIO_STANDALONE
-//#define ASIO_STANDALONE
-//#endif
+#ifndef ASIO_STANDALONE
+#define ASIO_STANDALONE
+#endif
 
-#include <websocketpp/config/asio.hpp>
-#include <websocketpp/server.hpp>
 
 #define USE_TLS
 #ifdef USE_TLS
@@ -30,6 +28,7 @@
     #include <websocketpp/config/asio_no_tls.hpp>
     typedef websocketpp::config::asio asio_config;
 #endif
+#include <websocketpp/server.hpp>
 
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -75,24 +74,19 @@ public:
                 namespace asio = websocketpp::lib::asio;
                 websocketpp::lib::shared_ptr<websocketpp::lib::asio::ssl::context> ctx = std::make_shared<asio::ssl::context>(asio::ssl::context::sslv23);
 
-                try 
-                {
-                    ctx->set_options
-                    (
-                        asio::ssl::context::default_workarounds |
-                        asio::ssl::context::no_sslv2 |
-                        asio::ssl::context::no_sslv3 |
-                        asio::ssl::context::no_tlsv1 |
-                        asio::ssl::context::single_dh_use
-                    );
-                    //TODO how to generate keys and use them
-                    ctx->use_certificate_chain_file("server.crt");
-                    ctx->use_private_key_file("server.key", asio::ssl::context::pem);
-                } 
-                catch (std::exception& e) 
-                {
-                    this->m_logger->info("Error occured while parsing ssl: {}", e.what());
-                }
+                ctx->set_options
+                (
+                    asio::ssl::context::default_workarounds |
+                    asio::ssl::context::no_sslv2 |
+                    asio::ssl::context::no_sslv3 |
+                    asio::ssl::context::no_tlsv1 |
+                    asio::ssl::context::single_dh_use
+                );
+                //TODO how to generate keys and use them
+                ctx->use_certificate_chain_file("./broadcaster_wrapper/server.crt");
+                ctx->use_private_key_file("./broadcaster_wrapper/server.key", asio::ssl::context::pem);
+
+                return ctx;
             }
         );
         #endif

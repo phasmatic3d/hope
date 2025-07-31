@@ -5,10 +5,13 @@ cmake_policy(SET CMP0077 NEW)
 # Set the project name and version
 project(hope_producer VERSION 1.0)
 
-
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
+
+
+set(CMAKE_BUILD_TYPE Debug CACHE STRING "" FORCE)
+add_compile_options(-g)
 
 
 find_package(OpenSSL REQUIRED)
@@ -229,12 +232,42 @@ target_include_directories(broadcaster PRIVATE
 target_link_libraries(broadcaster PRIVATE 
  	spdlog::spdlog
 	nlohmann_json::nlohmann_json
+	OpenSSL::SSL
+	OpenSSL::Crypto
 )
 
 target_compile_definitions(broadcaster PRIVATE
   	ASIO_STANDALONE
   	_WEBSOCKETPP_CPP11_TYPE_TRAITS_
 )
+
+#####################################################################
+# Compile a seperate server for debugging purposes
+#####################################################################
+
+add_library(hope_server_lib
+  	src/bindings/server_bindings_no_nanobind.cpp
+)
+
+target_include_directories(hope_server_lib PUBLIC
+  	${asio_SOURCE_DIR}/asio/include
+  	${websocketpp_SOURCE_DIR}
+)
+
+target_link_libraries(hope_server_lib PUBLIC
+  	spdlog::spdlog
+  	nlohmann_json::nlohmann_json
+  	OpenSSL::SSL
+  	OpenSSL::Crypto
+)
+
+target_compile_definitions(hope_server_lib PUBLIC
+  	ASIO_STANDALONE
+  	_WEBSOCKETPP_CPP11_TYPE_TRAITS_
+)
+
+add_executable(hope_server_exec src/bindings/server_main.cpp)
+target_link_libraries(hope_server_exec PRIVATE hope_server_lib)
 
 #####################################################################
 # Certificates
