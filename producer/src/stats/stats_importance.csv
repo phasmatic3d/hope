@@ -1,0 +1,3 @@
+timestamp,mode,encoding_speed,position_quant_bits,color_resolution,depth_resolution,avg_frame_preparation_ms,avg_data_preparation_ms,layer0_on,layer1_on,layer2_on,avg_roi_encode_ms,avg_outside_encode_ms,avg_multiprocessing_compression_ms,avg_cluster_size
+2025-08-01T06:30:54.990745,IMPORTANCE,10,11,848x480,848x480,15.14,21.02,True,True,True,0.0,4.26,4.52,1.0
+2025-08-01T06:30:59.840150,IMPORTANCE,10,11,848x480,848x480,14.29,18.13,False,True,True,0.0,3.65,3.79,1.0

@@ -1,7 +1,10 @@
 import time
 import numpy as np
 import encoder as enc # this is the cpp binary
-import statslogger as log
+from stats import (
+    CompressionStats,
+)
+
 from enum import Enum, auto
 
 # Modes for processing
@@ -27,7 +30,7 @@ class DracoWrapper:
     """
     def __init__(
         self,
-        compression_stats: log.CompressionStats = None,
+        compression_stats: CompressionStats = None,
         position_quantization_bits: int = 11,
         color_quantization_bits: int = 8,
         speed_encode: int = 10,

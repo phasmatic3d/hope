@@ -36,13 +36,14 @@ from statslogger import (
     PipelineTiming,
     CompressionStats,
     calculate_overall_time,
-    make_total_time_table
+    make_total_time_table,
+    write_stats_csv
 )
 
 import multiprocessing as mp
 from multiprocessing import shared_memory
 
-import queue
+from collections import deque
 
 from dataclasses import dataclass
 
@@ -76,6 +77,8 @@ def camera_process(
     visualization_mode = VizualizationMode.COLOR
     encoding_mode      = EncodingMode.IMPORTANCE
 
+    frame_stats_buffer = deque(maxlen=30) # buffer for stats logging (CSV)
+
     global DEBUG
 
     thread_executor = ThreadPoolExecutor(max_workers=2)
@@ -108,8 +111,8 @@ def camera_process(
         box_size=0.02, 
         delay_frames=10)
     
-    min_dist = 0.1
-    max_dist = 1.3
+    min_dist = 0.05
+    max_dist = 0.4
     depth_thresh = rs.threshold_filter(min_dist, max_dist)
 
     align_to = rs.stream.color
@@ -166,6 +169,9 @@ def camera_process(
             frame_id += 1
             frame_count += 1
             frames = pipeline.wait_for_frames()
+
+            pipeline_stats.frame_preparation_ms = time.perf_counter()
+
             pipeline_stats.frame_alignment_ms = time.perf_counter()
             frames = align.process(frames)
             pipeline_stats.frame_alignment_ms = (time.perf_counter() - pipeline_stats.frame_alignment_ms) * 1000
@@ -201,8 +207,10 @@ def camera_process(
             # along with indices into 'color_frame' so that each point can be colored.
             points = rpc.calculate(depth_frame) # 6 ms
             pipeline_stats.point_cloud_creation_ms = (time.perf_counter() - point_cloud_time_start) * 1000
+
+            pipeline_stats.frame_preparation_ms = (time.perf_counter() - pipeline_stats.frame_preparation_ms) * 1000 # frame prep end
             
-            data_preparation_time_start = time.perf_counter()
+            pipeline_stats.data_preparation_ms = time.perf_counter()
             count = points.size()
             # [x0, y0, z0,  x1, y1, z1,  x2, y2, z2, …]
             vertex_buffer  = points.get_vertices()
@@ -256,52 +264,54 @@ def camera_process(
             # Add the subsampling mask to the valid points
             #valid &= subsample_mask # TODO: Maybe do not subsample the entire point cloud (maybe this has use in IMPORTANCE mode)
             pipeline_stats.subsampling_ms = (time.perf_counter() - subsampling_time_start ) * 1000
-
-            # ---GESTURE RECOGNITION---
-            gesture_recognizer.recognize(display, frame_id)
-            roi = None
-
-            for bounding_box_normalized in gesture_recognizer.latest_bounding_boxes:
-                if bounding_box_normalized:
-                    roi: np.array = bounding_box_normalized.to_pixel(display.shape[1], display.shape[0], True)
-                    shared_roi[:] = roi
-                    ready_roi_event.set()
-
-            shared_frame[:] = display
-            ready_frame_event.set()
-
-            #TODO: we need to find some work todo here in order to hide latency between processes
-
-            if ready_cluster_event.is_set():
-                prev_cluster = shared_cluster.copy()
-                ready_cluster_event.clear()
-
-            if DEBUG:
-                display[prev_cluster[:, :, 0], 2] = 255
-
-            flat_cluster = prev_cluster.flatten()
-            in_roi = valid & flat_cluster
-            out_roi = valid & ~in_roi & subsample_mask
-            points_in_roi = vertices[in_roi]; colors_in_roi = colors[in_roi]
-            points_out_roi = vertices[out_roi]; colors_out_roi = colors[out_roi]
-
-            pipeline_stats.data_preparation_ms = (time.perf_counter() - data_preparation_time_start) * 1000 #prep end
-
-            draco_roi_encoding.position_quantization_bits = draco_full_encoding.position_quantization_bits
-            draco_roi_encoding.color_quantization_bits    = draco_full_encoding.color_quantization_bits
-            draco_roi_encoding.speed_encode               = draco_full_encoding.speed_encode
-            draco_roi_encoding.speed_decode               = draco_full_encoding.speed_decode 
-
-            draco_outside_roi_encoding.position_quantization_bits = draco_roi_encoding.position_quantization_bits
-            draco_outside_roi_encoding.color_quantization_bits    = draco_roi_encoding.color_quantization_bits
-            draco_outside_roi_encoding.speed_encode               = draco_roi_encoding.speed_encode
-            draco_outside_roi_encoding.speed_decode               = draco_roi_encoding.speed_decode
-        
-            # MULTIPROCESSING IMPORTANCE
-            multiprocessing_compression_time_start = time.perf_counter()
-            futures: dict[str, concurrent.futures.Future] = {}
-            
             if(encoding_mode == EncodingMode.IMPORTANCE):
+                # ---GESTURE RECOGNITION---
+                gesture_recognizer.recognize(display, frame_id)
+                roi = None
+
+                for bounding_box_normalized in gesture_recognizer.latest_bounding_boxes:
+                    if bounding_box_normalized:
+                        roi: np.array = bounding_box_normalized.to_pixel(display.shape[1], display.shape[0], True)
+                        shared_roi[:] = roi
+                        ready_roi_event.set()
+
+                shared_frame[:] = display
+                ready_frame_event.set()
+
+                #TODO: we need to find some work todo here in order to hide latency between processes
+
+                if ready_cluster_event.is_set():
+                    prev_cluster = shared_cluster.copy()
+                    ready_cluster_event.clear()
+
+                if DEBUG:
+                    display[prev_cluster[:, :, 0], 2] = 255
+
+                flat_cluster = prev_cluster.flatten()
+
+                compression_full_stats.masking_ms = time.perf_counter()
+                in_roi = valid & flat_cluster
+                out_roi = valid & ~in_roi & subsample_mask
+                points_in_roi = vertices[in_roi]; colors_in_roi = colors[in_roi]
+                points_out_roi = vertices[out_roi]; colors_out_roi = colors[out_roi]
+                compression_full_stats.masking_ms = (time.perf_counter() - compression_full_stats.masking_ms ) * 1000
+
+                pipeline_stats.data_preparation_ms = (time.perf_counter() - pipeline_stats.data_preparation_ms) * 1000 #prep end
+
+                draco_roi_encoding.position_quantization_bits = draco_full_encoding.position_quantization_bits
+                draco_roi_encoding.color_quantization_bits    = draco_full_encoding.color_quantization_bits
+                draco_roi_encoding.speed_encode               = draco_full_encoding.speed_encode
+                draco_roi_encoding.speed_decode               = draco_full_encoding.speed_decode 
+
+                draco_outside_roi_encoding.position_quantization_bits = draco_roi_encoding.position_quantization_bits
+                draco_outside_roi_encoding.color_quantization_bits    = draco_roi_encoding.color_quantization_bits
+                draco_outside_roi_encoding.speed_encode               = draco_roi_encoding.speed_encode
+                draco_outside_roi_encoding.speed_decode               = draco_roi_encoding.speed_decode
+            
+                # MULTIPROCESSING IMPORTANCE
+                multiprocessing_compression_time_start = time.perf_counter()
+                futures: dict[str, concurrent.futures.Future] = {}
+            
                 buffer_roi = None
                 buffer_out = None
                 if points_in_roi.size:
@@ -347,7 +357,7 @@ def camera_process(
             
 
                 # Encode entire valid cloud
-                pipeline_stats.data_preparation_ms = (time.perf_counter() - data_preparation_time_start) * 1000 #prep end
+                pipeline_stats.data_preparation_ms = (time.perf_counter() - pipeline_stats.data_preparation_ms) * 1000 #prep end
 
                 if(points_full_frame.any()):
                     buffer_full = draco_full_encoding.encode(points_full_frame, colors_full_frame)
@@ -359,6 +369,18 @@ def camera_process(
 
             # Logging and display
             if DEBUG:
+                frame_stats_buffer.append({
+                    #"frame_alignment_ms":          pipeline_stats.frame_alignment_ms,
+                    #"depth_culling_ms":            pipeline_stats.depth_culling_ms,
+                    "frame_preparation_ms":         pipeline_stats.frame_preparation_ms,
+                    "data_preparation_ms":         pipeline_stats.data_preparation_ms,
+                    "multiprocessing_compression_ms": pipeline_stats.multiprocessing_compression_ms,
+                    "full_encode_ms":              compression_full_stats.compression_ms,
+                    "roi_encode_ms":               compression_roi_stats.compression_ms,
+                    "outside_encode_ms":           compression_out_stats.compression_ms,
+                    "cluster_size":                int(1),
+                })
+
                 now = time.perf_counter()
                 if (frame_count >= 30):
                     fps = frame_count // (now - prev_time)
@@ -369,38 +391,28 @@ def camera_process(
                 cv2.putText(display, f"FPS: {fps}", (cmr_clr_width -200,cmr_clr_height -30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
 
-                # draw compression stats
-                text = str(draco_full_encoding.compression_stats)
-                x, y = 10, 20
-                line_height = 20
-                for i, line in enumerate(text.splitlines()):
-                    cv2.putText(
-                        display,
-                        line,
-                        (x, y + i * line_height),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6,
-                        (255, 255, 255),
-                        2
-                    )
+                settings = [
+                f"Mode: {encoding_mode.name}",                                 
+                f"PosQuant bits: {draco_full_encoding.position_quantization_bits} / 20",
+                f"ColorQuant bits: {draco_full_encoding.color_quantization_bits} / 16",
+                f"Speed setting: {draco_full_encoding.speed_encode} / 10",
+                ]
+                x, y0, dy = 10, 20, 20
+                for i, txt in enumerate(settings):
+                    cv2.putText(display, txt,
+                                (x, y0 + i * dy),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
 
-                # now draw layer_str just below the last stats line
-                layer_str = " ".join(
+
+                # draw sampling layers just below the settings
+                layer_str = "   ".join(
                     f"L{i}{' ON' if active_layers[i] else ' OFF'}({int(sampling_layers[i]*100)}%)"
                     for i in range(len(sampling_layers))
                 )
-                # compute start_y: one line below the last stats line
-                n_lines = len(text.splitlines())
-                start_y = y + n_lines * line_height
-                cv2.putText(
-                    display,
-                    layer_str,
-                    (x, start_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (255, 255, 255),
-                    2
-                )
+                layers_y = y0 + len(settings) * dy
+                cv2.putText(display, layer_str,
+                            (x, layers_y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
 
                 if roi is not None:
                     cv2.rectangle(display, (roi[0], roi[1]), (roi[2], roi[3]), (0,255,0), 2)
@@ -429,19 +441,19 @@ def camera_process(
                         else visualization_mode.COLOR
                     )
                 elif key == ord('='):
-                    draco_full_encoding.posQuant = min(draco_full_encoding.posQuant+1, 20)
+                    draco_full_encoding.position_quantization_bits = min(draco_full_encoding.position_quantization_bits+1, 20)
                 elif key == ord('-'):
-                    draco_full_encoding.posQuant = max(draco_full_encoding.posQuant-1, 1)
+                    draco_full_encoding.position_quantization_bits = max(draco_full_encoding.position_quantization_bits-1, 1)
                 elif key == ord(']'):
-                    draco_full_encoding.colorQuant = min(draco_full_encoding.colorQuant+1, 16)
+                    draco_full_encoding.color_quantization_bits = min(draco_full_encoding.color_quantization_bits+1, 16)
                 elif key == ord('['):
-                    draco_full_encoding.colorQuant = max(draco_full_encoding.colorQuant-1, 1)
+                    draco_full_encoding.color_quantization_bits = max(draco_full_encoding.color_quantization_bits-1, 1)
                 elif key == ord('.'):
-                    draco_full_encoding.speedEncode = min(draco_full_encoding.speedEncode+1, 10)
-                    draco_full_encoding.speedDecode = draco_full_encoding.speedEncode
+                    draco_full_encoding.speed_encode = min(draco_full_encoding.speed_encode+1, 10)
+                    draco_full_encoding.speed_decode = draco_full_encoding.speed_decode
                 elif key == ord(','):
-                    draco_full_encoding.speedEncode = max(draco_full_encoding.speedEncode-1, 0)
-                    draco_full_encoding.speedDecode = draco_full_encoding.speedEncode
+                    draco_full_encoding.speed_encode = max(draco_full_encoding.speed_encode-1, 0)
+                    draco_full_encoding.speed_decode = draco_full_encoding.speed_decode
                 elif key == ord(' '):
                     # save full point cloud PLY
                     points.export_to_ply("snapshot.ply", color_frame)
@@ -453,6 +465,16 @@ def camera_process(
                     active_layers[1] = not active_layers[1]
                 elif key == ord('3'):
                     active_layers[2] = not active_layers[2]
+                elif key == ord('c'):
+                    write_stats_csv(
+                        frame_stats_buffer,
+                        encoding_mode,
+                        draco_full_encoding.speed_encode,
+                        draco_full_encoding.position_quantization_bits,
+                        (cmr_clr_width, cmr_clr_height),
+                        (cmr_depth_width, cmr_depth_height),
+                        active_layers,  
+                    )
 
                 
     finally:

@@ -1,99 +1,89 @@
 from collections.abc import Iterable
 from rich.table import Table
+import os
 
-class CompressionStats:
-    def __init__(self):
-        self.masking_ms       = 0
-        self.compression_ms   = 0
-        self.number_of_points = 0
-        self.raw_bytes        = 0
-        self.encoded_bytes    = 0
+import pandas as pd
+from datetime import datetime
+from collections import deque
+
+from typing import Tuple
+
+from draco_wrapper import (
+    EncodingMode
+)
+from stats import (
+    CompressionStats,
+    PipelineTiming
+)
+
+
+CSV_DIR     = "stats"
+FULL_CSV    = os.path.join(CSV_DIR, "stats_full.csv")
+IMP_CSV     = os.path.join(CSV_DIR, "stats_importance.csv")
+os.makedirs(CSV_DIR, exist_ok=True)
+
+
+def _append_row(path: str, row: dict):
+    write_header = not os.path.exists(path)
+    df = pd.DataFrame([row]).round(2)
+    df.to_csv(path, mode="a", header=write_header, index=False)
+    print(f"Appended stats to {path}")
+# CSV WRITER FUNCTION
+def write_stats_csv(
+    stats_buffer: deque,
+    mode,
+    encoding_speed: int,
+    pos_quant_bits: int,
+    clr_res: Tuple[int,int],
+    depth_res: Tuple[int,int],
+    active_layers: list[bool]
+):
+    """
+    Build one summary row from the last N frames and append it
+    to either the IMPORTANCE CSV or the FULL CSV.
+    """
+    if len(stats_buffer) < stats_buffer.maxlen:
+        print("No stats to write yet.")
+        return
+
+    df  = pd.DataFrame(stats_buffer)
+    avg = df.mean()
+
+    # common fields
+    common = {
+        "timestamp":              datetime.now().isoformat(),
+        "mode":                   mode.name if hasattr(mode, "name") else str(mode),
+        "encoding_speed":         encoding_speed,
+        "position_quant_bits":    pos_quant_bits,
+        "color_resolution":       f"{clr_res[0]}x{clr_res[1]}",
+        "depth_resolution":       f"{depth_res[0]}x{depth_res[1]}",
+        #"avg_frame_alignment_ms": avg.get("frame_alignment_ms",    pd.NA),
+        #"avg_depth_culling_ms":   avg.get("depth_culling_ms",      pd.NA),
+        "frame_preparation_ms":  avg.get("frame_preparation_ms",      pd.NA),
+        "data_preparation_ms":avg.get("data_preparation_ms",   pd.NA),  
+        "layer0_on":               active_layers[0],
+        "layer1_on":               active_layers[1],
+        "layer2_on":               active_layers[2],
+    }
+
+    if mode == EncodingMode.FULL:
+        row  = {**common,
+                "full_encode_ms": avg.get("full_encode_ms", pd.NA)}
+        path = FULL_CSV
+    else:  # IMPORTANCE
+        row  = {**common,
+                "roi_encode_ms":                avg.get("roi_encode_ms",               pd.NA),
+                "outside_encode_ms":            avg.get("outside_encode_ms",           pd.NA),
+                "multiprocessing_compression_ms": avg.get("multiprocessing_compression_ms", pd.NA),
+                "cluster_size":                 avg.get("cluster_size",                pd.NA),
+               }
+        path = IMP_CSV
     
-    def make_table(self, section: str, show_headers: bool = True) -> Table:
-        title = f"==== {section} ===="
-        table = Table(title=title, box=None, padding=(0,1), show_header=show_headers)
 
-        for name, value in vars(self).items():
-            # Turn "encode_ms" → "Encode Ms", "raw_bytes" → "Raw Bytes", etc.
-            label = name.replace('_', ' ').title()
+    _append_row(path, row)
 
-            # Format floats as milliseconds, leave ints alone
-            if isinstance(value, float):
-                display = f"{value:.2f} ms"
-            else:
-                display = str(value)
+    stats_buffer.clear()
 
-            table.add_row(label, display)
-
-        return table
-
-    def __str__(self):
-        lines = [
-            f"{name}: {value}"
-            for name, value in vars(self).items()
-        ]
-        return "\n".join(lines)
-
-    def get_total_time(self):
-        # sum every attribute whose name ends with "_ms"
-        return sum(
-            value
-            for name, value in vars(self).items()
-            if name.endswith('_ms')
-        )
-
-class PipelineTiming:
-    def __init__(self):
-        self.frame_alignment_ms             = 0
-        self.point_cloud_creation_ms        = 0
-        self.depth_culling_ms               = 0
-        self.spatial_filter_ms              = 0
-        self.gesture_recognition_ms         = 0
-        self.data_preparation_ms            = 0
-        self.color_lookup_ms                = 0
-        self.build_valid_points_ms          = 0
-        self.subsampling_ms                 = 0
-        self.texture_scaling_ms             = 0
-        self.multiprocessing_compression_ms = 0
-        self.sam2_ms = 0
-
-    def get_total_time(self):
-        # sum every attribute whose name ends with "_ms"
-        return sum(
-            value
-            for name, value in vars(self).items()
-            if name.endswith('_ms') and name != "texture_scaling_ms" and name != "build_valid_points_ms" and name != "build_mask_for_roi_ms"
-            and name != "multiprocessing_compression_ms"  and name != "subsampling_ms" and name != "color_lookup_ms"
-        )
-
-    def __str__(self):
-        # nicely print all *_ms fields without hard-coding
-        lines = [
-            f"{name:30s}: {value:8.2f} ms"
-            for name, value in vars(self).items()
-            if name.endswith('_ms')
-        ]
-        return "\n".join(lines)
-
-    def make_table(self, section: str, show_headers: bool = True) -> Table:
-        title = f"==== {section} ===="
-
-        table = Table(
-            title=title, 
-            box=None, 
-            padding=(0,1), 
-            show_header=show_headers
-        )
-
-        # Dynamically pull in all "<something>_ms" attrs
-        for attr, value in vars(self).items():
-            if not attr.endswith('_ms'):
-                continue
-            # turn "point_cloud_creation_ms" → "Point Cloud Creation"
-            label = attr[:-3].replace('_', ' ').title()
-            table.add_row(label, f"{value:.2f} ms")
-
-        return table
 
 def calculate_overall_time(
     pipeline_stats: PipelineTiming,

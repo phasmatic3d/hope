@@ -21,17 +21,8 @@ def main():
     server = setup_server()
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
-
-    if False:
-        encode_point_cloud(
-            server,
-            args.realsense_clr_capture_width,
-            args.realsense_clr_capture_height,
-            args.realsense_depth_capture_width,
-            args.realsense_depth_capture_height,
-            args.realsense_target_fps)
-    else:
-        hope_server.launch_processes(server, args, DEVICE)
+    
+    hope_server.launch_processes(server, args, DEVICE)
         
 
 if __name__ == "__main__":

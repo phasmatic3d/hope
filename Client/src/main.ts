@@ -242,8 +242,8 @@ async function loadAndUpdatePointCloudFromWS_worker(scene: THREE.Scene) {
         pointCloud.scale.set(20, 20, 20); 
         pointCloud.rotateX(3.14) // HARDCODED ROTATION: TODO (AND ALL OF THE OTHER TRANSFORMATIONS)
         pointCloud.position.y = -10;
-        pointCloud.position.z = 8;
-        pointCloud.position.x = -2;
+        pointCloud.position.z = 13;
+        pointCloud.position.x = 0;
         scene.add(pointCloud);
       }
 
