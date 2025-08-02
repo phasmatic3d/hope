@@ -68,14 +68,16 @@ def write_stats_csv(
 
     if mode == EncodingMode.FULL:
         row  = {**common,
-                "full_encode_ms": avg.get("full_encode_ms", pd.NA)}
+                "full_encode_ms": avg.get("full_encode_ms", pd.NA),
+                "full_points": avg.get("full_points", pd.NA),}
         path = FULL_CSV
     else:  # IMPORTANCE
         row  = {**common,
                 "roi_encode_ms":                avg.get("roi_encode_ms",               pd.NA),
                 "outside_encode_ms":            avg.get("outside_encode_ms",           pd.NA),
                 "multiprocessing_compression_ms": avg.get("multiprocessing_compression_ms", pd.NA),
-                "cluster_size":                 avg.get("cluster_size",                pd.NA),
+                "in_roi_points": avg.get("in_roi_points", pd.NA),
+                "out_roi_points": avg.get("out_roi_points", pd.NA),
                }
         path = IMP_CSV
     

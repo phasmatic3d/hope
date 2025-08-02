@@ -370,15 +370,15 @@ def camera_process(
             # Logging and display
             if DEBUG:
                 frame_stats_buffer.append({
-                    #"frame_alignment_ms":          pipeline_stats.frame_alignment_ms,
-                    #"depth_culling_ms":            pipeline_stats.depth_culling_ms,
                     "frame_preparation_ms":         pipeline_stats.frame_preparation_ms,
                     "data_preparation_ms":         pipeline_stats.data_preparation_ms,
                     "multiprocessing_compression_ms": pipeline_stats.multiprocessing_compression_ms,
                     "full_encode_ms":              compression_full_stats.compression_ms,
                     "roi_encode_ms":               compression_roi_stats.compression_ms,
                     "outside_encode_ms":           compression_out_stats.compression_ms,
-                    "cluster_size":                int(1),
+                    "full_points":                  int(compression_full_stats.number_of_points),
+                    "in_roi_points":                int(compression_roi_stats.number_of_points),
+                    "out_roi_points":               int(compression_out_stats.number_of_points)
                 })
 
                 now = time.perf_counter()
