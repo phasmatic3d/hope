@@ -172,6 +172,9 @@ def encode_point_cloud(
     spatial_filter.set_option(rs.option.filter_smooth_delta, 20)   # default=20
     spatial_filter.set_option(rs.option.holes_fill, 3)           # 0=none,1=small,2=medium,3=large
 
+
+    broadcast_round = 0
+
     
     with Live(refresh_per_second=1, screen=False) as live:
         try:
@@ -332,6 +335,8 @@ def encode_point_cloud(
                     # Encode entire valid cloud
                     pipeline_stats.data_preparation_ms = (time.perf_counter() - data_preparation_time_start) * 1000 #prep end
 
+                    entry = server.get_entry_for_round(broadcast_round)
+
                     if(points_full_frame.any()):
                         buffer_full = draco_full_encoding.encode(points_full_frame, colors_full_frame)
 
@@ -340,7 +345,12 @@ def encode_point_cloud(
                         if len(buffer_full) != 0: 
                             server.broadcast(bytes([1]) + buffer_full)
                        
-                    
+
+
+                    broadcast_round = broadcast_round + 1 
+
+                    pipeline_stats.approximate_rtt_ms = entry.approximate_rtt_ms
+
                     # Logging
                     table_pipeline_stats = pipeline_stats.make_table(
                         section="End to End Pipeline Stats", 
@@ -465,6 +475,13 @@ def encode_point_cloud(
                     for buf in bufs:
                         server.broadcast(bytes([count]) + buf) # Prefix with byte that tells us the length
 
+
+                    entry = server.get_entry_for_round(broadcast_round)
+
+
+                    broadcast_round = broadcast_round + 1
+
+                    pipeline_stats.approximate_rtt_ms = entry.approximate_rtt_ms
 
                     table_pipeline_stats = pipeline_stats.make_table(
                         section="End to End Pipeline Stats", 

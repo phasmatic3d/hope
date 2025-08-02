@@ -55,6 +55,7 @@ class PipelineTiming:
         self.subsampling_ms                 = 0
         self.texture_scaling_ms             = 0
         self.multiprocessing_compression_ms = 0
+        self.approximate_rtt_ms             = 0
         self.sam2_ms = 0
 
     def get_total_time(self):
@@ -64,6 +65,7 @@ class PipelineTiming:
             for name, value in vars(self).items()
             if name.endswith('_ms') and name != "texture_scaling_ms" and name != "build_valid_points_ms" and name != "build_mask_for_roi_ms"
             and name != "multiprocessing_compression_ms"  and name != "subsampling_ms" and name != "color_lookup_ms"
+            and name != "approximate_rtt_ms"
         )
 
     def __str__(self):

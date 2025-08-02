@@ -40,6 +40,23 @@ using websocketpp::connection_hdl;
 class ProducerServer
 {
 public:
+    // --- Members for metric calculation ---
+    using Clock = std::chrono::system_clock;
+    using Timestamp = Clock::time_point;
+
+    struct CsvFileEntry
+    {
+        Timestamp   timestamp;
+        double      approximate_rtt_ms;
+        double      one_way_ms;
+        double      one_way_plus_processing;
+        std::string connection_id;
+        std::string error;
+        size_t      broadcast_round;
+        size_t      message_size;
+        size_t      connections_size;
+    };
+
     ProducerServer
     (
         int port,
@@ -380,6 +397,14 @@ public:
         }
     }
 
+
+    CsvFileEntry get_entry_for_round(const size_t broadcast_round)
+    {
+        std::lock_guard<std::mutex> lg(log_mutex);
+        //m_logger->debug("Getting entry for broadcast round: {}", broadcast_round);
+        return broadcast_round_to_entry[broadcast_round];
+    }
+
     void set_redirect(const std::string &url)
     {
         // Trim leading / trailing whitespace
@@ -472,6 +497,7 @@ public:
         m_logger->info("Constructed URL: {}", m_redirect_url);
     }
 
+
 private:
     size_t m_port;
     size_t m_broadcast_counter = 0;
@@ -480,11 +506,6 @@ private:
     std::set<connection_hdl, std::owner_less<connection_hdl>> m_connections;
     std::mutex m_connection_mutex;
     std::string m_redirect_url = "/";
-
-
-    // --- Members for metric calculation ---
-    using Clock = std::chrono::system_clock;
-    using Timestamp = Clock::time_point;
 
     // --- Retrieve the data rate for the last broadcast round ---
     Clock::time_point   m_last_broadcast_time = Clock::now();
@@ -509,23 +530,11 @@ private:
         std::string error;
     };
 
-    struct CsvFileEntry
-    {
-        Timestamp   timestamp;
-        double      approximate_rtt_ms;
-        double      one_way_ms;
-        double      one_way_plus_processing;
-        std::string connection_id;
-        std::string error;
-        size_t      broadcast_round;
-        size_t      message_size;
-        size_t      connections_size;
-    };
-
     bool write_to_csv;
     bool use_pings_for_rtt;
     std::ofstream csv;
     std::mutex log_mutex;
+    std::map<size_t, CsvFileEntry> broadcast_round_to_entry;
     std::condition_variable log_cv;
     std::queue<CsvFileEntry> log_queue;
     std::thread log_thread;
@@ -548,7 +557,7 @@ private:
             return a.second < b.second;
         }
    };
-   std::map<MetaKey, PendingMetadata, MetaKeyCompare> m_metadata;
+    std::map<MetaKey, PendingMetadata, MetaKeyCompare> m_metadata;
 
     static constexpr const char *HEADER = "timestamp_ms_since_epoch,approximate_rtt_ms(ping or through client),one_way_ms(through client),one_way_plus_processing(through client),connection_id,error,broadcast_round,message_size,connections_size";
 
@@ -630,6 +639,7 @@ private:
     void enqueueLogEntry(const CsvFileEntry &entry)
     {
         std::lock_guard<std::mutex> lg(log_mutex);
+        broadcast_round_to_entry[entry.broadcast_round] = entry;
         log_queue.push(entry);
         log_cv.notify_one();
     }
@@ -673,22 +683,67 @@ NB_MODULE(broadcaster, m)
 {
     m.doc() = "WebSocket++ Producer server binding";
 
+    nb::class_<ProducerServer::CsvFileEntry>(m, "CsvFileEntry")
+    // timestamp_ms as a read-only property
+    .def_prop_ro("timestamp_ms",
+        [](ProducerServer::CsvFileEntry const &e) {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                       e.timestamp.time_since_epoch())
+                   .count();
+        })
+    // now all the other members as read-only props:
+    .def_prop_ro("approximate_rtt_ms",
+        [](ProducerServer::CsvFileEntry const &e) {
+            return e.approximate_rtt_ms;
+        })
+    .def_prop_ro("one_way_ms",
+        [](ProducerServer::CsvFileEntry const &e) {
+            return e.one_way_ms;
+        })
+    .def_prop_ro("one_way_plus_processing",
+        [](ProducerServer::CsvFileEntry const &e) {
+            return e.one_way_plus_processing;
+        })
+    .def_prop_ro("connection_id",
+        [](ProducerServer::CsvFileEntry const &e) {
+            return e.connection_id;
+        })
+    .def_prop_ro("error",
+        [](ProducerServer::CsvFileEntry const &e) {
+            return e.error;
+        })
+    .def_prop_ro("broadcast_round",
+        [](ProducerServer::CsvFileEntry const &e) {
+            return e.broadcast_round;
+        })
+    .def_prop_ro("message_size",
+        [](ProducerServer::CsvFileEntry const &e) {
+            return e.message_size;
+        })
+    .def_prop_ro("connections_size",
+        [](ProducerServer::CsvFileEntry const &e) {
+            return e.connections_size;
+        });
+
     nb::class_<ProducerServer>(m, "ProducerServer")
         .def(nb::init<int, bool, bool>(),
-             nb::arg("port"),
-             nb::arg("write_to_csv"),
-             nb::arg("use_pings_for_rtt"))
+            nb::arg("port"),
+            nb::arg("write_to_csv"),
+            nb::arg("use_pings_for_rtt"))
         .def("listen", &ProducerServer::listen,
-             nb::call_guard<nb::gil_scoped_release>(),
-             "Begin listening on the configured port")
+            nb::call_guard<nb::gil_scoped_release>(),
+            "Begin listening on the configured port")
         .def("run", &ProducerServer::run,
-             nb::call_guard<nb::gil_scoped_release>(),
-             "Enter the ASIO event loop (blocking)")
+            nb::call_guard<nb::gil_scoped_release>(),
+            "Enter the ASIO event loop (blocking)")
         .def("stop", &ProducerServer::stop,
-             "Stop accepting and shut down the server cleanly")
+            "Stop accepting and shut down the server cleanly")
         .def("broadcast", &ProducerServer::broadcast,
-             nb::arg("data"),
-             "Broadcast raw binary data to all connected WebSocket clients")
+            nb::arg("data"),
+            "Broadcast raw binary data to all connected WebSocket clients")
+        .def("get_entry_for_round",
+            &ProducerServer::get_entry_for_round,
+            nb::arg("broadcast_round"))
         .def(
             "set_redirect",
             [](ProducerServer &s, nb::str url_obj)
