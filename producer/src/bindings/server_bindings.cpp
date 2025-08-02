@@ -265,8 +265,10 @@ public:
             {
                 std::lock_guard<std::mutex> lg(log_mutex);
                 stop_logging = true;
+                write_to_csv = false;
             }
             log_cv.notify_one();
+            entry_cv.notify_all();
             if (log_thread.joinable())
                 log_thread.join();
         }
@@ -426,24 +428,32 @@ public:
 
         std::unique_lock<std::mutex> lk(log_mutex);
 
-        auto it = broadcast_round_to_entry.find(broadcast_round);
-        if (it != broadcast_round_to_entry.end()) return it->second;
+        auto pop_if_present = [this](size_t round) -> std::optional<CsvFileEntry> 
+        {
+            auto it = broadcast_round_to_entry.find(round);
+            if (it == broadcast_round_to_entry.end()) return std::nullopt;
 
-        entry_cv.wait_for
+            CsvFileEntry value = std::move(it->second);
+            broadcast_round_to_entry.erase(it);
+            return value;
+        };
+
+
+        if (auto hit = pop_if_present(broadcast_round))
+        {
+            return hit;
+        }
+
+        entry_cv.wait
         (
-            lk,
-            std::chrono::seconds(2), 
-            [this, broadcast_round] 
+            lk, [this, broadcast_round] 
             {
                 return broadcast_round_to_entry.count(broadcast_round) != 0 || stop_logging;
             }
-            
         );
 
-        auto it_final = broadcast_round_to_entry.find(broadcast_round);
-        if (it_final == broadcast_round_to_entry.end()) return std::nullopt;
 
-        return it_final->second;
+        return pop_if_present(broadcast_round);
     }
 
     void set_redirect(const std::string &url)

@@ -348,7 +348,6 @@ def encode_point_cloud(
 
                     entry = server.wait_for_entry(broadcast_round)
                     if entry:
-                        print("a;sdfjsadkl;")
                         broadcast_round = broadcast_round + 1 
                         pipeline_stats.approximate_rtt_ms = entry.approximate_rtt_ms
 
@@ -480,7 +479,6 @@ def encode_point_cloud(
                     entry = server.wait_for_entry(broadcast_round)
 
                     if entry:
-                        print("a;sdfjsadkl;")
                         broadcast_round = broadcast_round + 1
                         pipeline_stats.approximate_rtt_ms = entry.approximate_rtt_ms
 
