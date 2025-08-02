@@ -2,7 +2,9 @@
 {
   "files.associations": {
     "*.py": "python",
-    "system_error": "cpp"
+    "system_error": "cpp",
+    "atomic": "cpp",
+    "condition_variable": "cpp"
   },
 
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",

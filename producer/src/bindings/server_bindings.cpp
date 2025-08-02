@@ -10,9 +10,11 @@
 #include <tuple>
 #include <vector>
 #include <map>
+#include <optional>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/optional.h>
 
 
 #ifndef ASIO_STANDALONE
@@ -289,6 +291,19 @@ public:
         m_server.stop_listening();
         // Interrupt the ASIO loop so run() will return
         m_server.stop();
+        if (write_to_csv)
+        {
+            // Signal logging thread to exit, then join it
+            {
+                std::lock_guard<std::mutex> lg(log_mutex);
+                stop_logging = true;
+                write_to_csv = false;
+            }
+            log_cv.notify_one();
+            entry_cv.notify_all();
+            if (log_thread.joinable())
+                log_thread.join();
+        }
         m_logger->info("Server stopped");
     }
 
@@ -403,6 +418,32 @@ public:
         std::lock_guard<std::mutex> lg(log_mutex);
         //m_logger->debug("Getting entry for broadcast round: {}", broadcast_round);
         return broadcast_round_to_entry[broadcast_round];
+    }
+
+    std::optional<CsvFileEntry> wait_for_entry(const size_t broadcast_round) 
+    {
+        if (!write_to_csv || m_connections.empty()) return std::nullopt; 
+
+        std::unique_lock<std::mutex> lk(log_mutex);
+
+        auto it = broadcast_round_to_entry.find(broadcast_round);
+        if (it != broadcast_round_to_entry.end()) return it->second;
+
+        entry_cv.wait_for
+        (
+            lk,
+            std::chrono::seconds(2), 
+            [this, broadcast_round] 
+            {
+                return broadcast_round_to_entry.count(broadcast_round) != 0 || stop_logging;
+            }
+            
+        );
+
+        auto it_final = broadcast_round_to_entry.find(broadcast_round);
+        if (it_final == broadcast_round_to_entry.end()) return std::nullopt;
+
+        return it_final->second;
     }
 
     void set_redirect(const std::string &url)
@@ -536,6 +577,7 @@ private:
     std::mutex log_mutex;
     std::map<size_t, CsvFileEntry> broadcast_round_to_entry;
     std::condition_variable log_cv;
+    std::condition_variable entry_cv;
     std::queue<CsvFileEntry> log_queue;
     std::thread log_thread;
     bool stop_logging;
@@ -640,6 +682,7 @@ private:
     {
         std::lock_guard<std::mutex> lg(log_mutex);
         broadcast_round_to_entry[entry.broadcast_round] = entry;
+        entry_cv.notify_all();
         log_queue.push(entry);
         log_cv.notify_one();
     }
@@ -744,6 +787,10 @@ NB_MODULE(broadcaster, m)
         .def("get_entry_for_round",
             &ProducerServer::get_entry_for_round,
             nb::arg("broadcast_round"))
+        .def("wait_for_entry",
+            &ProducerServer::wait_for_entry,
+            nb::arg("broadcast_round"),
+            nb::call_guard<nb::gil_scoped_release>())
         .def(
             "set_redirect",
             [](ProducerServer &s, nb::str url_obj)

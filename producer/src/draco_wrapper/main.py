@@ -335,7 +335,6 @@ def encode_point_cloud(
                     # Encode entire valid cloud
                     pipeline_stats.data_preparation_ms = (time.perf_counter() - data_preparation_time_start) * 1000 #prep end
 
-                    entry = server.get_entry_for_round(broadcast_round)
 
                     if(points_full_frame.any()):
                         buffer_full = draco_full_encoding.encode(points_full_frame, colors_full_frame)
@@ -347,9 +346,11 @@ def encode_point_cloud(
                        
 
 
-                    broadcast_round = broadcast_round + 1 
-
-                    pipeline_stats.approximate_rtt_ms = entry.approximate_rtt_ms
+                    entry = server.wait_for_entry(broadcast_round)
+                    if entry:
+                        print("a;sdfjsadkl;")
+                        broadcast_round = broadcast_round + 1 
+                        pipeline_stats.approximate_rtt_ms = entry.approximate_rtt_ms
 
                     # Logging
                     table_pipeline_stats = pipeline_stats.make_table(
@@ -476,12 +477,12 @@ def encode_point_cloud(
                         server.broadcast(bytes([count]) + buf) # Prefix with byte that tells us the length
 
 
-                    entry = server.get_entry_for_round(broadcast_round)
+                    entry = server.wait_for_entry(broadcast_round)
 
-
-                    broadcast_round = broadcast_round + 1
-
-                    pipeline_stats.approximate_rtt_ms = entry.approximate_rtt_ms
+                    if entry:
+                        print("a;sdfjsadkl;")
+                        broadcast_round = broadcast_round + 1
+                        pipeline_stats.approximate_rtt_ms = entry.approximate_rtt_ms
 
                     table_pipeline_stats = pipeline_stats.make_table(
                         section="End to End Pipeline Stats", 
