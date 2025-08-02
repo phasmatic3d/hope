@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import { initDracoDecoder, decodePointCloud } from './dracoDecoder';
-import { openConnetion } from './transmissionWS';
+import { openConnection } from './transmissionWS';
 
 let decoderModule: any;
 let pointCloud: THREE.Points | null = null;
@@ -155,7 +155,7 @@ async function loadAndUpdatePointCloud(scene: THREE.Scene, drcUrl: string) {
 
 async function loadAndUpdatePointCloudFromWS(scene: THREE.Scene) {
   
-  openConnetion((data: ArrayBuffer) => {
+  openConnection((data: ArrayBuffer) => {
     // Decode the point cloud data
     const positions = decodePointCloud(decoderModule, data);
     // Create/update the geometry
@@ -252,7 +252,7 @@ async function loadAndUpdatePointCloudFromWS_worker(scene: THREE.Scene) {
     }
   };
   
-  openConnetion((data: ArrayBuffer) => {
+  openConnection((data: ArrayBuffer) => {
     // first byte tells us how many chunks to expect
     const dv = new DataView(data);
     const count = dv.getUint8(0);

@@ -92,12 +92,12 @@ public:
         #endif
 
         // disable logging
-        //m_server.clear_access_channels
-        //(
-        //    websocketpp::log::alevel::frame_header   |
-        //    websocketpp::log::alevel::frame_payload  |
-        //    websocketpp::log::alevel::control       // ← disable control-frame logs
-        //);
+        m_server.clear_access_channels
+        (
+            websocketpp::log::alevel::frame_header   |
+            websocketpp::log::alevel::frame_payload  |
+            websocketpp::log::alevel::control       // ← disable control-frame logs
+        );
 
         // On new WS connection
         m_server.set_open_handler
@@ -146,6 +146,8 @@ public:
                 {
                     meta.send_time,
                     rtt,
+                    -1,
+                    -1,
                     ss.str(),
                     meta.error,
                     meta.round,
@@ -169,17 +171,17 @@ public:
                     auto parsed_json = nlohmann::json::parse(message->get_payload());
                     m_logger->debug("Received message: {}", parsed_json.dump());
 
-                    if (parsed_json.value("type","") != "received-timestamp")
+                    if (parsed_json.value("type","") != "ms-and-processing")
                     {
                         m_logger->debug("Message doesn't contain timestamp field...");
                         return;
                     }
 
-                    uint64_t client_ms = parsed_json.at("timestamp").get<uint64_t>();
-                    auto client_timestamp = Timestamp
-                    (
-                        std::chrono::milliseconds(client_ms)
-                    );
+                    //uint64_t client_ms = parsed_json.at("timestamp").get<uint64_t>();
+                    //auto client_timestamp = Timestamp
+                    //(
+                    //    std::chrono::milliseconds(client_ms)
+                    //);
 
                     auto round = parsed_json.at("round").get<size_t>();
                     std::ostringstream ss;
@@ -197,12 +199,17 @@ public:
                         metadata = it->second;
                         m_metadata.erase(it);
                     }
-                    auto t1 = Clock::now();
-                    double rtt = std::chrono::duration<double,std::milli>(client_timestamp - metadata.send_time).count();
+                    //auto t1 = Clock::now();
+                    //double rtt = std::chrono::duration<double,std::milli>(client_timestamp - metadata.send_time).count();
+
+                    double one_way_ms = parsed_json.at("one_way_ms").get<double>();
+                    double one_way_plus_processing = parsed_json.at("one_way_plus_processing").get<double>();
                     CsvFileEntry entry 
                     {
                         metadata.send_time,
-                        rtt,
+                        2 * one_way_ms,
+                        one_way_ms, 
+                        one_way_plus_processing,
                         ss.str(),
                         metadata.error,
                         metadata.round,
@@ -215,7 +222,6 @@ public:
                 {
                     m_logger->error("Bad JSON on timestamp message: {}", e.what());
                 }
-
             }
         );
 
@@ -300,11 +306,14 @@ public:
 
             if(write_to_csv && !use_pings_for_rtt)
             {
+                auto now = Clock::now();
+                auto epoch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
                 nlohmann::json info = 
                 {
                     { "type",  "broadcast-info" },
                     { "round", broadcast_round },
-                    { "size",  message_size }
+                    { "size",  message_size },
+                    { "send_ts_ms", epoch_ms}
                 };
 
                 m_server.send
@@ -346,7 +355,6 @@ public:
                     broadcast_round,
                     message_size,  
                     connections_size, 
-                    bytes_sent,
                     ec ? ec.message() : "no error"
                 };
             }
@@ -498,7 +506,6 @@ private:
         size_t      round;
         size_t      message_size;
         size_t      connections_size;
-        size_t      bytes_sent;
         std::string error;
     };
 
@@ -506,6 +513,8 @@ private:
     {
         Timestamp   timestamp;
         double      approximate_rtt_ms;
+        double      one_way_ms;
+        double      one_way_plus_processing;
         std::string connection_id;
         std::string error;
         size_t      broadcast_round;
@@ -541,7 +550,7 @@ private:
    };
    std::map<MetaKey, PendingMetadata, MetaKeyCompare> m_metadata;
 
-    static constexpr const char *HEADER = "timestamp_ms_since_epoch,approximate_rtt_ms,connection_id,error,broadcast_round,message_size,connections_size";
+    static constexpr const char *HEADER = "timestamp_ms_since_epoch,approximate_rtt_ms(ping or through client),one_way_ms(through client),one_way_plus_processing(through client),connection_id,error,broadcast_round,message_size,connections_size";
 
     void startLoggingThread()
     {
@@ -602,6 +611,8 @@ private:
                     csv 
                         << epoch << "," 
                         << entry.approximate_rtt_ms << "," 
+                        << entry.one_way_ms << ","
+                        << entry.one_way_plus_processing << ","
                         << entry.connection_id << "," 
                         << entry.error << ","
                         << entry.broadcast_round << "," 
