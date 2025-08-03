@@ -185,10 +185,31 @@ public:
 
                 if(!this->write_to_csv || this->use_pings_for_rtt) return;
 
+
                 try
                 {
                     auto parsed_json = nlohmann::json::parse(message->get_payload());
-                    m_logger->debug("Received message: {}", parsed_json.dump());
+                    //m_logger->debug("Received message: {}", parsed_json.dump());
+
+                    if (parsed_json.value("type", "") == "sync-request") 
+                    {
+                        uint64_t t0 = parsed_json.at("t0").get<uint64_t>();
+
+                        auto now = Clock::now();
+                        auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+
+                        nlohmann::json response = 
+                        {
+                            { "type", "sync-response" },
+                            { "t0", t0 },
+                            { "server_time", now_ms }
+                        };
+
+                        m_logger->debug("Responding to sync request: {}", response.dump());
+                    
+                        m_server.send(hdl, response.dump(), websocketpp::frame::opcode::text);
+                        return;
+                    }
 
                     if (parsed_json.value("type","") != "ms-and-processing")
                     {
