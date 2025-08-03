@@ -1,9 +1,10 @@
 import time
 import numpy as np
-#TODO what in the name of god Basilis
-#import encoding as enc
-from . import encoder # this is the cpp binary
-import statslogger as log
+from . import encoder as enc
+from stats.stats import (
+    CompressionStats,
+)
+
 from enum import Enum, auto
 
 # Modes for processing
@@ -29,7 +30,7 @@ class DracoWrapper:
     """
     def __init__(
         self,
-        compression_stats: log.CompressionStats = None,
+        compression_stats: CompressionStats = None,
         position_quantization_bits: int = 11,
         color_quantization_bits: int = 8,
         speed_encode: int = 10,
@@ -53,14 +54,11 @@ class DracoWrapper:
             f"ROI:{self.roi_width}x{self.roi_height}"
         )
 
-    #TODO why doesn't this belong in the class?
     def encode(
         self,
         points: np.ndarray,
         colors: np.ndarray,
     ) -> bytes:
-        # TODO what?
-        # instantiate a fresh encoder in this process
 
         # This records the number of points in the point-cloud.
         # N×3 array of XYZ coordinates.
@@ -77,7 +75,7 @@ class DracoWrapper:
 
         start = time.perf_counter()
         # note this calls the cpp binary
-        buffer = encoder.encode_pointcloud(
+        buffer = enc.encode_pointcloud(
             points,
             colors,
             self.position_quantization_bits,

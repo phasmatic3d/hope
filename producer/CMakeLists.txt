@@ -248,6 +248,7 @@ target_compile_definitions(broadcaster PRIVATE
   	_WEBSOCKETPP_CPP11_TYPE_TRAITS_
 )
 
+
 #####################################################################
 # Compile a seperate server for debugging purposes
 #####################################################################

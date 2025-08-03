@@ -4,29 +4,31 @@ import time
 import os
 
 import numpy as np
-import encoding as enc
 import producer_cli as producer_cli
 
 from pathlib import Path
 from typing import Tuple
-from producer.src.broadcaster.broadcasting import *
+from broadcaster_wrapper.broadcasting import *
 
 import pyrealsense2 as rs
 import cv2
 import sam2_camera_predictor as sam2_camera
 from ultralytics import YOLOE
 
-from draco_wrapper import (
+from draco_wrapper.draco_wrapper import (
     DracoWrapper,
     EncodingMode,
     VizualizationMode
+)
+
+from broadcaster_wrapper import (
+    broadcaster
 )
 
 
 from concurrent.futures import (
     ProcessPoolExecutor, 
     ThreadPoolExecutor,
-    as_completed
 )
 
 from rich.live import Live
@@ -59,7 +61,7 @@ import torch.nn.functional as F
 DEBUG = True
 
 def camera_process(
-        server: bc.ProducerServer,
+        server: broadcaster.ProducerServer,
         shared_frame_name,
         shared_cluster_name,
         shared_roi_name,
@@ -163,7 +165,7 @@ def camera_process(
     sampling_layers = [0.60, 0.15, 0.25]
     active_layers   = [True,  True,  True]
 
-
+    broadcast_round = 0 # Keep track of broadcasting round to query cpp csv for logging
     try:
         while not stop_event.is_set():
             frame_id += 1
@@ -361,20 +363,23 @@ def camera_process(
                 if(points_full_frame.any()):
                     buffer_full = draco_full_encoding.encode(points_full_frame, colors_full_frame)
                     # Broadcast
-                    round_id = server.broadcast(bytes([1]) + buffer_full) # prefix with single byte to understand that we are sending one buffer
+                    server.broadcast(bytes([1]) + buffer_full) # prefix with single byte to understand that we are sending one buffer
                        
-                csv_entry = server.wait_for_entry(round_id)  
+                entry = server.wait_for_entry(broadcast_round)
+                if entry:
+                    broadcast_round = broadcast_round + 1 
+                    pipeline_stats.approximate_rtt_ms = entry.approximate_rtt_ms  
 
 
             # Logging and display
             if DEBUG:
-                if(csv_entry): # If broadcasting
+                if(entry): # If broadcasting
                     frame_stats_buffer.append({
                         "frame_preparation_ms":         pipeline_stats.frame_preparation_ms,
                         "data_preparation_ms":         pipeline_stats.data_preparation_ms,
                         "multiprocessing_compression_ms": pipeline_stats.multiprocessing_compression_ms,
-                        "one_way_ms":                       csv_entry.one_way_ms,
-                        "one_way_plus_processing_ms":       csv_entry.one_way_plus_processing,
+                        "one_way_ms":                       entry.one_way_ms,
+                        "one_way_plus_processing_ms":       entry.one_way_plus_processing,
                         "full_encode_ms":              compression_full_stats.compression_ms,
                         "roi_encode_ms":               compression_roi_stats.compression_ms,
                         "outside_encode_ms":           compression_out_stats.compression_ms,
@@ -646,7 +651,7 @@ def thread_worker_yoloe(
                 ready_frame_event.clear()
                 ready_cluster_event.set()
 
-def launch_processes(server: bc.ProducerServer, args, device : str) -> None:
+def launch_processes(server: broadcaster.ProducerServer, args, device : str) -> None:
     cmr_clr_width = args.realsense_clr_capture_width
     cmr_clr_height = args.realsense_clr_capture_height
     cmr_depth_width = args.realsense_depth_capture_width

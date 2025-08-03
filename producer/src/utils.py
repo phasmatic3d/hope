@@ -18,3 +18,4 @@ def calculate_focal_length_in_pixels(
 
 
 def estimate_distance():
+    pass

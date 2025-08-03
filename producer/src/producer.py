@@ -1,5 +1,4 @@
-
-from broadcasting import *
+from broadcaster_wrapper.broadcasting import *
 import hope_server
 import torch
 import os

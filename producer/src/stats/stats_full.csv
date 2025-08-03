@@ -1,3 +1,2 @@
-timestamp,mode,encoding_speed,position_quant_bits,color_resolution,depth_resolution,avg_frame_preparation_ms,avg_data_preparation_ms,layer0_on,layer1_on,layer2_on,avg_full_encode_ms
-2025-08-01T06:30:57.236046,FULL,10,11,848x480,848x480,13.93,15.99,True,True,True,3.88
-2025-08-01T06:31:06.166489,FULL,10,11,848x480,848x480,13.71,16.03,False,True,True,3.72
+timestamp,mode,encoding_speed,position_quant_bits,color_resolution,depth_resolution,frame_preparation_ms,data_preparation_ms,one_way_ms,one_way_plus_processing_ms,layer0_on,layer1_on,layer2_on,encode_ms,points
+2025-08-04T02:48:02.954293,FULL,10,11,848x480,848x480,14.21,17.61,-1.0,-1.0,True,True,True,41.32,32647

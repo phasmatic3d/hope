@@ -8,10 +8,10 @@ from collections import deque
 
 from typing import Tuple
 
-from draco_wrapper import (
+from draco_wrapper.draco_wrapper import (
     EncodingMode
 )
-from stats import (
+from stats.stats import (
     CompressionStats,
     PipelineTiming
 )
