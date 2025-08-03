@@ -75,7 +75,7 @@ def camera_process(
     
     # Hyperparameters to move to argparse
     visualization_mode = VizualizationMode.COLOR
-    encoding_mode      = EncodingMode.IMPORTANCE
+    encoding_mode      = EncodingMode.FULL
 
     frame_stats_buffer = deque(maxlen=30) # buffer for stats logging (CSV)
 
@@ -264,10 +264,10 @@ def camera_process(
             # Add the subsampling mask to the valid points
             #valid &= subsample_mask # TODO: Maybe do not subsample the entire point cloud (maybe this has use in IMPORTANCE mode)
             pipeline_stats.subsampling_ms = (time.perf_counter() - subsampling_time_start ) * 1000
+            roi = None
             if(encoding_mode == EncodingMode.IMPORTANCE):
                 # ---GESTURE RECOGNITION---
                 gesture_recognizer.recognize(display, frame_id)
-                roi = None
 
                 for bounding_box_normalized in gesture_recognizer.latest_bounding_boxes:
                     if bounding_box_normalized:
@@ -358,28 +358,30 @@ def camera_process(
 
                 # Encode entire valid cloud
                 pipeline_stats.data_preparation_ms = (time.perf_counter() - pipeline_stats.data_preparation_ms) * 1000 #prep end
-
                 if(points_full_frame.any()):
                     buffer_full = draco_full_encoding.encode(points_full_frame, colors_full_frame)
                     # Broadcast
-                    server.broadcast(bytes([1]) + buffer_full) # prefix with single byte to understand that we are sending one buffer
+                    round_id = server.broadcast(bytes([1]) + buffer_full) # prefix with single byte to understand that we are sending one buffer
                        
-                    
+                csv_entry = server.wait_for_entry(round_id)  
 
 
             # Logging and display
             if DEBUG:
-                frame_stats_buffer.append({
-                    "frame_preparation_ms":         pipeline_stats.frame_preparation_ms,
-                    "data_preparation_ms":         pipeline_stats.data_preparation_ms,
-                    "multiprocessing_compression_ms": pipeline_stats.multiprocessing_compression_ms,
-                    "full_encode_ms":              compression_full_stats.compression_ms,
-                    "roi_encode_ms":               compression_roi_stats.compression_ms,
-                    "outside_encode_ms":           compression_out_stats.compression_ms,
-                    "full_points":                  int(compression_full_stats.number_of_points),
-                    "in_roi_points":                int(compression_roi_stats.number_of_points),
-                    "out_roi_points":               int(compression_out_stats.number_of_points)
-                })
+                if(csv_entry): # If broadcasting
+                    frame_stats_buffer.append({
+                        "frame_preparation_ms":         pipeline_stats.frame_preparation_ms,
+                        "data_preparation_ms":         pipeline_stats.data_preparation_ms,
+                        "multiprocessing_compression_ms": pipeline_stats.multiprocessing_compression_ms,
+                        "one_way_ms":                       csv_entry.one_way_ms,
+                        "one_way_plus_processing_ms":       csv_entry.one_way_plus_processing,
+                        "full_encode_ms":              compression_full_stats.compression_ms,
+                        "roi_encode_ms":               compression_roi_stats.compression_ms,
+                        "outside_encode_ms":           compression_out_stats.compression_ms,
+                        "full_points":                  int(compression_full_stats.number_of_points),
+                        "in_roi_points":                int(compression_roi_stats.number_of_points),
+                        "out_roi_points":               int(compression_out_stats.number_of_points)
+                    })
 
                 now = time.perf_counter()
                 if (frame_count >= 30):

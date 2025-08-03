@@ -9,6 +9,7 @@ import producer_cli as producer_cli
 import torch.multiprocessing as mp
 
 from pathlib import Path
+import threading
 # Set up the server
 
 def main():
@@ -18,7 +19,13 @@ def main():
 
     args = producer_cli.producer_cli.parse_args()
 
-    server = setup_server()
+    server = setup_server(
+        args.server_port,
+        args.server_host,
+        args.server_write_to_csv,
+        args.server_use_pings_for_rtt
+    )
+    server.listen()
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     

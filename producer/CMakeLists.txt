@@ -11,7 +11,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 
-#find_package(OpenSSL REQUIRED)
+find_package(OpenSSL REQUIRED)
 #find_package(realsense2 REQUIRED) 
 find_package(Python 3.11 EXACT COMPONENTS Interpreter Development)
 
@@ -128,6 +128,27 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(glm)
 
+###################################################################### 
+# Fetch and add nlohmann/json (single-header JSON library)
+###################################################################### 
+FetchContent_Declare(
+  	nlohmann_json
+  	GIT_REPOSITORY https://github.com/nlohmann/json.git
+  	GIT_TAG v3.12.0
+  	GIT_SHALLOW TRUE
+)
+
+FetchContent_GetProperties(nlohmann_json)
+if(NOT nlohmann_json_POPULATED)
+  	FetchContent_Populate(nlohmann_json)
+  	add_subdirectory(
+    	${nlohmann_json_SOURCE_DIR}
+    	${nlohmann_json_BINARY_DIR}
+    	EXCLUDE_FROM_ALL
+  	)
+endif()
+
+
 #####################################################################
 # Bindings for encoder
 #####################################################################
@@ -204,6 +225,13 @@ set_target_properties(broadcaster PROPERTIES
 target_include_directories(broadcaster PRIVATE
   	${asio_SOURCE_DIR}/asio/include     
   	${websocketpp_SOURCE_DIR}       
+)
+
+target_link_libraries(broadcaster PRIVATE 
+ 	spdlog::spdlog
+	nlohmann_json::nlohmann_json
+	OpenSSL::SSL
+	OpenSSL::Crypto
 )
 
 target_compile_definitions(broadcaster PRIVATE

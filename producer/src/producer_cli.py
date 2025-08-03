@@ -61,6 +61,38 @@ producer_cli.add_argument("--realsense_depth_capture_height", type=int, default=
 producer_cli.add_argument("--realsense_target_fps", type=int, default=30, choices=[30])
 producer_cli.add_argument("--cluster_predictor", type=str, default="sam2", choices=["yolo", "sam2",])
 
+# Server Arts
+producer_cli.add_argument(
+    "--server_host",        
+    type=str, 
+    default="ws://localhost",
+    help="Broadcast server host"
+)
+
+producer_cli.add_argument(
+    "--server_port",        
+    type=int, 
+    default=9002,
+    help="Broadcast server port"
+)
+
+producer_cli.add_argument(
+        "--server_write_to_csv",        
+        type=bool, 
+        choices=[False, True],
+        default=True,
+        help="Write latency values to csv"
+    )
+
+producer_cli.add_argument(
+        "--server_use_pings_for_rtt",        
+        type=bool, 
+        choices=[False, True],
+        default=True,
+        help="Calculate RTT using pings instead of timestamps."
+    )
+
+
 def getRequest(outputPath : Path, url : str) -> None:
     req = requests.get(url, stream=True, allow_redirects=True, timeout=10)
 

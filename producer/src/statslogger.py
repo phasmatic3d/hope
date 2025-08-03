@@ -59,8 +59,10 @@ def write_stats_csv(
         "depth_resolution":       f"{depth_res[0]}x{depth_res[1]}",
         #"avg_frame_alignment_ms": avg.get("frame_alignment_ms",    pd.NA),
         #"avg_depth_culling_ms":   avg.get("depth_culling_ms",      pd.NA),
-        "frame_preparation_ms":  avg.get("frame_preparation_ms",      pd.NA),
-        "data_preparation_ms":avg.get("data_preparation_ms",   pd.NA),  
+        "frame_preparation_ms":         avg.get("frame_preparation_ms",      pd.NA),
+        "data_preparation_ms"           :avg.get("data_preparation_ms",   pd.NA),  
+        "one_way_ms"                : avg.get("one_way_ms",            pd.NA),
+        "one_way_plus_processing_ms"   : avg.get("one_way_plus_processing_ms",    pd.NA),
         "layer0_on":               active_layers[0],
         "layer1_on":               active_layers[1],
         "layer2_on":               active_layers[2],
@@ -68,16 +70,16 @@ def write_stats_csv(
 
     if mode == EncodingMode.FULL:
         row  = {**common,
-                "full_encode_ms": avg.get("full_encode_ms", pd.NA),
-                "full_points": avg.get("full_points", pd.NA),}
+                "encode_ms": avg.get("full_encode_ms", pd.NA),
+                "points": int(avg.get("full_points", pd.NA)),}
         path = FULL_CSV
     else:  # IMPORTANCE
         row  = {**common,
                 "roi_encode_ms":                avg.get("roi_encode_ms",               pd.NA),
                 "outside_encode_ms":            avg.get("outside_encode_ms",           pd.NA),
                 "multiprocessing_compression_ms": avg.get("multiprocessing_compression_ms", pd.NA),
-                "in_roi_points": avg.get("in_roi_points", pd.NA),
-                "out_roi_points": avg.get("out_roi_points", pd.NA),
+                "in_roi_points": int(avg.get("in_roi_points", pd.NA)),
+                "out_roi_points": int(avg.get("out_roi_points", pd.NA)),
                }
         path = IMP_CSV
     
