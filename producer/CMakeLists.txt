@@ -15,7 +15,7 @@ add_compile_options(-g)
 
 
 find_package(OpenSSL REQUIRED)
-find_package(realsense2 REQUIRED) 
+#find_package(realsense2 REQUIRED) 
 find_package(Python 3.11 EXACT COMPONENTS Interpreter Development)
 
 message(STATUS "Python include dirs: ${Python_INCLUDE_DIRS}")
@@ -227,6 +227,13 @@ set_target_properties(broadcaster PROPERTIES
 target_include_directories(broadcaster PRIVATE
   	${asio_SOURCE_DIR}/asio/include     
   	${websocketpp_SOURCE_DIR}       
+)
+
+target_link_libraries(broadcaster PRIVATE 
+ 	spdlog::spdlog
+	nlohmann_json::nlohmann_json
+	OpenSSL::SSL
+	OpenSSL::Crypto
 )
 
 target_link_libraries(broadcaster PRIVATE 

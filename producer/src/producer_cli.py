@@ -52,12 +52,46 @@ map_to_enum = {
 
 producer_cli = argparse.ArgumentParser(description="HOPE producer")
 producer_cli.add_argument("--sam2_checkpoint", type=str, default="large", choices=["tiny", "small", "base_plus", "large"])
-producer_cli.add_argument("--sam2_image_size", type=int, default=1024)
+producer_cli.add_argument("--sam2_image_size", type=int, default=1024, choices=[1024, 512, 256, 128])
+producer_cli.add_argument("--yolo_size", type=str, default="large", choices=["samll, medium, large"])
 producer_cli.add_argument("--realsense_clr_capture_width", type=int, default=848, choices=[848])
 producer_cli.add_argument("--realsense_clr_capture_height", type=int, default=480, choices=[480])
 producer_cli.add_argument("--realsense_depth_capture_width", type=int, default=848, choices=[848])
 producer_cli.add_argument("--realsense_depth_capture_height", type=int, default=480, choices=[480])
 producer_cli.add_argument("--realsense_target_fps", type=int, default=30, choices=[30])
+producer_cli.add_argument("--cluster_predictor", type=str, default="sam2", choices=["yolo", "sam2",])
+
+# Server Arts
+producer_cli.add_argument(
+    "--server_host",        
+    type=str, 
+    default="ws://localhost",
+    help="Broadcast server host"
+)
+
+producer_cli.add_argument(
+    "--server_port",        
+    type=int, 
+    default=9002,
+    help="Broadcast server port"
+)
+
+producer_cli.add_argument(
+        "--server_write_to_csv",        
+        type=bool, 
+        choices=[False, True],
+        default=True,
+        help="Write latency values to csv"
+    )
+
+producer_cli.add_argument(
+        "--server_use_pings_for_rtt",        
+        type=bool, 
+        choices=[False, True],
+        default=True,
+        help="Calculate RTT using pings instead of timestamps."
+    )
+
 
 def getRequest(outputPath : Path, url : str) -> None:
     req = requests.get(url, stream=True, allow_redirects=True, timeout=10)
