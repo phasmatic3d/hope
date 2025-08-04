@@ -18,8 +18,9 @@ from stats.stats import (
 
 
 CSV_DIR     = "stats"
-FULL_CSV    = os.path.join(CSV_DIR, "stats_full.csv")
-IMP_CSV     = os.path.join(CSV_DIR, "stats_importance.csv")
+NONE_CSV  = os.path.join(CSV_DIR, "stats_none.csv")
+FULL_CSV  = os.path.join(CSV_DIR, "stats_full.csv")
+IMP_CSV   = os.path.join(CSV_DIR, "stats_importance.csv")
 os.makedirs(CSV_DIR, exist_ok=True)
 
 
@@ -31,87 +32,107 @@ def _append_row(path: str, row: dict):
 # CSV WRITER FUNCTION
 def write_stats_csv(
     stats_buffer: deque,
-    mode,
-    encoding_speed: int,
-    pos_quant_bits: int,
+    mode: EncodingMode,
     clr_res: Tuple[int,int],
     depth_res: Tuple[int,int],
-    active_layers: list[bool]
+    # for FULL
+    encoding_speed: int = None,
+    pos_quant_bits: int = None,
+    active_layers: list[bool] = None,
+    # for IMPORTANCE
+    encoding_speed_in: int = None,
+    pos_quant_bits_in: int = None,
+    encoding_speed_out: int = None,
+    pos_quant_bits_out: int = None,
 ):
-    """
-    Build one summary row from the last N frames and append it
-    to either the IMPORTANCE CSV or the FULL CSV.
-    """
+    # need 30 frames before writing
     if len(stats_buffer) < stats_buffer.maxlen:
-        print("No stats to write yet.")
+        print(f"Waiting for {stats_buffer.maxlen} frames (have {len(stats_buffer)})")
         return
 
-    df  = pd.DataFrame(stats_buffer)
-    avg = df.mean()
+    avg = pd.DataFrame(stats_buffer).mean()
+    stats_buffer.clear()
 
-    # common fields
+    # shared fields
+    ts = datetime.now().isoformat()
     common = {
-        "timestamp":              datetime.now().isoformat(),
-        "color_resolution":       f"{clr_res[0]}x{clr_res[1]}",
-        "depth_resolution":       f"{depth_res[0]}x{depth_res[1]}",
-        "mode":                   mode.name if hasattr(mode, "name") else str(mode),
-        "encoding_speed":         encoding_speed,
-        "position_quant_bits":    pos_quant_bits,
-        "layer0_on":               active_layers[0],
-        "layer1_on":               active_layers[1],
-        "layer2_on":               active_layers[2],
-        #"avg_frame_alignment_ms": avg.get("frame_alignment_ms",    pd.NA),
-        #"avg_depth_culling_ms":   avg.get("depth_culling_ms",      pd.NA),
-        "frame_preparation_ms":         avg.get("frame_preparation_ms",      pd.NA),
-        "data_preparation_ms"           :avg.get("data_preparation_ms",   pd.NA),  
-        "one_way_ms"                : avg.get("one_way_ms",            pd.NA),
-        "one_way_plus_processing_ms"   : avg.get("one_way_plus_processing_ms",    pd.NA),
+        "timestamp":         ts,
+        "color_resolution":  f"{clr_res[0]}x{clr_res[1]}",
+        "depth_resolution":  f"{depth_res[0]}x{depth_res[1]}",
+        "mode":              mode.name,
     }
 
-    if mode == EncodingMode.FULL:
-        row  = {**common,
-                "encode_ms": avg.get("full_encode_ms", pd.NA),
-                "points": int(avg.get("full_points", pd.NA)),
+    if mode == EncodingMode.NONE:
+        row = {
+            **common,
+            "points":                      int(avg.get("points", pd.NA)),
+            "frame_preparation_ms":        avg.get("frame_preparation_ms",   pd.NA),
+            "data_preparation_ms":         avg.get("data_preparation_ms",    pd.NA),
+            "one_way_ms":                  avg.get("one_way_ms",             pd.NA),
+            "one_way_plus_processing_ms":  avg.get("one_way_plus_processing_ms", pd.NA),
         }
-        # derived decode ms
-        row["decode_ms"] = (row.get("one_way_plus_processing_ms", 0) - row.get("one_way_ms", 0))
-
-        # derived total
+        # total_time = frame_prep + data_prep + one_way+proc
         row["total_time_ms"] = (
-            row.get("frame_preparation_ms", 0) + # frame prep
-            row.get("data_preparation_ms",      0) + # data prep
-            row.get("encode_ms",                0) + # encoding
-            row.get("one_way_plus_processing_ms", 0) # send + decoding
+            row["frame_preparation_ms"]
+          + row["data_preparation_ms"]
+          + row["one_way_plus_processing_ms"]
+        )
+        path = NONE_CSV
+
+    elif mode == EncodingMode.FULL:
+        row = {
+            **common,
+            "encoding_speed":        encoding_speed,
+            "position_quant_bits":   pos_quant_bits,
+            "layer0_on":             active_layers[0],
+            "layer1_on":             active_layers[1],
+            "layer2_on":             active_layers[2],
+            "points":                int(avg.get("full_points", pd.NA)),
+            "frame_preparation_ms":  avg.get("frame_preparation_ms",   pd.NA),
+            "data_preparation_ms":   avg.get("data_preparation_ms",    pd.NA),
+            "encode_ms":             avg.get("full_encode_ms",         pd.NA),
+            "one_way_ms":            avg.get("one_way_ms",             pd.NA),
+            "one_way_plus_processing_ms": avg.get("one_way_plus_processing_ms", pd.NA),
+        }
+        # total_time = frame_prep + data_prep + encode + one_way+proc
+        row["total_time_ms"] = (
+            row["frame_preparation_ms"]
+          + row["data_preparation_ms"]
+          + row["encode_ms"]
+          + row["one_way_plus_processing_ms"]
         )
         path = FULL_CSV
+
     else:  # IMPORTANCE
-        row = {}
-        row.update(common)
-
-        in_pts  = int(avg.get("in_roi_points", pd.NA))
+        in_pts  = int(avg.get("in_roi_points",  pd.NA))
         out_pts = int(avg.get("out_roi_points", pd.NA))
-        row["in_roi_points"]  = in_pts
-        row["out_roi_points"] = out_pts
-        row["points"] = in_pts + out_pts
-        row["roi_encode_ms"]     = avg.get("roi_encode_ms",               pd.NA)
-        row["outside_encode_ms"] = avg.get("outside_encode_ms",           pd.NA)
-        row["encode_ms"]         = avg.get("multiprocessing_compression_ms", pd.NA)
-        
-        # derived decode time
-        row["decode_ms"] = (
-            row.get("one_way_plus_processing_ms", 0)
-            - row.get("one_way_ms",                  0)
-        )
-
-        # derived total time
+        row = {
+            **common,
+            "encoding_speed_in":       encoding_speed_in,
+            "position_quant_bits_in":  pos_quant_bits_in,
+            "encoding_speed_out":      encoding_speed_out,
+            "position_quant_bits_out": pos_quant_bits_out,
+            "layer0_on":               active_layers[0],
+            "layer1_on":               active_layers[1],
+            "layer2_on":               active_layers[2],
+            "points_in":               in_pts,
+            "points_out":              out_pts,
+            "points":                  in_pts + out_pts,
+            "frame_preparation_ms":    avg.get("frame_preparation_ms",   pd.NA),
+            "data_preparation_ms":     avg.get("data_preparation_ms",    pd.NA),
+            "encode_ms":               avg.get("multiprocessing_compression_ms", pd.NA),
+            "one_way_ms":              avg.get("one_way_ms",             pd.NA),
+            "one_way_plus_processing_ms": avg.get("one_way_plus_processing_ms", pd.NA),
+        }
+        # total_time = frame_prep + data_prep + encode + one_way+proc
         row["total_time_ms"] = (
-            row.get("frame_preparation_ms",         0)
-            + row.get("data_preparation_ms",        0)
-            + row.get("multiprocessing_compression_ms", 0)
-            + row.get("one_way_plus_processing_ms", 0)
+            row["frame_preparation_ms"]
+          + row["data_preparation_ms"]
+          + row["encode_ms"]
+          + row["one_way_plus_processing_ms"]
         )
-
         path = IMP_CSV
+
     
 
     _append_row(path, row)

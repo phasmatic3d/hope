@@ -170,6 +170,13 @@ def camera_process(
     broadcast_round = 0 # Keep track of broadcasting round to query cpp csv for logging
     try:
         while not stop_event.is_set():
+            # Sync hyperparameter changes
+            draco_roi_encoding.position_quantization_bits = draco_full_encoding.position_quantization_bits
+            draco_roi_encoding.color_quantization_bits    = draco_full_encoding.color_quantization_bits
+            draco_roi_encoding.speed_encode               = draco_full_encoding.speed_encode
+            draco_roi_encoding.speed_decode               = draco_full_encoding.speed_decode 
+
+
             frame_id += 1
             frame_count += 1
             frames = pipeline.wait_for_frames()
@@ -323,16 +330,6 @@ def camera_process(
                     compression_full_stats.masking_ms = (time.perf_counter() - compression_full_stats.masking_ms ) * 1000
 
                     pipeline_stats.data_preparation_ms = (time.perf_counter() - pipeline_stats.data_preparation_ms) * 1000 #prep end
-
-                    draco_roi_encoding.position_quantization_bits = draco_full_encoding.position_quantization_bits
-                    draco_roi_encoding.color_quantization_bits    = draco_full_encoding.color_quantization_bits
-                    draco_roi_encoding.speed_encode               = draco_full_encoding.speed_encode
-                    draco_roi_encoding.speed_decode               = draco_full_encoding.speed_decode 
-
-                    draco_outside_roi_encoding.position_quantization_bits = draco_roi_encoding.position_quantization_bits
-                    draco_outside_roi_encoding.color_quantization_bits    = draco_roi_encoding.color_quantization_bits
-                    draco_outside_roi_encoding.speed_encode               = draco_roi_encoding.speed_encode
-                    draco_outside_roi_encoding.speed_decode               = draco_roi_encoding.speed_decode
                 
                     # MULTIPROCESSING IMPORTANCE
                     multiprocessing_compression_time_start = time.perf_counter()
@@ -433,32 +430,109 @@ def camera_process(
                     prev_time = now
                     frame_count = 0
 
+                # CV DRAW ON SCREEN
+
                 # draw FPS
                 cv2.putText(display, f"FPS: {fps}", (cmr_clr_width -200,cmr_clr_height -30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
 
-                settings = [
-                f"Mode: {encoding_mode.name}",                                 
-                f"PosQuant bits: {draco_full_encoding.position_quantization_bits} / 20",
-                f"ColorQuant bits: {draco_full_encoding.color_quantization_bits} / 16",
-                f"Speed setting: {draco_full_encoding.speed_encode} / 10",
-                ]
+                # initial text coordinates
                 x, y0, dy = 10, 20, 20
-                for i, txt in enumerate(settings):
-                    cv2.putText(display, txt,
-                                (x, y0 + i * dy),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
 
-
-                # draw sampling layers just below the settings
-                layer_str = "   ".join(
-                    f"L{i}{' ON' if active_layers[i] else ' OFF'}({int(sampling_layers[i]*100)}%)"
-                    for i in range(len(sampling_layers))
+                cv2.putText(
+                    display,
+                    f"Mode: {encoding_mode.name}",
+                    (x, y0),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255, 255, 255),
+                    2
                 )
-                layers_y = y0 + len(settings) * dy
-                cv2.putText(display, layer_str,
-                            (x, layers_y),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
+
+                if encoding_mode == EncodingMode.FULL:
+                    # FULL: show only the full-encode settings
+                    settings_full = [
+                        f"PosQuant bits: {draco_full_encoding.position_quantization_bits} / 20",
+                        f"ColorQuant bits: {draco_full_encoding.color_quantization_bits} / 16",
+                        f"Speed setting: {draco_full_encoding.speed_encode} / 10",
+                    ]
+
+                    for i, txt in enumerate(settings_full):
+                        cv2.putText(
+                            display,
+                            txt,
+                            (x, y0 + (i+1) * dy),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6,
+                            (255, 255, 255),
+                            2
+                        )
+
+                    # draw sampling layers just below those
+                    layer_str = "   ".join(
+                        f"L{i}{' ON' if active_layers[i] else ' OFF'}({int(sampling_layers[i]*100)}%)"
+                        for i in range(len(sampling_layers))
+                    )
+                    layers_y = y0 + (len(settings_full) + 2) * dy
+                    cv2.putText(
+                        display,
+                        layer_str,
+                        (x, layers_y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 255),
+                        2
+                    )
+
+                elif encoding_mode == EncodingMode.IMPORTANCE:
+                    # IMPORTANCE: show both in-ROI and out-ROI settings
+                    group1 = [
+                        f"PosQuant bits (in-ROI):  {draco_roi_encoding.position_quantization_bits} / 20",
+                        f"ColorQuant bits (in-ROI):{draco_roi_encoding.color_quantization_bits} / 16",
+                        f"Speed setting (in-ROI):  {draco_roi_encoding.speed_encode} / 10",
+                    ]
+                    for i, txt in enumerate(group1):
+                        cv2.putText(
+                            display,
+                            txt,
+                            (x, y0 + (i+1) * dy),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6,
+                            (255, 255, 255),
+                            2
+                        )
+
+                    group2 = [
+                        f"PosQuant bits (out-ROI):  {draco_outside_roi_encoding.position_quantization_bits} / 20",
+                        f"ColorQuant bits (out-ROI):{draco_outside_roi_encoding.color_quantization_bits} / 16",
+                        f"Speed setting (out-ROI):  {draco_outside_roi_encoding.speed_encode} / 10",
+                    ]
+                    start2_y = y0 + (len(group1) + 2) * dy
+                    for j, txt in enumerate(group2):
+                        cv2.putText(
+                            display,
+                            txt,
+                            (x, start2_y + j * dy),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6,
+                            (255, 255, 255),
+                            2
+                        )
+
+                    layer_str = "   ".join(
+                        f"L{i}{' ON' if active_layers[i] else ' OFF'}({int(sampling_layers[i]*100)}%)"
+                        for i in range(len(sampling_layers))
+                    )
+                    layers_y = start2_y + len(group2) * dy + dy
+                    cv2.putText(
+                        display,
+                        layer_str,
+                        (x, layers_y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 255),
+                        2
+                    )
 
                 if roi is not None:
                     cv2.rectangle(display, (roi[0], roi[1]), (roi[2], roi[3]), (0,255,0), 2)
@@ -490,20 +564,40 @@ def camera_process(
                         if visualization_mode is visualization_mode.COLOR
                         else visualization_mode.COLOR
                     )
+                # HIGH IMPORTANCE (FULL, ROI)
                 elif key == ord('='):
                     draco_full_encoding.position_quantization_bits = min(draco_full_encoding.position_quantization_bits+1, 20)
                 elif key == ord('-'):
                     draco_full_encoding.position_quantization_bits = max(draco_full_encoding.position_quantization_bits-1, 1)
+                # LOW IMPORTANCE (OUT-ROI)    
+                elif key == ord('+'):
+                    draco_outside_roi_encoding.position_quantization_bits = min(draco_outside_roi_encoding.position_quantization_bits+1, 20)
+                elif key == ord('_'):
+                    draco_outside_roi_encoding.position_quantization_bits = max(draco_outside_roi_encoding.position_quantization_bits-1, 1)
+                # HIGH IMPORTANCE (FULL, ROI)
                 elif key == ord(']'):
                     draco_full_encoding.color_quantization_bits = min(draco_full_encoding.color_quantization_bits+1, 16)
                 elif key == ord('['):
                     draco_full_encoding.color_quantization_bits = max(draco_full_encoding.color_quantization_bits-1, 1)
+                # LOW IMPORTANCE (OUT-ROI)    
+                elif key == ord('}'):
+                    draco_outside_roi_encoding.color_quantization_bits = min(draco_outside_roi_encoding.color_quantization_bits+1, 16)
+                elif key == ord('{'):
+                    draco_outside_roi_encoding.color_quantization_bits = max(draco_outside_roi_encoding.color_quantization_bits-1, 1)
+                 # HIGH IMPORTANCE (FULL, ROI)
                 elif key == ord('.'):
                     draco_full_encoding.speed_encode = min(draco_full_encoding.speed_encode+1, 10)
                     draco_full_encoding.speed_decode = draco_full_encoding.speed_decode
                 elif key == ord(','):
                     draco_full_encoding.speed_encode = max(draco_full_encoding.speed_encode-1, 0)
                     draco_full_encoding.speed_decode = draco_full_encoding.speed_decode
+                 # LOW IMPORTANCE (OUT-ROI)    
+                elif key == ord('>'):
+                    draco_outside_roi_encoding.speed_encode = min(draco_outside_roi_encoding.speed_encode+1, 10)
+                    draco_outside_roi_encoding.speed_decode = draco_outside_roi_encoding.speed_decode
+                elif key == ord('<'):
+                    draco_outside_roi_encoding.speed_encode = max(draco_outside_roi_encoding.speed_encode-1, 0)
+                    draco_outside_roi_encoding.speed_decode = draco_outside_roi_encoding.speed_decode
                 elif key == ord(' '):
                     # save full point cloud PLY
                     points.export_to_ply("snapshot.ply", color_frame)
@@ -519,13 +613,20 @@ def camera_process(
                     write_stats_csv(
                         frame_stats_buffer,
                         encoding_mode,
-                        draco_full_encoding.speed_encode,
-                        draco_full_encoding.position_quantization_bits,
+                        # resolutions
                         (cmr_clr_width, cmr_clr_height),
                         (cmr_depth_width, cmr_depth_height),
-                        active_layers,  
+                        # FULL mode params
+                        draco_full_encoding.speed_encode,
+                        draco_full_encoding.position_quantization_bits,
+                        active_layers,
+                        # IMPORTANCE mode “in” params
+                        draco_roi_encoding.speed_encode,
+                        draco_roi_encoding.position_quantization_bits,
+                        # IMPORTANCE mode “out” params
+                        draco_outside_roi_encoding.speed_encode,
+                        draco_outside_roi_encoding.position_quantization_bits
                     )
-
                 
     finally:
         pipeline.stop()
