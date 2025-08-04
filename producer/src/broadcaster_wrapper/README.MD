@@ -106,6 +106,8 @@ certutil -d sql:"$HOME/.pki/nssdb" \
         -i ~/Github/hope/producer/src/broadcaster_wrapper/cert/myCA.pem
 ```
 
+# Clock Synchronization
+
 ## ⏰ Synchronize Server-Client clocks via Public NTP Pools for Windows Machines
 
 To get accurate one-way latency measurements, both machines must share the same time.
@@ -127,3 +129,82 @@ To get accurate one-way latency measurements, both machines must share the same 
    w32tm /query /status
    ```
 Look for Source: 0.pool.ntp.org (or similar) and a valid Stratum.
+
+## Linux ( Ubuntu )
+
+### Server 
+
+```
+sudo apt update
+sudo apt install ntp
+```
+
+```
+sudo nano /etc/ntp.conf
+sudo vim /etc/ntp.conf
+```
+
+Point to upstream servers of your choice (or leave the Ubuntu pools if you want this server to sync upstream too):
+
+```
+# comment these out and replace with close ones
+pool 0.ubuntu.pool.ntp.org iburst
+pool 1.ubuntu.pool.ntp.org iburst
+```
+
+Allow your client’s subnet (e.g. 192.168.1.0/24) to query this server—add somewhere in the file:
+
+```
+restrict 192.168.1.0 mask 255.255.255.0 nomodify notrap
+```
+
+Restart NTP
+
+```
+sudo systemctl restart ntp
+sudo systemctl enable ntp
+```
+
+
+Verify the server is up: 
+
+```
+ntpq -p
+```
+
+### Client
+
+
+```
+sudo apt update
+sudo apt install ntp
+```
+
+```
+sudo nano /etc/ntp.conf
+sudo vim /etc/ntp.conf
+```
+
+Comment out any existing pool or server lines, then add:
+
+```
+server 192.168.1.10 iburst
+```
+
+Check synchronization
+
+```
+ntpq -p
+```
+
+You should see the local server listed, and after a minute or two, a “reach” value >0 and the “offset” fairly small.
+
+### Stop the service 
+
+
+```
+sudo systemctl disable ntp
+sudo systemctl stop ntp
+```
+
+
