@@ -1,0 +1,2 @@
+timestamp,mode,encoding_speed,position_quant_bits,color_resolution,depth_resolution,frame_preparation_ms,data_preparation_ms,one_way_ms,one_way_plus_processing_ms,layer0_on,layer1_on,layer2_on,roi_encode_ms,outside_encode_ms,multiprocessing_compression_ms,in_roi_points,out_roi_points
+2025-08-04T03:04:10.346006,IMPORTANCE,10,11,848x480,848x480,13.76,18.7,-1.0,-1.0,True,True,True,0.0,3.78,3.92,0,20537

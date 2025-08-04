@@ -10,8 +10,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 
-set(CMAKE_BUILD_TYPE Debug CACHE STRING "" FORCE)
-add_compile_options(-g)
+#set(CMAKE_BUILD_TYPE Debug CACHE STRING "" FORCE)
+#add_compile_options(-g)
 
 
 find_package(OpenSSL REQUIRED)
