@@ -105,3 +105,25 @@ certutil -d sql:"$HOME/.pki/nssdb" \
         -n "Local Dev Root CA" \
         -i ~/Github/hope/producer/src/broadcaster_wrapper/cert/myCA.pem
 ```
+
+## ⏰ Synchronize Server-Client clocks via Public NTP Pools for Windows Machines
+
+To get accurate one-way latency measurements, both machines must share the same time.
+
+1. **Start & auto-enable the Time service**  
+   ```bat
+   sc config w32time start= auto
+   net start w32time
+   ```
+
+2. **Point at the public NTP pool**
+   ```bat
+   w32tm /config /syncfromflags:manual /manualpeerlist:"0.pool.ntp.org,1.pool.ntp.org,2.pool.ntp.org" /reliable:yes /update
+   ```
+   
+3. **Force an immediate resync & verify**
+   ```bat
+   w32tm /resync
+   w32tm /query /status
+   ```
+Look for Source: 0.pool.ntp.org (or similar) and a valid Stratum.
