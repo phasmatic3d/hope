@@ -9,6 +9,7 @@ from enum import Enum, auto
 
 # Modes for processing
 class EncodingMode(Enum):
+    NONE = auto()
     FULL = auto()          
     IMPORTANCE = auto()    
 

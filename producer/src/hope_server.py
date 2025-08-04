@@ -187,7 +187,8 @@ def camera_process(
 
             pipeline_stats.depth_culling_ms = time.perf_counter()
             # Apply the depth-threshold filter to drop pixels too near or too far
-            depth_frame = depth_thresh.process(depth_frame)
+            if(encoding_mode != EncodingMode.NONE):
+                depth_frame = depth_thresh.process(depth_frame)
             pipeline_stats.depth_culling_ms = (time.perf_counter() - pipeline_stats.depth_culling_ms) * 1000
 
             # Prepare image for display
@@ -209,10 +210,11 @@ def camera_process(
             # Compute the point cloud from the latest depth frame.
             # The output 'points' contains 3D coordinates (X, Y, Z) for each pixel,
             # along with indices into 'color_frame' so that each point can be colored.
-            points = rpc.calculate(depth_frame) # 6 ms
+            points = rpc.calculate(depth_frame)
             pipeline_stats.point_cloud_creation_ms = (time.perf_counter() - point_cloud_time_start) * 1000
 
             pipeline_stats.frame_preparation_ms = (time.perf_counter() - pipeline_stats.frame_preparation_ms) * 1000 # frame prep end
+            
             
             pipeline_stats.data_preparation_ms = time.perf_counter()
             count = points.size()
@@ -226,161 +228,177 @@ def camera_process(
             # View the raw texture buffer as a (count × 2) float32 array: each row is one UV pair (u, v)
             texcoords = np.frombuffer(texture_buffer, dtype=np.float32).reshape(count, 2) # 1ms
 
-            texture_scaling_time_start = time.perf_counter()
-            # Precompute the scale factors once
-            # Flatten and mask arrays
-            # Each u,v is normalized in [0.0, 1.0]. Scale u by (width-1) to get a column index in [0, width-1],
-            # then cast to int so we can index into the 2D image array
-            column_coordinates = (texcoords[:, 0] * (depth_width - 1)).astype(np.int32)
-            # Similarly, scale v by (height-1) to get a row index, then cast to int
-            row_coordinates    = (texcoords[:, 1] * (depth_height - 1)).astype(np.int32) # 3 ms
-
-            pixel_indices = row_coordinates * depth_width + column_coordinates
-
-            pipeline_stats.texture_scaling_ms = (time.perf_counter() - texture_scaling_time_start) * 1000
-
-            pipeline_stats.color_lookup_ms = time.perf_counter()
-            # Flatten the H×W×3 BGR image into a (H*W)×3 array so each row is one pixel’s BGR triplet
-            flat_color_pixels = color_img.reshape(-1, 3)
-            colors = flat_color_pixels[pixel_indices]  # shape: (N, 3) in [R, G, B] order
-            pipeline_stats.color_lookup_ms = ((time.perf_counter() - pipeline_stats.color_lookup_ms) * 1000)
-
-            build_valid_points_start_time = time.perf_counter()
-            # find valid points
-            depth_flat = depth_img.ravel()
-            # Build a (H*W,) boolean mask where True means:
-            #  1) the depth sensor saw something (depth_flat > 0),
-            #  2) the reconstructed Z coordinate is a finite number,
-            valid = (
-                (depth_flat > 0)                         # non-zero depth reading
-                & np.isfinite(vertices[:, 2])      # Z isn’t NaN or ±Inf
-            )
-            pipeline_stats.build_valid_points_ms = (time.perf_counter() - build_valid_points_start_time) * 1000
-            
-            # --- SUBSAMPLING ---
-            subsampling_time_start = time.perf_counter()
-            effective_ratio = sum(r for r, on in zip(sampling_layers, active_layers) if on)
-
-            # roll one random array and reject ~ (1‑effective_ratio) of valid points
-            rnd = np.random.rand(valid.shape[0])
-            subsample_mask = rnd < effective_ratio
-
-            # Add the subsampling mask to the valid points
-            #valid &= subsample_mask # TODO: Maybe do not subsample the entire point cloud (maybe this has use in IMPORTANCE mode)
-            pipeline_stats.subsampling_ms = (time.perf_counter() - subsampling_time_start ) * 1000
-
-            one_way_ms = 0 # set to 0 for logging flag (if not broadcasting, don't gather data to buffer)
-            roi = None
-            if(encoding_mode == EncodingMode.IMPORTANCE):
-                # ---GESTURE RECOGNITION---
-                gesture_recognizer.recognize(display, frame_id)
-
-                for bounding_box_normalized in gesture_recognizer.latest_bounding_boxes:
-                    if bounding_box_normalized:
-                        roi: np.array = bounding_box_normalized.to_pixel(display.shape[1], display.shape[0], True)
-                        shared_roi[:] = roi
-                        ready_roi_event.set()
-
-                shared_frame[:] = display
-                ready_frame_event.set()
-
-                #TODO: we need to find some work todo here in order to hide latency between processes
-
-                if ready_cluster_event.is_set():
-                    prev_cluster = shared_cluster.copy()
-                    ready_cluster_event.clear()
-
-                if DEBUG:
-                    display[prev_cluster[:, :, 0], 2] = 255
-
-                flat_cluster = prev_cluster.flatten()
-
-                compression_full_stats.masking_ms = time.perf_counter()
-                in_roi = valid & flat_cluster
-                out_roi = valid & ~in_roi & subsample_mask
-                points_in_roi = vertices[in_roi]; colors_in_roi = colors[in_roi]
-                points_out_roi = vertices[out_roi]; colors_out_roi = colors[out_roi]
-                compression_full_stats.masking_ms = (time.perf_counter() - compression_full_stats.masking_ms ) * 1000
-
+            if (encoding_mode == EncodingMode.NONE):
                 pipeline_stats.data_preparation_ms = (time.perf_counter() - pipeline_stats.data_preparation_ms) * 1000 #prep end
 
-                draco_roi_encoding.position_quantization_bits = draco_full_encoding.position_quantization_bits
-                draco_roi_encoding.color_quantization_bits    = draco_full_encoding.color_quantization_bits
-                draco_roi_encoding.speed_encode               = draco_full_encoding.speed_encode
-                draco_roi_encoding.speed_decode               = draco_full_encoding.speed_decode 
-
-                draco_outside_roi_encoding.position_quantization_bits = draco_roi_encoding.position_quantization_bits
-                draco_outside_roi_encoding.color_quantization_bits    = draco_roi_encoding.color_quantization_bits
-                draco_outside_roi_encoding.speed_encode               = draco_roi_encoding.speed_encode
-                draco_outside_roi_encoding.speed_decode               = draco_roi_encoding.speed_decode
-            
-                # MULTIPROCESSING IMPORTANCE
-                multiprocessing_compression_time_start = time.perf_counter()
-                futures: dict[str, concurrent.futures.Future] = {}
-            
-                buffer_roi = None
-                buffer_out = None
-                if points_in_roi.size:
-                    futures["roi"] = thread_executor.submit(
-                        draco_roi_encoding.encode,
-                        points_in_roi,
-                        colors_in_roi,
-                    )
-                else:
-                    buffer_roi = b""
-                
-                if points_out_roi.size:
-                    futures["out_roi"] = thread_executor.submit(
-                        draco_outside_roi_encoding.encode,
-                        points_out_roi,
-                        colors_out_roi,
-                    )
-                else:
-                    buffer_out = b""
-
-                for label, future in futures.items():
-                    if label == "roi":
-                        buffer_roi = future.result()  
-                    if label == "out_roi":
-                        buffer_out = future.result() 
-                pipeline_stats.multiprocessing_compression_ms = (time.perf_counter() - multiprocessing_compression_time_start) * 1000
-
-                # Broadcast
-                buffers = []
-                if buffer_roi:
-                    buffers.append(buffer_roi)
-                if buffer_out:
-                    buffers.append(buffer_out)
-                count = len(buffers)
-
-                round_ids = [] # keep track of the round ids for logging
-                for buffer in buffers:
-                    server.broadcast(bytes([count]) + buffer) # Prefix with byte that tells us the length
-                    if (len(round_ids) == 0):
-                        round_ids.append(broadcast_round)
-                    else:
-
-                        round_ids.append(broadcast_round + len(round_ids)) # offset to get the next true broadcast_counter (TODO: maybe find a more intuitve way)
-                        print(len(round_ids))
+       
+                raw_points = vertices    # shape: (N,3) float32
+                raw_cols = colors     # shape: (N,3) uint8
 
 
-            else: # ENCODE THE FULL FRAME
-                # Masking
-                compression_full_stats.masking_ms = time.perf_counter()
-                points_full_frame = vertices[valid]
-                colors_full_frame = colors[valid]
-                compression_full_stats.masking_ms = (time.perf_counter() - compression_full_stats.masking_ms ) * 1000
-            
-
-                # Encode entire valid cloud
-                pipeline_stats.data_preparation_ms = (time.perf_counter() - pipeline_stats.data_preparation_ms) * 1000 #prep end
                 round_ids = []
-                if(points_full_frame.any()):
-                    buffer_full = draco_full_encoding.encode(points_full_frame, colors_full_frame)
-                    # Broadcast
-                    server.broadcast(bytes([1]) + buffer_full) # prefix with single byte to understand that we are sending one buffer
-                    round_ids.append(broadcast_round) 
+                if(raw_points.size > 0):
+                    payload = bytes([0]) + raw_points.tobytes() + raw_cols.tobytes()
+                    server.broadcast(payload)
+                    round_ids.append(broadcast_round)
+                    broadcast_round += 1
+            else:
+
+                texture_scaling_time_start = time.perf_counter()
+                # Precompute the scale factors once
+                # Flatten and mask arrays
+                # Each u,v is normalized in [0.0, 1.0]. Scale u by (width-1) to get a column index in [0, width-1],
+                # then cast to int so we can index into the 2D image array
+                column_coordinates = (texcoords[:, 0] * (depth_width - 1)).astype(np.int32)
+                # Similarly, scale v by (height-1) to get a row index, then cast to int
+                row_coordinates    = (texcoords[:, 1] * (depth_height - 1)).astype(np.int32) # 3 ms
+
+                pixel_indices = row_coordinates * depth_width + column_coordinates
+
+                pipeline_stats.texture_scaling_ms = (time.perf_counter() - texture_scaling_time_start) * 1000
+
+                pipeline_stats.color_lookup_ms = time.perf_counter()
+                # Flatten the H×W×3 BGR image into a (H*W)×3 array so each row is one pixel’s BGR triplet
+                flat_color_pixels = color_img.reshape(-1, 3)
+                colors = flat_color_pixels[pixel_indices]  # shape: (N, 3) in [R, G, B] order
+                pipeline_stats.color_lookup_ms = ((time.perf_counter() - pipeline_stats.color_lookup_ms) * 1000)
+
+                build_valid_points_start_time = time.perf_counter()
+                # find valid points
+                depth_flat = depth_img.ravel()
+                # Build a (H*W,) boolean mask where True means:
+                #  1) the depth sensor saw something (depth_flat > 0),
+                #  2) the reconstructed Z coordinate is a finite number,
+                valid = (
+                    (depth_flat > 0)                         # non-zero depth reading
+                    & np.isfinite(vertices[:, 2])      # Z isn’t NaN or ±Inf
+                )
+                pipeline_stats.build_valid_points_ms = (time.perf_counter() - build_valid_points_start_time) * 1000
+                
+                # --- SUBSAMPLING ---
+                subsampling_time_start = time.perf_counter()
+                effective_ratio = sum(r for r, on in zip(sampling_layers, active_layers) if on)
+
+                # roll one random array and reject ~ (1‑effective_ratio) of valid points
+                rnd = np.random.rand(valid.shape[0])
+                subsample_mask = rnd < effective_ratio
+
+                # Add the subsampling mask to the valid points
+                #valid &= subsample_mask # TODO: Maybe do not subsample the entire point cloud (maybe this has use in IMPORTANCE mode)
+                pipeline_stats.subsampling_ms = (time.perf_counter() - subsampling_time_start ) * 1000
+
+                one_way_ms = 0 # set to 0 for logging flag (if not broadcasting, don't gather data to buffer)
+                roi = None
+
+                
+                if(encoding_mode == EncodingMode.IMPORTANCE):
+                    # ---GESTURE RECOGNITION---
+                    gesture_recognizer.recognize(display, frame_id)
+
+                    for bounding_box_normalized in gesture_recognizer.latest_bounding_boxes:
+                        if bounding_box_normalized:
+                            roi: np.array = bounding_box_normalized.to_pixel(display.shape[1], display.shape[0], True)
+                            shared_roi[:] = roi
+                            ready_roi_event.set()
+
+                    shared_frame[:] = display
+                    ready_frame_event.set()
+
+                    #TODO: we need to find some work todo here in order to hide latency between processes
+
+                    if ready_cluster_event.is_set():
+                        prev_cluster = shared_cluster.copy()
+                        ready_cluster_event.clear()
+
+                    if DEBUG:
+                        display[prev_cluster[:, :, 0], 2] = 255
+
+                    flat_cluster = prev_cluster.flatten()
+
+                    compression_full_stats.masking_ms = time.perf_counter()
+                    in_roi = valid & flat_cluster
+                    out_roi = valid & ~in_roi & subsample_mask
+                    points_in_roi = vertices[in_roi]; colors_in_roi = colors[in_roi]
+                    points_out_roi = vertices[out_roi]; colors_out_roi = colors[out_roi]
+                    compression_full_stats.masking_ms = (time.perf_counter() - compression_full_stats.masking_ms ) * 1000
+
+                    pipeline_stats.data_preparation_ms = (time.perf_counter() - pipeline_stats.data_preparation_ms) * 1000 #prep end
+
+                    draco_roi_encoding.position_quantization_bits = draco_full_encoding.position_quantization_bits
+                    draco_roi_encoding.color_quantization_bits    = draco_full_encoding.color_quantization_bits
+                    draco_roi_encoding.speed_encode               = draco_full_encoding.speed_encode
+                    draco_roi_encoding.speed_decode               = draco_full_encoding.speed_decode 
+
+                    draco_outside_roi_encoding.position_quantization_bits = draco_roi_encoding.position_quantization_bits
+                    draco_outside_roi_encoding.color_quantization_bits    = draco_roi_encoding.color_quantization_bits
+                    draco_outside_roi_encoding.speed_encode               = draco_roi_encoding.speed_encode
+                    draco_outside_roi_encoding.speed_decode               = draco_roi_encoding.speed_decode
+                
+                    # MULTIPROCESSING IMPORTANCE
+                    multiprocessing_compression_time_start = time.perf_counter()
+                    futures: dict[str, concurrent.futures.Future] = {}
+                
+                    buffer_roi = None
+                    buffer_out = None
+                    if points_in_roi.size:
+                        futures["roi"] = thread_executor.submit(
+                            draco_roi_encoding.encode,
+                            points_in_roi,
+                            colors_in_roi,
+                        )
+                    else:
+                        buffer_roi = b""
                     
+                    if points_out_roi.size:
+                        futures["out_roi"] = thread_executor.submit(
+                            draco_outside_roi_encoding.encode,
+                            points_out_roi,
+                            colors_out_roi,
+                        )
+                    else:
+                        buffer_out = b""
+
+                    for label, future in futures.items():
+                        if label == "roi":
+                            buffer_roi = future.result()  
+                        if label == "out_roi":
+                            buffer_out = future.result() 
+                    pipeline_stats.multiprocessing_compression_ms = (time.perf_counter() - multiprocessing_compression_time_start) * 1000
+
+                    # Broadcast
+                    buffers = []
+                    if buffer_roi:
+                        buffers.append(buffer_roi)
+                    if buffer_out:
+                        buffers.append(buffer_out)
+                    count = len(buffers)
+
+                    round_ids = [] # keep track of the round ids for logging
+                    for buffer in buffers:
+                        server.broadcast(bytes([count]) + buffer) # Prefix with byte that tells us the length
+                        if (len(round_ids) == 0):
+                            round_ids.append(broadcast_round)
+                        else:
+                            round_ids.append(broadcast_round + len(round_ids)) # offset to get the next true broadcast_counter (TODO: maybe find a more intuitve way)
+
+
+                else: # ENCODE THE FULL FRAME
+                    # Masking
+                    compression_full_stats.masking_ms = time.perf_counter()
+                    points_full_frame = vertices[valid]
+                    colors_full_frame = colors[valid]
+                    compression_full_stats.masking_ms = (time.perf_counter() - compression_full_stats.masking_ms ) * 1000
+                
+
+                    # Encode entire valid cloud
+                    pipeline_stats.data_preparation_ms = (time.perf_counter() - pipeline_stats.data_preparation_ms) * 1000 #prep end
+                    round_ids = []
+                    if(points_full_frame.any()):
+                        buffer_full = draco_full_encoding.encode(points_full_frame, colors_full_frame)
+                        # Broadcast
+                        server.broadcast(bytes([1]) + buffer_full) # prefix with single byte to understand that we are sending one buffer
+                        round_ids.append(broadcast_round) 
+                        
             
 
             # Logging and display
@@ -459,8 +477,12 @@ def camera_process(
                     break
                 ## Adjust settings
                 elif key == ord('f'):
-                    # Toggle mode (IMPORTANCE)
-                    encoding_mode = EncodingMode.FULL if encoding_mode is EncodingMode.IMPORTANCE else EncodingMode.IMPORTANCE
+                    if encoding_mode == EncodingMode.NONE:
+                        encoding_mode = EncodingMode.FULL
+                    elif encoding_mode == EncodingMode.IMPORTANCE:
+                        encoding_mode = EncodingMode.NONE
+                    else:
+                        encoding_mode = EncodingMode.IMPORTANCE
                 elif key == ord('d'):
                     #Toggle mode (Visualization: Depth vs Color)
                     visualization_mode = (
