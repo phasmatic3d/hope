@@ -77,7 +77,6 @@ export function openConnection(
             const receivedAt = getCorrectedTime();
 
             response(event.data);
-            response(event.data);
 
             const timeAfterProcessing = getCorrectedTime();
 
