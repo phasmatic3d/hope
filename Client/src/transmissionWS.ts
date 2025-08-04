@@ -1,5 +1,6 @@
 export function openConnection(
-    response : (data: ArrayBuffer) => void, 
+    //response : (data: ArrayBuffer) => void, 
+    response : (data: ArrayBuffer) => Promise<void>, 
     reject: (msg: string) => void
 ) {
     console.warn("WebSockets")
@@ -36,18 +37,19 @@ export function openConnection(
     }
     
     function getCorrectedTime(): number {
-        return Date.now() + (lastOffset ?? 0);
+        //return Date.now() + (lastOffset ?? 0);
+        return Date.now();
     }
 
     // Event handler for when the connection opens
     socket.addEventListener('open', (event) => {
         console.warn('WebSocket connection opened.');
-        sendSyncRequest();
-        syncInterval = setInterval(sendSyncRequest, 10000);
+        //sendSyncRequest();
+        //syncInterval = setInterval(sendSyncRequest, 10000);
     });
 
     // Event handler for when a message is received
-    socket.addEventListener('message', (event) => {
+    socket.addEventListener('message', async (event) => {
         //console.warn("Receive Message")
         if (typeof event.data === 'string') {
             let meta = JSON.parse(event.data);
@@ -58,26 +60,24 @@ export function openConnection(
                 return;
             }
 
-            if (meta.type === 'sync-response' && pendingSync && meta.t0 === pendingSync.t0) {
-                const t1 = Date.now();
-                const serverTime = meta.server_time;
-                const rtt = t1 - pendingSync.t0;
-                const estimatedOffset = serverTime + rtt / 2 - t1;
-                lastOffset = estimatedOffset;
+            //if (meta.type === 'sync-response' && pendingSync && meta.t0 === pendingSync.t0) {
+            //    const t1 = Date.now();
+            //    const serverTime = meta.server_time;
+            //    const rtt = t1 - pendingSync.t0;
+            //    const estimatedOffset = serverTime + rtt / 2 - t1;
+            //    lastOffset = estimatedOffset;
 
-                console.warn(`[SYNC] RTT: ${rtt}ms, Offset: ${estimatedOffset}ms`);
-                // Clear pending sync
-                pendingSync = null;
-                return;
-            }
+            //    console.warn(`[SYNC] RTT: ${rtt}ms, Offset: ${estimatedOffset}ms`);
+            //    // Clear pending sync
+            //    pendingSync = null;
+            //    return;
+            //}
         }
 
         if (event.data instanceof ArrayBuffer) {
             //console.warn('Received ArrayBuffer:', event.data);
             const receivedAt = getCorrectedTime();
-
-            response(event.data);
-
+            await response(event.data);
             const timeAfterProcessing = getCorrectedTime();
 
             if(lastSendTimestamp !== null) {
@@ -91,6 +91,7 @@ export function openConnection(
                     (
                         {
                             type:      'ms-and-processing',
+                            timestamp:  receivedAt,
                             round:      currentRound,
                             one_way_ms: one_way_ms,
                             one_way_plus_processing: one_way_plus_processing
@@ -98,7 +99,6 @@ export function openConnection(
                     )
                 );
             }
-
         }   
     });
 

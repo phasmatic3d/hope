@@ -22,7 +22,7 @@
 #endif
 
 
-//#define USE_TLS
+#define USE_TLS
 #ifdef USE_TLS
     #include <websocketpp/config/asio.hpp>    // TLS‐enabled config
     typedef websocketpp::config::asio_tls asio_config;
@@ -191,25 +191,25 @@ public:
                     auto parsed_json = nlohmann::json::parse(message->get_payload());
                     //m_logger->debug("Received message: {}", parsed_json.dump());
 
-                    if (parsed_json.value("type", "") == "sync-request") 
-                    {
-                        uint64_t t0 = parsed_json.at("t0").get<uint64_t>();
+                    //if (parsed_json.value("type", "") == "sync-request") 
+                    //{
+                    //    uint64_t t0 = parsed_json.at("t0").get<uint64_t>();
 
-                        auto now = Clock::now();
-                        auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+                    //    auto now = Clock::now();
+                    //    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
 
-                        nlohmann::json response = 
-                        {
-                            { "type", "sync-response" },
-                            { "t0", t0 },
-                            { "server_time", now_ms }
-                        };
+                    //    nlohmann::json response = 
+                    //    {
+                    //        { "type", "sync-response" },
+                    //        { "t0", t0 },
+                    //        { "server_time", now_ms }
+                    //    };
 
-                        m_logger->debug("Responding to sync request: {}", response.dump());
+                    //    m_logger->debug("Responding to sync request: {}", response.dump());
                     
-                        m_server.send(hdl, response.dump(), websocketpp::frame::opcode::text);
-                        return;
-                    }
+                    //    m_server.send(hdl, response.dump(), websocketpp::frame::opcode::text);
+                    //    return;
+                    //}
 
                     if (parsed_json.value("type","") != "ms-and-processing")
                     {
@@ -217,11 +217,11 @@ public:
                         return;
                     }
 
-                    //uint64_t client_ms = parsed_json.at("timestamp").get<uint64_t>();
-                    //auto client_timestamp = Timestamp
-                    //(
-                    //    std::chrono::milliseconds(client_ms)
-                    //);
+                    uint64_t client_ms = parsed_json.at("timestamp").get<uint64_t>();
+                    auto client_timestamp = Timestamp
+                    (
+                        std::chrono::milliseconds(client_ms)
+                    );
 
                     auto round = parsed_json.at("round").get<size_t>();
                     std::ostringstream ss;
@@ -239,15 +239,15 @@ public:
                         metadata = it->second;
                         m_metadata.erase(it);
                     }
-                    //auto t1 = Clock::now();
-                    //double rtt = std::chrono::duration<double,std::milli>(client_timestamp - metadata.send_time).count();
+                    auto t1 = Clock::now();
+                    double rtt = std::chrono::duration<double,std::milli>(client_timestamp - metadata.send_time).count();
 
                     double one_way_ms = parsed_json.at("one_way_ms").get<double>();
                     double one_way_plus_processing = parsed_json.at("one_way_plus_processing").get<double>();
                     CsvFileEntry entry 
                     {
                         metadata.send_time,
-                        2 * one_way_ms,
+                        rtt,
                         one_way_ms, 
                         one_way_plus_processing,
                         ss.str(),

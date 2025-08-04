@@ -7,20 +7,20 @@
 
 export async function initDracoDecoder() {
     return new Promise<any>((resolve, reject) => {
-      // Load Draco WASM wrapper script dynamically
-      const script = document.createElement('script');
-      script.src = '/draco/draco_wasm_wrapper.js';  // Path to your draco_wasm_wrapper.js
-      script.onload = () => {
-        // Now Draco WASM module is available
-        const decoderModule = (window as any).DracoDecoderModule({
-          locateFile: (filename: string) => `/draco/${filename}`,
-        });
-  
-        // Resolve the promise once Draco is initialized
-        decoderModule.then(resolve).catch(reject);
-      };
-      script.onerror = reject;
-      document.body.appendChild(script);
+		// Load Draco WASM wrapper script dynamically
+		const script = document.createElement('script');
+		script.src = '/draco/draco_wasm_wrapper.js';  // Path to your draco_wasm_wrapper.js
+		script.onload = () => {
+			// Now Draco WASM module is available
+			const decoderModule = (window as any).DracoDecoderModule({
+				locateFile: (filename: string) => `/draco/${filename}`,
+			});
+	
+			// Resolve the promise once Draco is initialized
+			decoderModule.then(resolve).catch(reject);
+		};
+		script.onerror = reject;
+		document.body.appendChild(script);
     });
 }
 
@@ -34,7 +34,7 @@ export function decodePointCloud(decoderModule: any, rawBuffer: ArrayBuffer) {
   
     const status = decoder.DecodeBufferToPointCloud(buffer, pointCloud);
     if (!status.ok() || pointCloud.ptr === 0) {
-      throw new Error("Decoding failed: " + status.error_msg());
+      	throw new Error("Decoding failed: " + status.error_msg());
     }
   
     const numPoints = pointCloud.num_points();
@@ -46,7 +46,7 @@ export function decodePointCloud(decoderModule: any, rawBuffer: ArrayBuffer) {
   
     const positions = new Float32Array(numPoints * 3);
     for (let i = 0; i < posData.size(); i++) {
-      positions[i] = posData.GetValue(i);
+      	positions[i] = posData.GetValue(i);
     }
   
     // Clean up Draco objects
@@ -60,4 +60,4 @@ export function decodePointCloud(decoderModule: any, rawBuffer: ArrayBuffer) {
     console.log(`Decoded ${numPoints} points`)
   
     return positions;
-  }
+}
