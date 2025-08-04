@@ -3,6 +3,8 @@ from pyexpat import model
 import time
 import os
 
+import pandas as pd
+
 import numpy as np
 import producer_cli as producer_cli
 
@@ -113,8 +115,8 @@ def camera_process(
         box_size=0.02, 
         delay_frames=10)
     
-    min_dist = 0.05
-    max_dist = 0.4
+    min_dist = 0.1
+    max_dist = 1.3
     depth_thresh = rs.threshold_filter(min_dist, max_dist)
 
     align_to = rs.stream.color
@@ -266,6 +268,8 @@ def camera_process(
             # Add the subsampling mask to the valid points
             #valid &= subsample_mask # TODO: Maybe do not subsample the entire point cloud (maybe this has use in IMPORTANCE mode)
             pipeline_stats.subsampling_ms = (time.perf_counter() - subsampling_time_start ) * 1000
+
+            one_way_ms = 0 # set to 0 for logging flag (if not broadcasting, don't gather data to buffer)
             roi = None
             if(encoding_mode == EncodingMode.IMPORTANCE):
                 # ---GESTURE RECOGNITION---
@@ -348,38 +352,55 @@ def camera_process(
                 if buffer_out:
                     buffers.append(buffer_out)
                 count = len(buffers)
+
+                round_ids = [] # keep track of the round ids for logging
                 for buffer in buffers:
                     server.broadcast(bytes([count]) + buffer) # Prefix with byte that tells us the length
+                    if (len(round_ids) == 0):
+                        round_ids.append(broadcast_round)
+                    else:
+
+                        round_ids.append(broadcast_round + len(round_ids)) # offset to get the next true broadcast_counter (TODO: maybe find a more intuitve way)
+                        print(len(round_ids))
+
+
             else: # ENCODE THE FULL FRAME
                 # Masking
                 compression_full_stats.masking_ms = time.perf_counter()
                 points_full_frame = vertices[valid]
-                colors_full_frame = colors[valid] # 8ms
+                colors_full_frame = colors[valid]
                 compression_full_stats.masking_ms = (time.perf_counter() - compression_full_stats.masking_ms ) * 1000
             
 
                 # Encode entire valid cloud
                 pipeline_stats.data_preparation_ms = (time.perf_counter() - pipeline_stats.data_preparation_ms) * 1000 #prep end
+                round_ids = []
                 if(points_full_frame.any()):
                     buffer_full = draco_full_encoding.encode(points_full_frame, colors_full_frame)
                     # Broadcast
                     server.broadcast(bytes([1]) + buffer_full) # prefix with single byte to understand that we are sending one buffer
-                       
-                entry = server.wait_for_entry(broadcast_round)
-                if entry:
-                    broadcast_round = broadcast_round + 1 
-                    pipeline_stats.approximate_rtt_ms = entry.approximate_rtt_ms  
-
+                    round_ids.append(broadcast_round) 
+                    
+            
 
             # Logging and display
             if DEBUG:
-                if(entry): # If broadcasting
+                # Logging
+                entries = [ server.wait_for_entry(round_id) for round_id in round_ids ]
+                valid_entries = [ entry for entry in entries if entry and entry.error != "missing metadata" ] # valid entries
+                
+                if(valid_entries): # If broadcasting
+                    broadcast_round += len(round_ids)
+                    # pick the worst‐case latencies (meaningful in IMPORTANCE mode, trivial in FULL)
+                    one_way_ms                = max(entry.one_way_ms                for entry in valid_entries)
+                    one_way_plus_processing_ms = max(entry.one_way_plus_processing for entry in valid_entries)
+
                     frame_stats_buffer.append({
                         "frame_preparation_ms":         pipeline_stats.frame_preparation_ms,
                         "data_preparation_ms":         pipeline_stats.data_preparation_ms,
                         "multiprocessing_compression_ms": pipeline_stats.multiprocessing_compression_ms,
-                        "one_way_ms":                       entry.one_way_ms,
-                        "one_way_plus_processing_ms":       entry.one_way_plus_processing,
+                        "one_way_ms":                       one_way_ms,
+                        "one_way_plus_processing_ms":       one_way_plus_processing_ms,
                         "full_encode_ms":              compression_full_stats.compression_ms,
                         "roi_encode_ms":               compression_roi_stats.compression_ms,
                         "outside_encode_ms":           compression_out_stats.compression_ms,

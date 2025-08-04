@@ -46,12 +46,15 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 				pointCloudGeometry = new THREE.BufferGeometry();
 				const material = new THREE.PointsMaterial({
 					vertexColors: true,
-					size: 3,
+					size: 0.1,
 					sizeAttenuation: false
 				});
 				pointCloud = new THREE.Points(pointCloudGeometry, material);
-				pointCloud.scale.set(5, -5, 5);
-				pointCloud.position.set(0, -10, 13);
+				pointCloud.scale.set(20, 20, 20); 
+				pointCloud.rotateX(3.14) // HARDCODED ROTATION: TODO (AND ALL OF THE OTHER TRANSFORMATIONS)
+				pointCloud.position.y = -10;
+				pointCloud.position.z = 13;
+				pointCloud.position.x = 0;
 				scene.add(pointCloud);
 			}
 
@@ -295,11 +298,12 @@ async function loadAndUpdatePointCloudFromWS_worker(scene: THREE.Scene) {
 				pointCloudGeometry.setAttribute('color',    new THREE.BufferAttribute(mergedCol, 3, true));
 				const material = new THREE.PointsMaterial({
 					vertexColors: true,
-					size: 3.0,
+					size: 0.01,
 					sizeAttenuation: false
 				});
 				pointCloud = new THREE.Points(pointCloudGeometry, material);
-				pointCloud.scale.set(5, -5, 5);
+				pointCloud.scale.set(20, 20, 20); 
+				pointCloud.rotateX(3.14) // HARDCODED ROTATION: TODO (AND ALL OF THE OTHER TRANSFORMATIONS)
 				pointCloud.position.y = -10;
 				pointCloud.position.z = 13;
 				pointCloud.position.x = 0;

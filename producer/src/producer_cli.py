@@ -88,7 +88,7 @@ producer_cli.add_argument(
         "--server_use_pings_for_rtt",        
         type=bool, 
         choices=[False, True],
-        default=True,
+        default=False,
         help="Calculate RTT using pings instead of timestamps."
     )
 

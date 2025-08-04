@@ -22,7 +22,7 @@
 #endif
 
 
-#define USE_TLS
+//#define USE_TLS
 #ifdef USE_TLS
     #include <websocketpp/config/asio.hpp>    // TLS‐enabled config
     typedef websocketpp::config::asio_tls asio_config;
@@ -231,9 +231,21 @@ public:
                     {
                         std::lock_guard<std::mutex> lg(m_metadata_mutex);
                         auto it = m_metadata.find(key);
-                        if (it == m_metadata.end())
-                        {
+                        if (it == m_metadata.end()) {
                             m_logger->warn("No metadata for hdl={} round={}", ss.str(), round);
+                            // Create a zeroed‐out entry so wait_for_entry() unblocks
+                            CsvFileEntry dummy {
+                                Clock::now(),
+                                0.0,   // approximate_rtt_ms
+                                0.0,   // one_way_ms
+                                0.0,   // one_way_plus_processing
+                                ss.str(),
+                                "missing metadata",
+                                round,
+                                0,     // message_size
+                                0      // connections_size
+                            };
+                            enqueueLogEntry(dummy);
                             return;
                         }
                         metadata = it->second;
