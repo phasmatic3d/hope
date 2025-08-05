@@ -50,15 +50,22 @@ map_to_enum = {
     "base_plus" : MODEL_SIZE.BASE_PLUS,
     "large" : MODEL_SIZE.LARGE,}
 
+map_to_camera_res = {
+    "clr_high_res" : [1280, 720],
+    "clr_mid_res" : [848, 480],
+    "clr_low_res" : [640, 360],
+    "dpth_high_res" : [1280, 720],
+    "dpth_mid_res" : [848, 480],
+    "dpth_low_res" : [640, 360]
+}
+
 producer_cli = argparse.ArgumentParser(description="HOPE producer")
 producer_cli.add_argument("--sam2_checkpoint", type=str, default="large", choices=["tiny", "small", "base_plus", "large"])
 producer_cli.add_argument("--sam2_image_size", type=int, default=1024, choices=[1024, 512, 256, 128])
 producer_cli.add_argument("--yolo_size", type=str, default="large", choices=["samll, medium, large"])
-producer_cli.add_argument("--realsense_clr_capture_width", type=int, default=848, choices=[848])
-producer_cli.add_argument("--realsense_clr_capture_height", type=int, default=480, choices=[480])
-producer_cli.add_argument("--realsense_depth_capture_width", type=int, default=848, choices=[848])
-producer_cli.add_argument("--realsense_depth_capture_height", type=int, default=480, choices=[480])
-producer_cli.add_argument("--realsense_target_fps", type=int, default=30, choices=[30])
+producer_cli.add_argument("--realsense_clr_stream", type=str, default="clr_high_res", choices=["clr_high_res", "clr_mid_res", "clr_low_res"])
+producer_cli.add_argument("--realsense_depth_stream", type=str, default="dpth_high_res", choices=["dpth_high_res", "dpth_mid_res", "dpth_low_res"])
+producer_cli.add_argument("--realsense_target_fps", type=int, default=30, choices=[90, 30, 15, 6])
 producer_cli.add_argument("--cluster_predictor", type=str, default="sam2", choices=["yolo", "sam2",])
 
 # Server Arts

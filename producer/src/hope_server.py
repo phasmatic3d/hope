@@ -888,10 +888,8 @@ def thread_worker_yoloe(
                 ready_cluster_event.set()
 
 def launch_processes(server: broadcaster.ProducerServer, args, device : str) -> None:
-    cmr_clr_width = args.realsense_clr_capture_width
-    cmr_clr_height = args.realsense_clr_capture_height
-    cmr_depth_width = args.realsense_depth_capture_width
-    cmr_depth_height = args.realsense_depth_capture_height
+    cmr_clr_width, cmr_clr_height = producer_cli.map_to_camera_res[args.realsense_clr_stream]
+    cmr_depth_width, cmr_depth_height = producer_cli.map_to_camera_res[args.realsense_depth_stream]
     cmr_fps = args.realsense_target_fps
 
     simulation = args.simulation

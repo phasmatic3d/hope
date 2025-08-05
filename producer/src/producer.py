@@ -69,5 +69,5 @@ if __name__ == "__main__":
     print("PyTorch version:", torch.__version__)
     print("Compiled CUDA version:", torch.version.cuda)
     print("Is CUDA available:", torch.cuda.is_available())
-    realsense_config()
-    #main()
+    #realsense_config()
+    main()
