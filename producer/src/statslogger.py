@@ -74,13 +74,14 @@ def write_stats_csv(
             "frame_preparation_ms":        avg.get("frame_preparation_ms",   pd.NA),
             "data_preparation_ms":         avg.get("data_preparation_ms",    pd.NA),
             "one_way_ms":                  avg.get("one_way_ms",             pd.NA),
-            "one_way_plus_processing_ms":  avg.get("one_way_plus_processing_ms", pd.NA),
+            "geometry_upload_ms":  avg.get("geometry_upload_ms", pd.NA),
         }
         # total_time = frame_prep + data_prep + one_way+proc
         row["total_time_ms"] = (
             row["frame_preparation_ms"]
           + row["data_preparation_ms"]
-          + row["one_way_plus_processing_ms"]
+          + row["one_way_ms"]
+          + row["geometry_upload_ms"]
         )
         path = NONE_CSV
 
@@ -97,14 +98,15 @@ def write_stats_csv(
             "data_preparation_ms":   avg.get("data_preparation_ms",    pd.NA),
             "encode_ms":             avg.get("full_encode_ms",         pd.NA),
             "one_way_ms":            avg.get("one_way_ms",             pd.NA),
-            "one_way_plus_processing_ms": avg.get("one_way_plus_processing_ms", pd.NA),
+            "decode_ms": avg.get("decode_ms", pd.NA),
         }
         # total_time = frame_prep + data_prep + encode + one_way+proc
         row["total_time_ms"] = (
             row["frame_preparation_ms"]
           + row["data_preparation_ms"]
+          + row["one_way_ms"]
           + row["encode_ms"]
-          + row["one_way_plus_processing_ms"]
+          + row["decode_ms"]
         )
         path = FULL_CSV
 
@@ -127,14 +129,15 @@ def write_stats_csv(
             "data_preparation_ms":     avg.get("data_preparation_ms",    pd.NA),
             "encode_ms":               avg.get("multiprocessing_compression_ms", pd.NA),
             "one_way_ms":              avg.get("one_way_ms",             pd.NA),
-            "one_way_plus_processing_ms": avg.get("one_way_plus_processing_ms", pd.NA),
+            "decode_ms": avg.get("decode_ms", pd.NA),
         }
-        # total_time = frame_prep + data_prep + encode + one_way+proc
+
         row["total_time_ms"] = (
             row["frame_preparation_ms"]
           + row["data_preparation_ms"]
           + row["encode_ms"]
-          + row["one_way_plus_processing_ms"]
+          + row["one_way_ms"]
+          + row["decode_ms"]
         )
         path = IMP_CSV
 
@@ -291,13 +294,14 @@ def write_simulation_csv(
         row["frame_preparation_ms"]         = avg.get("frame_preparation_ms", pd.NA)
         row["data_preparation_ms"]          = avg.get("data_preparation_ms",    pd.NA)
         row["one_way_ms"]                   = avg.get("one_way_ms",             pd.NA)
-        row["one_way_plus_processing_ms"]   = avg.get("one_way_plus_processing_ms", pd.NA)
+        row["geometry_upload_ms"]   = avg.get("geometry_upload_ms", pd.NA)
 
         # total_time
         row["total_time_ms"] = (
             row["frame_preparation_ms"]
           + row["data_preparation_ms"]
-          + row["one_way_plus_processing_ms"]
+          + row["one_way_ms"]
+          + row["geometry_upload_ms"]
         )
 
     elif mode == EncodingMode.FULL:
@@ -306,13 +310,16 @@ def write_simulation_csv(
         row["data_preparation_ms"]          = avg.get("data_preparation_ms",    pd.NA)
         row["encode_ms"]                    = avg.get("full_encode_ms",         pd.NA)
         row["one_way_ms"]                   = avg.get("one_way_ms",             pd.NA)
-        row["one_way_plus_processing_ms"]   = avg.get("one_way_plus_processing_ms", pd.NA)
+        row["decode_ms"]                    = avg.get("decode_ms", pd.NA)
+        row["geometry_upload_ms"]            = avg.get("geometry_upload_ms", pd.NA)
 
         row["total_time_ms"] = (
             row["frame_preparation_ms"]
           + row["data_preparation_ms"]
           + row["encode_ms"]
-          + row["one_way_plus_processing_ms"]
+          + row["one_way_ms"]
+          + row["decode_ms"]
+          + row["geometry_upload_ms"]
         )
 
     else:  # IMPORTANCE
@@ -325,13 +332,16 @@ def write_simulation_csv(
         row["data_preparation_ms"]          = avg.get("data_preparation_ms",    pd.NA)
         row["encode_ms"]                    = avg.get("multiprocessing_compression_ms", pd.NA)
         row["one_way_ms"]                   = avg.get("one_way_ms",             pd.NA)
-        row["one_way_plus_processing_ms"]   = avg.get("one_way_plus_processing_ms", pd.NA)
+        row["decode_ms"]                    = avg.get("decode_ms", pd.NA)
+        row["geometry_upload_ms"]           = avg.get("geometry_upload_ms", pd.NA)
 
         row["total_time_ms"] = (
             row["frame_preparation_ms"]
           + row["data_preparation_ms"]
           + row["encode_ms"]
-          + row["one_way_plus_processing_ms"]
+          + row["one_way_ms"]
+          + row["decode_ms"]
+          + row["geometry_upload_ms"]
         )
 
     # append one row, headers will be created on first write

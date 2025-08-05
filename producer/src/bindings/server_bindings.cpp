@@ -840,6 +840,18 @@ NB_MODULE(broadcaster, m)
         [](ProducerServer::CsvFileEntry const &e) {
             return e.one_way_ms;
         })
+    .def_prop_ro("pure_decode_ms",
+        [](ProducerServer::CsvFileEntry const &e) {
+            return e.pure_decode_ms;
+        })
+    .def_prop_ro("pure_geometry_upload_ms",
+        [](ProducerServer::CsvFileEntry const &e) {
+            return e.pure_geometry_upload_ms;
+        })
+    .def_prop_ro("pure_render_ms",
+        [](ProducerServer::CsvFileEntry const &e) {
+            return e.pure_render_ms;
+        })
     .def_prop_ro("one_way_plus_processing",
         [](ProducerServer::CsvFileEntry const &e) {
             return e.one_way_plus_processing;

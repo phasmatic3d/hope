@@ -1,2 +1,0 @@
-timestamp,color_resolution,depth_resolution,mode,encoding_speed_in,position_quant_bits_in,encoding_speed_out,position_quant_bits_out,layer0_on,layer1_on,layer2_on,points_in,points_out,points,frame_preparation_ms,data_preparation_ms,encode_ms,one_way_ms,one_way_plus_processing_ms,total_time_ms
-2025-08-05T07:10:16.502933,848x480,848x480,IMPORTANCE,0,10,5,8,True,True,True,0,110052,110052,15.44,20.75,32.0,0.63,36.73,104.93
