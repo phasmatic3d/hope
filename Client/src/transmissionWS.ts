@@ -83,7 +83,7 @@ export function openConnection(
             if(lastSendTimestamp !== null) {
                 const one_way_ms              = receivedAt - lastSendTimestamp;
                 const one_way_plus_processing = timeAfterProcessing - lastSendTimestamp;
-
+                console.log("yo");
                 // send back timestamp *and* the round
                 socket.send
                 (

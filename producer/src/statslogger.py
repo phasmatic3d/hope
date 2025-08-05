@@ -65,7 +65,7 @@ def write_stats_csv(
     if mode == EncodingMode.NONE:
         row = {
             **common,
-            "points":                      int(avg.get("points", pd.NA)),
+            "points":                      int(avg.get("num_points", pd.NA)),
             "frame_preparation_ms":        avg.get("frame_preparation_ms",   pd.NA),
             "data_preparation_ms":         avg.get("data_preparation_ms",    pd.NA),
             "one_way_ms":                  avg.get("one_way_ms",             pd.NA),

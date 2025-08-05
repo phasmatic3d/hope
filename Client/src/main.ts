@@ -69,7 +69,47 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 	}
 
 	return async (rawData: ArrayBuffer) => {
-		// First byte of rawData = how many chunks to expect
+
+		const header = new DataView(rawData).getUint8(0);
+		if (header === 0) {
+			// strip off that one byte
+			const payload = rawData.slice(1);
+
+			// compute how many points: each point = 3×float32 + 3×uint8 = 12+3 = 15 bytes
+			const numPoints = payload.byteLength / 15;
+
+			// split into positions and colors
+			const posBytes = payload.slice(0, numPoints*12);
+			const colBytes = payload.slice(numPoints*12);
+
+			const positions = new Float32Array(posBytes);
+			const colors    = new Uint8Array(colBytes);
+
+			if (!pointCloudGeometry) {
+				pointCloudGeometry = new THREE.BufferGeometry();
+				const material = new THREE.PointsMaterial({
+					vertexColors: true,
+					size: 0.1,
+					sizeAttenuation: false
+				});
+				pointCloud = new THREE.Points(pointCloudGeometry, material);
+				pointCloud.scale.set(20, 20, 20); 
+				pointCloud.rotateX(Math.PI) // HARDCODED ROTATION: TODO (AND ALL OF THE OTHER TRANSFORMATIONS)
+				pointCloud.position.y = -10;
+				pointCloud.position.z = 13;
+				pointCloud.position.x = 0;
+				scene.add(pointCloud);
+			}
+
+			pointCloudGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+			pointCloudGeometry.setAttribute('color',    new THREE.BufferAttribute(colors,   3, true));
+			pointCloudGeometry.attributes.position.needsUpdate = true;
+			pointCloudGeometry.attributes.color.needsUpdate    = true;
+
+			// done. no decoding
+			return;
+		}
+
 		expectedChunks = new DataView(rawData).getUint8(0);
 
 		// Start high-res timer

@@ -1,3 +1,2 @@
 timestamp,color_resolution,depth_resolution,mode,encoding_speed,position_quant_bits,layer0_on,layer1_on,layer2_on,points,frame_preparation_ms,data_preparation_ms,encode_ms,one_way_ms,one_way_plus_processing_ms,total_time_ms
-2025-08-05T01:53:15.435388,848x480,848x480,FULL,10,11,True,True,True,99743,18.7,21.0,22.83,0.8,17.53,80.07
-2025-08-05T01:53:40.566175,848x480,848x480,FULL,10,10,True,True,True,104763,16.56,19.06,21.61,0.63,17.2,74.43
+2025-08-05T02:52:46.631026,848x480,848x480,FULL,10,11,True,True,True,407040,15.71,18.18,20.06,0.53,17.4,71.34

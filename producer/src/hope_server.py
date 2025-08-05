@@ -79,9 +79,9 @@ def camera_process(
     
     # Hyperparameters to move to argparse
     visualization_mode = VizualizationMode.COLOR
-    encoding_mode      = EncodingMode.FULL
+    encoding_mode      = EncodingMode.NONE
 
-    frame_stats_buffer = deque(maxlen=30) # buffer for stats logging (CSV)
+    frame_stats_buffer = deque(maxlen=30) # buffer for dynamic stats logging (CSV)
 
     global DEBUG
 
@@ -151,6 +151,7 @@ def camera_process(
         compression_stats=compression_out_stats
     )
 
+    # SAM
     sf = shared_memory.SharedMemory(name=shared_frame_name)
     sc = shared_memory.SharedMemory(name=shared_cluster_name)
     sroi = shared_memory.SharedMemory(name=shared_roi_name)
@@ -161,6 +162,8 @@ def camera_process(
 
     ready_frame_event.clear()
     prev_cluster = shared_cluster.copy()
+    roi = None
+
 
     # --- SUBSAMPLING LAYERS SETUP ---
     # layer 0 = 60%, layer 1 = 15%, layer 2 = 25%
@@ -168,6 +171,7 @@ def camera_process(
     active_layers   = [True,  True,  True]
 
     broadcast_round = 0 # Keep track of broadcasting round to query cpp csv for logging
+    
     try:
         while not stop_event.is_set():
             # Sync hyperparameter changes
@@ -224,16 +228,36 @@ def camera_process(
             
             
             pipeline_stats.data_preparation_ms = time.perf_counter()
-            count = points.size()
+            num_points = points.size()
+
             # [x0, y0, z0,  x1, y1, z1,  x2, y2, z2, …]
             vertex_buffer  = points.get_vertices()
             # [u0, v0,  u1, v1,  u2, v2, …]
             texture_buffer = points.get_texture_coordinates()
 
-            # View the raw vertex buffer as a (count × 3) float32 array: each row is one 3D point (x, y, z)
-            vertices = np.frombuffer(vertex_buffer,  dtype=np.float32).reshape(count, 3)
-            # View the raw texture buffer as a (count × 2) float32 array: each row is one UV pair (u, v)
-            texcoords = np.frombuffer(texture_buffer, dtype=np.float32).reshape(count, 2) # 1ms
+            # View the raw vertex buffer as a (num_points × 3) float32 array: each row is one 3D point (x, y, z)
+            vertices = np.frombuffer(vertex_buffer,  dtype=np.float32).reshape(num_points, 3)
+            # View the raw texture buffer as a (num_points × 2) float32 array: each row is one UV pair (u, v)
+            texcoords = np.frombuffer(texture_buffer, dtype=np.float32).reshape(num_points, 2) # 1ms
+
+            texture_scaling_time_start = time.perf_counter()
+            # Precompute the scale factors once
+            # Flatten and mask arrays
+            # Each u,v is normalized in [0.0, 1.0]. Scale u by (width-1) to get a column index in [0, width-1],
+            # then cast to int so we can index into the 2D image array
+            column_coordinates = (texcoords[:, 0] * (depth_width - 1)).astype(np.int32)
+            # Similarly, scale v by (height-1) to get a row index, then cast to int
+            row_coordinates    = (texcoords[:, 1] * (depth_height - 1)).astype(np.int32) # 3 ms
+
+            pixel_indices = row_coordinates * depth_width + column_coordinates
+
+            pipeline_stats.texture_scaling_ms = (time.perf_counter() - texture_scaling_time_start) * 1000
+
+            pipeline_stats.color_lookup_ms = time.perf_counter()
+            # Flatten the H×W×3 BGR image into a (H*W)×3 array so each row is one pixel’s BGR triplet
+            flat_color_pixels = color_img.reshape(-1, 3)
+            colors = flat_color_pixels[pixel_indices]  # shape: (N, 3) in [R, G, B] order
+            pipeline_stats.color_lookup_ms = ((time.perf_counter() - pipeline_stats.color_lookup_ms) * 1000)
 
             if (encoding_mode == EncodingMode.NONE):
                 pipeline_stats.data_preparation_ms = (time.perf_counter() - pipeline_stats.data_preparation_ms) * 1000 #prep end
@@ -248,27 +272,7 @@ def camera_process(
                     payload = bytes([0]) + raw_points.tobytes() + raw_cols.tobytes()
                     server.broadcast(payload)
                     round_ids.append(broadcast_round)
-                    broadcast_round += 1
             else:
-
-                texture_scaling_time_start = time.perf_counter()
-                # Precompute the scale factors once
-                # Flatten and mask arrays
-                # Each u,v is normalized in [0.0, 1.0]. Scale u by (width-1) to get a column index in [0, width-1],
-                # then cast to int so we can index into the 2D image array
-                column_coordinates = (texcoords[:, 0] * (depth_width - 1)).astype(np.int32)
-                # Similarly, scale v by (height-1) to get a row index, then cast to int
-                row_coordinates    = (texcoords[:, 1] * (depth_height - 1)).astype(np.int32) # 3 ms
-
-                pixel_indices = row_coordinates * depth_width + column_coordinates
-
-                pipeline_stats.texture_scaling_ms = (time.perf_counter() - texture_scaling_time_start) * 1000
-
-                pipeline_stats.color_lookup_ms = time.perf_counter()
-                # Flatten the H×W×3 BGR image into a (H*W)×3 array so each row is one pixel’s BGR triplet
-                flat_color_pixels = color_img.reshape(-1, 3)
-                colors = flat_color_pixels[pixel_indices]  # shape: (N, 3) in [R, G, B] order
-                pipeline_stats.color_lookup_ms = ((time.perf_counter() - pipeline_stats.color_lookup_ms) * 1000)
 
                 build_valid_points_start_time = time.perf_counter()
                 # find valid points
@@ -293,10 +297,6 @@ def camera_process(
                 # Add the subsampling mask to the valid points
                 #valid &= subsample_mask # TODO: Maybe do not subsample the entire point cloud (maybe this has use in IMPORTANCE mode)
                 pipeline_stats.subsampling_ms = (time.perf_counter() - subsampling_time_start ) * 1000
-
-                one_way_ms = 0 # set to 0 for logging flag (if not broadcasting, don't gather data to buffer)
-                roi = None
-
                 
                 if(encoding_mode == EncodingMode.IMPORTANCE):
                     # ---GESTURE RECOGNITION---
@@ -419,6 +419,7 @@ def camera_process(
                         "full_encode_ms":              compression_full_stats.compression_ms,
                         "roi_encode_ms":               compression_roi_stats.compression_ms,
                         "outside_encode_ms":           compression_out_stats.compression_ms,
+                        "num_points":                  int(num_points),
                         "full_points":                  int(compression_full_stats.number_of_points),
                         "in_roi_points":                int(compression_roi_stats.number_of_points),
                         "out_roi_points":               int(compression_out_stats.number_of_points)
