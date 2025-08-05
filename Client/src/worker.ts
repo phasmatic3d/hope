@@ -2,6 +2,10 @@
 // 1) Import the Emscripten glue
 importScripts('/dracoCustom/draco_decoder.js');
 
+import {DecoderMessage} from './types';
+
+let __filename = "WORKER";
+
 const ModuleFactory = (self as any).DracoDecoderModule as (opts: any) => Promise<any>;
 let Module: any;
 const ModuleReady = ModuleFactory({
@@ -12,49 +16,64 @@ const ModuleReady = ModuleFactory({
 
 self.onmessage = async (event) => {
 	console.time("Draco");
-	// 1) Wait for the module glue to finish initializing
+	// Wait for the module glue to finish initializing
 	if (!Module) Module = await ModuleReady;
 
 	const dracoStart = performance.now();
-	// 2) Grab the incoming compressed bytes
-	const raw = new Uint8Array(event.data.data);
+	console.log(__filename, "Grabbing the compressed bytes...");
+	// Grab the incoming compressed bytes
+	const raw = new Uint8Array(event.data);
 
-	// 3) Allocate space in WASM heap
+	console.log(__filename, `Compressed bytes length: ${raw.length}`);
+
+	// Allocate space in WASM heap
 	const ptr = Module._malloc(raw.length);
 
 	const heapBytes = Module.HEAPU8;
 	heapBytes.set(raw, ptr);
 
-	// 5) Decode
+	// Decode
+	console.log(__filename, `Decoding pointcloud with length: ${raw.length}`);
 	const pcPtr = Module._decode_draco(ptr, raw.length);
 
-	// 6) Free the input buffer
+	// Free the input buffer
 	Module._free(ptr);
 
 	if (pcPtr === 0) {
 		throw new Error("Draco decode failed");
 	}
 
-	// 7) Unpack the struct fields
+	// Unpack the struct fields
 	const positionsPtr = Module.getValue(pcPtr + 0, "i32");
 	const colorsPtr    = Module.getValue(pcPtr + 4, "i32");
 	const numPoints    = Module.getValue(pcPtr + 8, "i32");
 
-	// 8) Slice out both arrays from the single HEAPU8 buffer
+	// Slice out both arrays from the single HEAPU8 buffer
 	const buffer = heapBytes.buffer;
 	const positions = new Float32Array(buffer, positionsPtr, numPoints * 3);
 	const colors    = new Uint8Array (buffer, colorsPtr,    numPoints * 3);
 
-	// 9) Clean up the C struct
+	// Clean up the C struct
 	Module._free_pointcloud(pcPtr);
 
 	const positionsCopy = new Float32Array(positions);  // slice => new ArrayBuffer
 	const colorsCopy    = new Uint8Array(colors);       // slice => new ArrayBuffer
 	const dracoDecodeTime = performance.now() - dracoStart;
 
-	// 10) Post back, transferring ownership of the buffers
+
+
+	const decoder_message: DecoderMessage = {
+		positions: positionsCopy,
+		colors: colorsCopy,
+		numPoints: numPoints,
+		dracoDecodeTime: dracoDecodeTime
+	}
+
+	console.log(__filename, `Sending decoder message: ${decoder_message}`);
+
+	// Post back, transferring ownership of the buffers
 	self.postMessage(
-		{ positions: positionsCopy, colors: colorsCopy, numPoints, dracoDecodeTime},
+		decoder_message,
 		[ positionsCopy.buffer, colorsCopy.buffer ]
 	)
 
