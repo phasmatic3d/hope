@@ -6,7 +6,7 @@ import pandas as pd
 from datetime import datetime
 from collections import deque
 
-from typing import Tuple
+from typing import List, Dict, Tuple
 
 from draco_wrapper.draco_wrapper import (
     EncodingMode
@@ -16,12 +16,17 @@ from stats.stats import (
     PipelineTiming
 )
 
+from itertools import product
+
 
 CSV_DIR     = "stats"
 NONE_CSV  = os.path.join(CSV_DIR, "stats_none.csv")
 FULL_CSV  = os.path.join(CSV_DIR, "stats_full.csv")
 IMP_CSV   = os.path.join(CSV_DIR, "stats_importance.csv")
 os.makedirs(CSV_DIR, exist_ok=True)
+
+# where to write simulation results:
+SIM_CSV = os.path.join(CSV_DIR, "stats_simulation.csv")
 
 
 def _append_row(path: str, row: dict):
@@ -175,3 +180,166 @@ def make_total_time_table(total_time: float, section: str = "Overall Total") -> 
     table = Table(title=title, box=None, padding=(0,1), show_header=False)
     table.add_row("Total Time", f"{total_time:.2f} ms")
     return table
+
+
+# example search‐spaces
+FULL_POS_BITS  = [10, 11, 12]
+FULL_SPEEDS    = [0, 5, 10]
+
+ROI_POS_BITS   = [10, 11, 12]
+ROI_SPEEDS     = [0, 5, 10]
+OUT_POS_BITS   = [8, 9, 10]
+OUT_SPEEDS     = [5, 10]
+# all 3-bit on/off combos except the all-False case
+LAYER_OPTIONS = [
+    combo
+    for combo in product([True, False], repeat=3)
+    if any(combo)    # drop (False, False, False)
+]
+
+def generate_combinations(mode):
+    if mode == EncodingMode.FULL:
+        return [
+            {"pos_bits": p, "speed": s}
+            for p, s in product(FULL_POS_BITS, FULL_SPEEDS)
+        ]
+    elif mode == EncodingMode.IMPORTANCE:
+        combos = []
+        for quant_roi, speed_roi, quan_out, speed_out, layers in product(
+            ROI_POS_BITS, ROI_SPEEDS, OUT_POS_BITS, OUT_SPEEDS, LAYER_OPTIONS
+        ):
+            combos.append({
+                "pos_bits_in":  quant_roi,
+                "speed_in":     speed_roi,
+                "pos_bits_out": quan_out,
+                "speed_out":    speed_out,
+                "layers":       layers,
+            })
+        return combos
+    else:
+        return []
+    
+def write_simulation_csv(
+    sim_buffer: deque,
+    combos: List[Dict],
+    combo_index: int,
+    mode: EncodingMode,
+    clr_res: Tuple[int,int],
+    depth_res: Tuple[int,int],
+):
+    """
+    Once sim_buffer has `maxlen` entries, average them, write one row
+    for combos[combo_index], and return the next combo_index (or None if done).
+    """
+    # only fire when full
+    if len(sim_buffer) < sim_buffer.maxlen:
+        return combo_index
+
+    # average the 90 frames
+    avg = pd.DataFrame(sim_buffer).mean()
+    sim_buffer.clear()
+
+    #path
+    if mode == EncodingMode.NONE:
+        path = NONE_CSV
+    elif mode == EncodingMode.FULL:
+        path = FULL_CSV
+    else:  # IMPORTANCE
+        path = IMP_CSV
+
+    # shared fields
+    timestamp = datetime.now().isoformat()
+    common = {
+        "timestamp":        timestamp,
+        "color_resolution": f"{clr_res[0]}x{clr_res[1]}",
+        "depth_resolution": f"{depth_res[0]}x{depth_res[1]}",
+        "mode":             mode.name,
+    }
+
+    combo = combos[combo_index]
+    # start building the row with common + combo hyperparams
+    row = { **common }
+
+    # inject combo fields in strict order:
+    if mode == EncodingMode.NONE:
+        # NONE has no hyperparams beyond common
+        pass
+
+    elif mode == EncodingMode.FULL:
+        # full‐mode hyperparams
+        row["encoding_speed"]      = combo["speed"]
+        row["position_quant_bits"] = combo["pos_bits"]
+        # layers always on for FULL
+        row["layer0_on"] = True
+        row["layer1_on"] = True
+        row["layer2_on"] = True
+
+    else:  # IMPORTANCE
+        # importance hyperparams
+        row["encoding_speed_in"]       = combo["speed_in"]
+        row["position_quant_bits_in"]  = combo["pos_bits_in"]
+        row["encoding_speed_out"]      = combo["speed_out"]
+        row["position_quant_bits_out"] = combo["pos_bits_out"]
+        # now the layers tuple
+        for i, on in enumerate(combo["layers"]):
+            row[f"layer{i}_on"] = on
+
+    # now the averaged statistics, in the same order as write_stats_csv:
+    if mode == EncodingMode.NONE:
+        # points = total number of pts in sim_buffer: use avg.num_points
+        row["points"]                       = int(avg.get("num_points", pd.NA))
+        row["frame_preparation_ms"]         = avg.get("frame_preparation_ms", pd.NA)
+        row["data_preparation_ms"]          = avg.get("data_preparation_ms",    pd.NA)
+        row["one_way_ms"]                   = avg.get("one_way_ms",             pd.NA)
+        row["one_way_plus_processing_ms"]   = avg.get("one_way_plus_processing_ms", pd.NA)
+
+        # total_time
+        row["total_time_ms"] = (
+            row["frame_preparation_ms"]
+          + row["data_preparation_ms"]
+          + row["one_way_plus_processing_ms"]
+        )
+
+    elif mode == EncodingMode.FULL:
+        row["points"]                       = int(avg.get("full_points", pd.NA))
+        row["frame_preparation_ms"]         = avg.get("frame_preparation_ms", pd.NA)
+        row["data_preparation_ms"]          = avg.get("data_preparation_ms",    pd.NA)
+        row["encode_ms"]                    = avg.get("full_encode_ms",         pd.NA)
+        row["one_way_ms"]                   = avg.get("one_way_ms",             pd.NA)
+        row["one_way_plus_processing_ms"]   = avg.get("one_way_plus_processing_ms", pd.NA)
+
+        row["total_time_ms"] = (
+            row["frame_preparation_ms"]
+          + row["data_preparation_ms"]
+          + row["encode_ms"]
+          + row["one_way_plus_processing_ms"]
+        )
+
+    else:  # IMPORTANCE
+        in_pts  = int(avg.get("in_roi_points",  pd.NA))
+        out_pts = int(avg.get("out_roi_points", pd.NA))
+        row["points_in"]                    = in_pts
+        row["points_out"]                   = out_pts
+        row["points"]                       = in_pts + out_pts
+        row["frame_preparation_ms"]         = avg.get("frame_preparation_ms",   pd.NA)
+        row["data_preparation_ms"]          = avg.get("data_preparation_ms",    pd.NA)
+        row["encode_ms"]                    = avg.get("multiprocessing_compression_ms", pd.NA)
+        row["one_way_ms"]                   = avg.get("one_way_ms",             pd.NA)
+        row["one_way_plus_processing_ms"]   = avg.get("one_way_plus_processing_ms", pd.NA)
+
+        row["total_time_ms"] = (
+            row["frame_preparation_ms"]
+          + row["data_preparation_ms"]
+          + row["encode_ms"]
+          + row["one_way_plus_processing_ms"]
+        )
+
+    # append one row, headers will be created on first write
+    _append_row(path, row)
+
+    # advance to next combo or finish
+    next_index = combo_index + 1
+    if next_index >= len(combos):
+        return None    # signal “done”
+    else:
+        return next_index

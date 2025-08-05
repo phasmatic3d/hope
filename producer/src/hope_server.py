@@ -41,7 +41,9 @@ from statslogger import (
     CompressionStats,
     calculate_overall_time,
     make_total_time_table,
-    write_stats_csv
+    write_stats_csv,
+    write_simulation_csv,
+    generate_combinations
 )
 
 import multiprocessing as mp
@@ -75,15 +77,38 @@ def camera_process(
         stop_event: mp.Event,
         ready_frame_event: mp.Event,
         ready_cluster_event: mp.Event,
-        ready_roi_event: mp.Event) :
+        ready_roi_event: mp.Event,
+        simulation: bool) :
     
+    def apply_combo_settings(combo): # Helper function for setting a combination for simulations
+        if encoding_mode == EncodingMode.FULL:
+            draco_full_encoding.position_quantization_bits = combo["pos_bits"]
+            draco_full_encoding.color_quantization_bits    = combo["pos_bits"]
+            draco_full_encoding.speed_encode               = combo["speed"]
+            draco_full_encoding.speed_decode               = combo["speed"]
+        elif encoding_mode == EncodingMode.IMPORTANCE:
+            draco_roi_encoding.position_quantization_bits        = combo["pos_bits_in"]
+            draco_roi_encoding.color_quantization_bits           = combo["pos_bits_in"]
+            draco_roi_encoding.speed_encode                      = combo["speed_in"]
+            draco_roi_encoding.speed_decode                      = combo["speed_in"]
+            draco_outside_roi_encoding.position_quantization_bits = combo["pos_bits_out"]
+            draco_outside_roi_encoding.color_quantization_bits    = combo["pos_bits_out"]
+            draco_outside_roi_encoding.speed_encode               = combo["speed_out"]
+            draco_outside_roi_encoding.speed_decode               = combo["speed_out"]
+            active_layers[:] = combo["layers"]
+    
+    global DEBUG
+
     # Hyperparameters to move to argparse
     visualization_mode = VizualizationMode.COLOR
-    encoding_mode      = EncodingMode.NONE
+    encoding_mode      = EncodingMode.FULL
 
     frame_stats_buffer = deque(maxlen=30) # buffer for dynamic stats logging (CSV)
 
-    global DEBUG
+    # simulation settings for simulation csv logging
+    simulation_combos   = []
+    simulation_index    = None
+    simulation_buffer   = deque(maxlen=30)
 
     thread_executor = ThreadPoolExecutor(max_workers=2)
     
@@ -425,13 +450,45 @@ def camera_process(
                         "out_roi_points":               int(compression_out_stats.number_of_points)
                     })
 
+                    if simulation_index is not None: # only if simulation is running
+                        simulation_buffer.append({
+                            "frame_preparation_ms":         pipeline_stats.frame_preparation_ms,
+                            "data_preparation_ms":          pipeline_stats.data_preparation_ms,
+                            "multiprocessing_compression_ms": pipeline_stats.multiprocessing_compression_ms,
+                            "one_way_ms":                   one_way_ms,
+                            "one_way_plus_processing_ms":   one_way_plus_processing_ms,
+                            "full_encode_ms":               compression_full_stats.compression_ms,
+                            "roi_encode_ms":                compression_roi_stats.compression_ms,
+                            "outside_encode_ms":            compression_out_stats.compression_ms,
+                            "num_points":                   int(num_points),
+                            "full_points":                  int(compression_full_stats.number_of_points),
+                            "in_roi_points":                int(compression_roi_stats.number_of_points),
+                            "out_roi_points":               int(compression_out_stats.number_of_points),
+                        })
+
+                        simulation_index = write_simulation_csv(
+                            simulation_buffer,
+                            simulation_combos,
+                            simulation_index,
+                            encoding_mode,
+                            (cmr_clr_width, cmr_clr_height),
+                            (cmr_depth_width, cmr_depth_height),
+                        )
+                        if simulation_index is not None:
+                            apply_combo_settings(simulation_combos[simulation_index])
+                        else:
+                            print("SIMULATION COMPLETE ✅")
+
                 now = time.perf_counter()
                 if (frame_count >= 30):
                     fps = frame_count // (now - prev_time)
                     prev_time = now
                     frame_count = 0
 
-                # CV DRAW ON SCREEN
+
+
+
+                #---- CV DRAW ON SCREEN----
 
                 # draw FPS
                 cv2.putText(display, f"FPS: {fps}", (cmr_clr_width -200,cmr_clr_height -30),
@@ -610,24 +667,52 @@ def camera_process(
                     active_layers[1] = not active_layers[1]
                 elif key == ord('3'):
                     active_layers[2] = not active_layers[2]
-                elif key == ord('c'):
-                    write_stats_csv(
-                        frame_stats_buffer,
-                        encoding_mode,
-                        # resolutions
-                        (cmr_clr_width, cmr_clr_height),
-                        (cmr_depth_width, cmr_depth_height),
-                        # FULL mode params
-                        draco_full_encoding.speed_encode,
-                        draco_full_encoding.position_quantization_bits,
-                        active_layers,
-                        # IMPORTANCE mode “in” params
-                        draco_roi_encoding.speed_encode,
-                        draco_roi_encoding.position_quantization_bits,
-                        # IMPORTANCE mode “out” params
-                        draco_outside_roi_encoding.speed_encode,
-                        draco_outside_roi_encoding.position_quantization_bits
-                    )
+                elif key == ord('c'): # Logging button
+                    if simulation:
+                        # kick off the full simulation sweep
+                        simulation_combos = generate_combinations(encoding_mode)
+                        if simulation_combos:
+                            simulation_index    = 0
+                            simulation_buffer.clear()
+                            apply_combo_settings(simulation_combos[0])
+                            print(f"SIM: starting {len(simulation_combos)} combos of {encoding_mode.name}")
+                        else:
+                            print(f"SIM: no combos for {encoding_mode.name}, falling back to normal CSV logging")
+                            write_stats_csv(
+                                frame_stats_buffer,
+                                encoding_mode,
+                                # color & depth resolutions
+                                (cmr_clr_width, cmr_clr_height),
+                                (cmr_depth_width, cmr_depth_height),
+                                # FULL mode params
+                                draco_full_encoding.speed_encode,
+                                draco_full_encoding.position_quantization_bits,
+                                active_layers,
+                                # IMPORTANCE mode “in” params
+                                draco_roi_encoding.speed_encode,
+                                draco_roi_encoding.position_quantization_bits,
+                                # IMPORTANCE mode “out” params
+                                draco_outside_roi_encoding.speed_encode,
+                                draco_outside_roi_encoding.position_quantization_bits
+                            )
+                    else:
+                        write_stats_csv(
+                            frame_stats_buffer,
+                            encoding_mode,
+                            # resolutions
+                            (cmr_clr_width, cmr_clr_height),
+                            (cmr_depth_width, cmr_depth_height),
+                            # FULL mode params
+                            draco_full_encoding.speed_encode,
+                            draco_full_encoding.position_quantization_bits,
+                            active_layers,
+                            # IMPORTANCE mode “in” params
+                            draco_roi_encoding.speed_encode,
+                            draco_roi_encoding.position_quantization_bits,
+                            # IMPORTANCE mode “out” params
+                            draco_outside_roi_encoding.speed_encode,
+                            draco_outside_roi_encoding.position_quantization_bits
+                        )
                 
     finally:
         pipeline.stop()
@@ -803,6 +888,8 @@ def launch_processes(server: broadcaster.ProducerServer, args, device : str) -> 
     cmr_depth_height = args.realsense_depth_capture_height
     cmr_fps = args.realsense_target_fps
 
+    simulation = args.simulation
+
     stop_event = mp.Event()
     ready_frame_event = mp.Event()
     ready_cluster_event = mp.Event()
@@ -875,7 +962,8 @@ def launch_processes(server: broadcaster.ProducerServer, args, device : str) -> 
         camera_process(server, shm_frame.name, shm_cluster.name, shm_roi.name,
             cmr_clr_width, cmr_clr_height,
             cmr_depth_width, cmr_depth_height, cmr_fps,
-            stop_event, ready_frame_event, ready_cluster_event, ready_roi_event)
+            stop_event, ready_frame_event, ready_cluster_event, ready_roi_event,
+            simulation)
         
         predictor_proc.terminate()
         predictor_proc.join()

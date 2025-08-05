@@ -92,6 +92,12 @@ producer_cli.add_argument(
         help="Calculate RTT using pings instead of timestamps."
     )
 
+producer_cli.add_argument(
+    "--simulation",
+    action="store_true",
+    default=False,
+    help="When true, pressing ‘c’ will run a full 90-frame hyperparam simulation. Otherwise it writes a last 30-frame csv pe press"
+)
 
 def getRequest(outputPath : Path, url : str) -> None:
     req = requests.get(url, stream=True, allow_redirects=True, timeout=10)
