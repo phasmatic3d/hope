@@ -292,11 +292,16 @@ def camera_process(
                 raw_cols = colors     # shape: (N,3) uint8
 
 
-                round_ids = []
+
                 if(raw_points.size > 0):
                     payload = bytes([0]) + raw_points.tobytes() + raw_cols.tobytes()
                     server.broadcast(payload)
-                    round_ids.append(broadcast_round)
+
+                entry = server.wait_for_entry(broadcast_round)
+                if entry:
+                    broadcast_round += 1
+                    pipeline_stats.approximate_rtt_ms = entry.approximate_rtt_ms
+
             else:
 
                 build_valid_points_start_time = time.perf_counter()
@@ -395,13 +400,13 @@ def camera_process(
                         buffers.append(buffer_out)
                     count = len(buffers)
 
-                    round_ids = [] # keep track of the round ids for logging
                     for buffer in buffers:
                         server.broadcast(bytes([count]) + buffer) # Prefix with byte that tells us the length
-                        if (len(round_ids) == 0):
-                            round_ids.append(broadcast_round)
-                        else:
-                            round_ids.append(broadcast_round + len(round_ids)) # offset to get the next true broadcast_counter (TODO: maybe find a more intuitve way)
+
+                    entry = server.wait_for_entry(broadcast_round)
+
+                    if entry:
+                        broadcast_round += 1
 
 
                 else: # ENCODE THE FULL FRAME
@@ -414,33 +419,27 @@ def camera_process(
 
                     # Encode entire valid cloud
                     pipeline_stats.data_preparation_ms = (time.perf_counter() - pipeline_stats.data_preparation_ms) * 1000 #prep end
-                    round_ids = []
                     if(points_full_frame.any()):
                         buffer_full = draco_full_encoding.encode(points_full_frame, colors_full_frame)
-                        # Broadcast
                         server.broadcast(bytes([1]) + buffer_full) # prefix with single byte to understand that we are sending one buffer
-                        round_ids.append(broadcast_round) 
+                    
+                    entry = server.wait_for_entry(broadcast_round)
+                    if entry:
+                        broadcast_round += 1
+                       
                         
             
 
             # Logging and display
             if DEBUG:
                 # Logging
-                entries = [ server.wait_for_entry(round_id) for round_id in round_ids ]
-                valid_entries = [ entry for entry in entries if entry and entry.error != "missing metadata" ] # valid entries
-                
-                if(valid_entries): # If broadcasting
-                    broadcast_round += len(round_ids)
-                    # pick the worst‐case latencies (meaningful in IMPORTANCE mode, trivial in FULL)
-                    one_way_ms                = max(entry.one_way_ms                for entry in valid_entries)
-                    one_way_plus_processing_ms = max(entry.one_way_plus_processing for entry in valid_entries)
-
+                if(entry): # If broadcasting
                     frame_stats_buffer.append({
                         "frame_preparation_ms":         pipeline_stats.frame_preparation_ms,
                         "data_preparation_ms":         pipeline_stats.data_preparation_ms,
                         "multiprocessing_compression_ms": pipeline_stats.multiprocessing_compression_ms,
-                        "one_way_ms":                       one_way_ms,
-                        "one_way_plus_processing_ms":       one_way_plus_processing_ms,
+                        "one_way_ms":                       entry.one_way_ms,
+                        "one_way_plus_processing_ms":       entry.one_way_plus_processing,
                         "full_encode_ms":              compression_full_stats.compression_ms,
                         "roi_encode_ms":               compression_roi_stats.compression_ms,
                         "outside_encode_ms":           compression_out_stats.compression_ms,
@@ -455,8 +454,8 @@ def camera_process(
                             "frame_preparation_ms":         pipeline_stats.frame_preparation_ms,
                             "data_preparation_ms":          pipeline_stats.data_preparation_ms,
                             "multiprocessing_compression_ms": pipeline_stats.multiprocessing_compression_ms,
-                            "one_way_ms":                   one_way_ms,
-                            "one_way_plus_processing_ms":   one_way_plus_processing_ms,
+                            "one_way_ms":                   entry.one_way_ms,
+                            "one_way_plus_processing_ms":   entry.one_way_plus_processing,
                             "full_encode_ms":               compression_full_stats.compression_ms,
                             "roi_encode_ms":                compression_roi_stats.compression_ms,
                             "outside_encode_ms":            compression_out_stats.compression_ms,
