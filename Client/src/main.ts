@@ -51,11 +51,11 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 
 		if (pendingChunks.length === expectedChunks) {
 			const totalDecodeTime = pendingChunks.reduce((sum, c) => sum + c.decodeTime, 0);
+			// Update or create the BufferGeometry
+			const geomStart = performance.now();
 			// Merge all decoded chunks
 			const { positions, colors } = mergeBuffers(pendingChunks);
 
-			// Update or create the BufferGeometry
-			const geomStart = performance.now();
 			if (!pointCloudGeometry) {
 				pointCloudGeometry = new THREE.BufferGeometry();
 				const material = new THREE.PointsMaterial({

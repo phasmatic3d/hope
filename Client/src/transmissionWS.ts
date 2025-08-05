@@ -113,13 +113,33 @@ export function openConnection(
         }
 
         if (event.data instanceof ArrayBuffer) {
-            packetQueue.push({
-                buf: event.data,
-                round: currentRound, 
-                sendTS: lastSendTimestamp,
-                receivedTS: getCorrectedTime()
-            });
-            if (!busy) processNextPacket();
+            //packetQueue.push({
+            //    buf: event.data,
+            //    round: currentRound, 
+            //    sendTS: lastSendTimestamp,
+            //    receivedTS: getCorrectedTime()
+            //});
+            //if (!busy) processNextPacket();
+            const receivedTS = getCorrectedTime();
+            const poppedFromQueueAt = getCorrectedTime();
+            const { decodeTime, geometryUploadTime, frameTime, totalTime } = await response(event.data);
+            const processedAt = getCorrectedTime();
+            const message = JSON.stringify({
+                type:                       'ms-and-processing',
+                timestamp:                  getCorrectedTime(),
+                round:                      currentRound,
+                pure_decode_ms:             decodeTime,
+                pure_geometry_upload_ms:    geometryUploadTime,
+                pure_render_ms:             frameTime,
+                pure_processing_ms:         totalTime,
+                wait_in_queue:              poppedFromQueueAt - receivedTS,
+                one_way_ms:                 receivedTS - lastSendTimestamp,
+                one_way_plus_processing:    processedAt - lastSendTimestamp
+            })
+
+            console.log("Sending message to server:\n" + message);
+
+            socket.send(message);
         }   
     });
 
