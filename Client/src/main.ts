@@ -89,13 +89,14 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 	let lastDecodeTime = 0;
   	let lastGeometryTime = 0;
 
-	return async (rawData: ArrayBuffer) => {
+		return async (rawData: ArrayBuffer) => {
 
 		const header = new DataView(rawData).getUint8(0);
 		if (header === 0) {
+			const geomStart = performance.now();
 			// strip off that one byte
 			const payload = rawData.slice(1);
-
+			
 			// compute how many points: each point = 3×float32 + 3×uint8 = 12+3 = 15 bytes
 			const numPoints = payload.byteLength / 15;
 
@@ -127,14 +128,19 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 			pointCloudGeometry.attributes.position.needsUpdate = true;
 			pointCloudGeometry.attributes.color.needsUpdate    = true;
 
+			const totalGeomTime = performance.now() - geomStart;
+
+			lastDecodeTime = 0;
+      		lastGeometryTime = totalGeomTime;
+
 			// done. no decoding
-			return;
+			return {
+				decodeTime: 0,
+				geometryUploadTime: totalGeomTime
+			};
 		}
 
-		expectedChunks = new DataView(rawData).getUint8(0);
-
-		// Start high-res timer
-		const start = performance.now();
+		expectedChunks = header
 
 		console.log("Posting message to worker");
 		// Send compressed bytes to Worker
@@ -145,10 +151,6 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 			const check = () => (pendingChunks.length === 0 && expectedChunks === 0) ? resolve() : setTimeout(check, 1);
 			check();
 		});
-
-		const duration = performance.now() - start;
-		console.log(`Decode + geometry update: ${duration.toFixed(1)} ms`);
-
 		// return the two timings
     	return {
     	  	decodeTime: lastDecodeTime,

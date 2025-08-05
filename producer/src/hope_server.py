@@ -196,6 +196,7 @@ def camera_process(
     active_layers   = [True,  True,  True]
 
     broadcast_round = 0 # Keep track of broadcasting round to query cpp csv for logging
+    batch = 0
     
     try:
         while not stop_event.is_set():
@@ -400,13 +401,16 @@ def camera_process(
                         buffers.append(buffer_out)
                     count = len(buffers)
 
+                    any_broadcasted = False
                     for buffer in buffers:
-                        server.broadcast(bytes([count]) + buffer) # Prefix with byte that tells us the length
+                        any_broadcasted |= server.broadcast_batch(batch, bytes([count]) + buffer)
+                        entry = server.wait_for_entry(broadcast_round)
+                        if entry:
+                            broadcast_round += 1
+                            pipeline_stats.approximate_rtt_ms += entry.approximate_rtt_ms
 
-                    entry = server.wait_for_entry(broadcast_round)
-
-                    if entry:
-                        broadcast_round += 1
+                    if any_broadcasted:
+                        batch += 1
 
 
                 else: # ENCODE THE FULL FRAME

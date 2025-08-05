@@ -13,12 +13,12 @@ export function openConnection(
 ) {
     console.warn("WebSockets")
     // toggle this to switch between ws:// and wss://
-    const USE_TLS = true;
+    const USE_TLS = false;
 
     // host + port for each mode
     //const HOST = '192.168.1.135';
     const HOST = 'localhost';
-    const PORT = 9003; // e.g. 9003 for TLS, 9002 for plain
+    const PORT = 9002; // e.g. 9003 for TLS, 9002 for plain
 
     // pick the right protocol
     const protocol = USE_TLS ? 'wss' : 'ws';
@@ -113,30 +113,33 @@ export function openConnection(
         }
 
         if (event.data instanceof ArrayBuffer) {
-            //console.warn('Received ArrayBuffer:', event.data);
-            const receivedAt = getCorrectedTime();
-            await response(event.data);
-            const timeAfterProcessing = getCorrectedTime();
+            //packetQueue.push({
+            //    buf: event.data,
+            //    round: currentRound, 
+            //    sendTS: lastSendTimestamp,
+            //    receivedTS: getCorrectedTime()
+            //});
+            //if (!busy) processNextPacket();
+            const receivedTS = getCorrectedTime();
+            const poppedFromQueueAt = getCorrectedTime();
+            const { decodeTime, geometryUploadTime, frameTime, totalTime } = await response(event.data);
+            const processedAt = getCorrectedTime();
+            const message = JSON.stringify({
+                type:                       'ms-and-processing',
+                timestamp:                  getCorrectedTime(),
+                round:                      currentRound,
+                pure_decode_ms:             decodeTime,
+                pure_geometry_upload_ms:    geometryUploadTime,
+                pure_render_ms:             frameTime,
+                pure_processing_ms:         totalTime,
+                wait_in_queue:              poppedFromQueueAt - receivedTS,
+                one_way_ms:                 receivedTS - lastSendTimestamp,
+                one_way_plus_processing:    processedAt - lastSendTimestamp
+            })
 
-            if(lastSendTimestamp !== null) {
-                const one_way_ms              = receivedAt - lastSendTimestamp;
-                const one_way_plus_processing = timeAfterProcessing - lastSendTimestamp;
+            console.log("Sending message to server:\n" + message);
 
-                // send back timestamp *and* the round
-                socket.send
-                (
-                    JSON.stringify
-                    (
-                        {
-                            type:      'ms-and-processing',
-                            timestamp:  receivedAt,
-                            round:      currentRound,
-                            one_way_ms: one_way_ms,
-                            one_way_plus_processing: one_way_plus_processing
-                        }
-                    )
-                );
-            }
+            socket.send(message);
         }   
     });
 
