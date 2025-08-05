@@ -152,51 +152,47 @@ if(NOT nlohmann_json_POPULATED)
 endif()
 
 #####################################################################
-# Bindings for encoder
+# Bindings for draco
 #####################################################################
 
-set(ENCODER_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/src/draco_wrapper")
+set(DRACO_BINDING_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/src/draco_wrapper")
 
-nanobind_add_module(encoder
+nanobind_add_module(draco_bindings
     src/bindings/draco_bindings.cpp
 )
 
 if (WIN32)
-	set(ENCODER_SUFFIX ".pyd")
+	set(DRACO_BINDING_SUFFIX ".pyd")
 else()
-  	set(ENCODER_SUFFIX ".so")
+  	set(DRACO_BINDING_SUFFIX ".so")
 endif()
 
-set_target_properties(encoder PROPERTIES
+set_target_properties(draco_bindings PROPERTIES
   	PREFIX ""
-  	SUFFIX "${ENCODER_SUFFIX}"
-  	RUNTIME_OUTPUT_DIRECTORY        "${ENCODER_OUTPUT_DIR}"
-  	LIBRARY_OUTPUT_DIRECTORY        "${ENCODER_OUTPUT_DIR}"
-  	ARCHIVE_OUTPUT_DIRECTORY        "${ENCODER_OUTPUT_DIR}"
+  	SUFFIX "${DRACO_BINDING_SUFFIX}"
+  	RUNTIME_OUTPUT_DIRECTORY        "${DRACO_BINDING_OUTPUT_DIR}"
+  	LIBRARY_OUTPUT_DIRECTORY        "${DRACO_BINDING_OUTPUT_DIR}"
+  	ARCHIVE_OUTPUT_DIRECTORY        "${DRACO_BINDING_OUTPUT_DIR}"
 )
 
-target_include_directories(encoder PRIVATE
+target_include_directories(draco_bindings PRIVATE
   	${draco_SOURCE_DIR}/src      
   	${CMAKE_BINARY_DIR}/draco      
   	${CMAKE_BINARY_DIR}        
 )
 
-target_link_libraries(encoder PRIVATE
+target_link_libraries(draco_bindings PRIVATE
   	draco::draco
 )
 
-message(STATUS "Draco source dir: ${draco_SOURCE_DIR}")
-message(STATUS "Draco build dir:  ${draco_BINARY_DIR}")
-message(STATUS "Cmake build dir:  ${CMAKE_BINARY_DIR}")
-message(STATUS "Cmake source dir:  ${CMAKE_SOURCE_DIR}")
-
 if (WIN32)
-	add_custom_command(TARGET encoder POST_BUILD
+	add_custom_command(TARGET draco_bindings POST_BUILD
 	  COMMAND ${CMAKE_COMMAND} -E copy_if_different
 	    "$<TARGET_FILE:draco::draco>"
-	    "${ENCODER_OUTPUT_DIR}/draco.dll"
+	    "${DRACO_BINDING_OUTPUT_DIR}/draco.dll"
 	)
 endif()
+
 
 #####################################################################
 # Bindings for broadcaster
@@ -236,46 +232,11 @@ target_link_libraries(broadcaster PRIVATE
 	OpenSSL::Crypto
 )
 
-target_link_libraries(broadcaster PRIVATE 
- 	spdlog::spdlog
-	nlohmann_json::nlohmann_json
-	OpenSSL::SSL
-	OpenSSL::Crypto
-)
-
 target_compile_definitions(broadcaster PRIVATE
   	ASIO_STANDALONE
   	_WEBSOCKETPP_CPP11_TYPE_TRAITS_
 )
 
-
-#####################################################################
-# Compile a seperate server for debugging purposes
-#####################################################################
-
-add_library(hope_server_lib
-  	src/bindings/server_bindings_no_nanobind.cpp
-)
-
-target_include_directories(hope_server_lib PUBLIC
-  	${asio_SOURCE_DIR}/asio/include
-  	${websocketpp_SOURCE_DIR}
-)
-
-target_link_libraries(hope_server_lib PUBLIC
-  	spdlog::spdlog
-  	nlohmann_json::nlohmann_json
-  	OpenSSL::SSL
-  	OpenSSL::Crypto
-)
-
-target_compile_definitions(hope_server_lib PUBLIC
-  	ASIO_STANDALONE
-  	_WEBSOCKETPP_CPP11_TYPE_TRAITS_
-)
-
-add_executable(hope_server_exec src/bindings/server_main.cpp)
-target_link_libraries(hope_server_exec PRIVATE hope_server_lib)
 
 #####################################################################
 # Certificates

@@ -1,2 +1,0 @@
-timestamp,color_resolution,depth_resolution,mode,points,frame_preparation_ms,data_preparation_ms,one_way_ms,one_way_plus_processing_ms,total_time_ms
-2025-08-05T07:10:06.440671,848x480,848x480,NONE,407040,15.23,9.73,13.5,22.1,47.06

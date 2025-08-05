@@ -23,6 +23,9 @@ from draco_wrapper.draco_wrapper import (
     VizualizationMode
 )
 
+
+from draco_wrapper import draco_bindings as dcb # temporary, for logging quality sims
+
 from broadcaster_wrapper import (
     broadcaster
 )
@@ -43,6 +46,7 @@ from statslogger import (
     make_total_time_table,
     write_stats_csv,
     write_simulation_csv,
+    write_quality_simulation_csv,
     generate_combinations
 )
 
@@ -107,8 +111,11 @@ def camera_process(
 
     # simulation settings for simulation csv logging
     simulation_combos   = []
-    simulation_index    = None
-    simulation_buffer   = deque(maxlen=30)
+    performance_simulation_index    = None
+    performance_simulation_buffer   = deque(maxlen=30)
+
+    quality_simulation_index    = None
+    quality_simulation_buffer   = deque(maxlen=30)
 
     thread_executor = ThreadPoolExecutor(max_workers=2)
     
@@ -417,15 +424,15 @@ def camera_process(
                 else: # ENCODE THE FULL FRAME
                     # Masking
                     compression_full_stats.masking_ms = time.perf_counter()
-                    points_full_frame = vertices[valid]
-                    colors_full_frame = colors[valid]
+                    points_full = vertices[valid]
+                    colors_full = colors[valid]
                     compression_full_stats.masking_ms = (time.perf_counter() - compression_full_stats.masking_ms ) * 1000
                 
 
                     # Encode entire valid cloud
                     pipeline_stats.data_preparation_ms = (time.perf_counter() - pipeline_stats.data_preparation_ms) * 1000 #prep end
-                    if(points_full_frame.any()):
-                        buffer_full = draco_full_encoding.encode(points_full_frame, colors_full_frame)
+                    if(points_full.any()):
+                        buffer_full = draco_full_encoding.encode(points_full, colors_full)
                         server.broadcast(bytes([1]) + buffer_full) # prefix with single byte to understand that we are sending one buffer
                     
                     entry = server.wait_for_entry(broadcast_round)
@@ -455,8 +462,9 @@ def camera_process(
                         "out_roi_points":               int(compression_out_stats.number_of_points)
                     })
 
-                    if simulation_index is not None: # only if simulation is running
-                        simulation_buffer.append({
+                    # Performance simulation
+                    if performance_simulation_index is not None: # only if simulation is running
+                        performance_simulation_buffer.append({
                             "frame_preparation_ms":         pipeline_stats.frame_preparation_ms,
                             "data_preparation_ms":          pipeline_stats.data_preparation_ms,
                             "multiprocessing_compression_ms": pipeline_stats.multiprocessing_compression_ms,
@@ -472,29 +480,73 @@ def camera_process(
                             "out_roi_points":               int(compression_out_stats.number_of_points),
                         })
 
-                        simulation_index = write_simulation_csv(
-                            simulation_buffer,
+                        performance_simulation_index = write_simulation_csv(
+                            performance_simulation_buffer,
                             simulation_combos,
-                            simulation_index,
+                            performance_simulation_index,
                             encoding_mode,
                             (cmr_clr_width, cmr_clr_height),
                             (cmr_depth_width, cmr_depth_height),
                         )
-                        if simulation_index is not None:
-                            apply_combo_settings(simulation_combos[simulation_index])
+                        if performance_simulation_index is not None:
+                            apply_combo_settings(simulation_combos[performance_simulation_index])
                         else:
                             print("SIMULATION COMPLETE ✅")
 
+
+                # now append into quality buffer if running quality simulation
+                if quality_simulation_index is not None :
+                    # decode points
+                    if encoding_mode == EncodingMode.FULL:
+                        decoded_positions, decoded_colors = dcb.decode_pointcloud(buffer_full)            
+                    elif encoding_mode == EncodingMode.IMPORTANCE and buffer_roi:
+                        #recalculate points full here (we don't have it from earlier)
+
+                        points_full = vertices[out_roi & subsample_mask | in_roi ]
+                        colors_full = colors[out_roi & subsample_mask | in_roi]
+
+                        decoded_positions_roi, decoded_colors_roi = dcb.decode_pointcloud(buffer_roi)
+                        decoded_positions_out, decoded_colors_out = dcb.decode_pointcloud(buffer_out)
+                        decoded_positions = np.vstack((decoded_positions_roi, decoded_positions_out)) 
+                        decoded_colors = np.vstack((decoded_colors_roi, decoded_colors_out))  
+
+
+
+                    position_diffs = np.linalg.norm(points_full - decoded_positions, axis=1)
+                    colors_errs = np.abs(colors_full.astype(int) - decoded_colors.astype(int))
+                
+                    #stats
+                    mean_pos_error   = position_diffs.mean()
+                    max_pos_error    = position_diffs.max()
+                    mean_color_error = colors_errs.mean()
+
+                    quality_simulation_buffer.append({
+                        "mean_pos_error":     mean_pos_error,
+                        "max_pos_error":      max_pos_error,
+                        "mean_color_error":   mean_color_error,
+                    })
+
+                    # write one row and advance
+                    quality_simulation_index = write_quality_simulation_csv(
+                        quality_simulation_buffer,
+                        simulation_combos,
+                        quality_simulation_index,
+                        encoding_mode
+                    )
+
+                    if quality_simulation_index is not None:
+                        apply_combo_settings(simulation_combos[quality_simulation_index])
+                    else:
+                        print("QUALITY-SIM COMPLETE ✅")
+
+
+
+                #---- CV DRAW ON SCREEN----
                 now = time.perf_counter()
                 if (frame_count >= 30):
                     fps = frame_count // (now - prev_time)
                     prev_time = now
                     frame_count = 0
-
-
-
-
-                #---- CV DRAW ON SCREEN----
 
                 # draw FPS
                 cv2.putText(display, f"FPS: {fps}", (cmr_clr_width -200,cmr_clr_height -30),
@@ -678,12 +730,12 @@ def camera_process(
                         # kick off the full simulation sweep
                         simulation_combos = generate_combinations(encoding_mode)
                         if simulation_combos:
-                            simulation_index    = 0
-                            simulation_buffer.clear()
+                            performance_simulation_index    = 0
+                            performance_simulation_buffer.clear()
                             apply_combo_settings(simulation_combos[0])
-                            print(f"SIM: starting {len(simulation_combos)} combos of {encoding_mode.name}")
+                            print(f"PERF-SIM: starting {len(simulation_combos)} combos of {encoding_mode.name}")
                         else:
-                            print(f"SIM: no combos for {encoding_mode.name}, falling back to normal CSV logging")
+                            print(f"PERF-SIM: no combos for {encoding_mode.name}, falling back to normal CSV logging")
                             write_stats_csv(
                                 frame_stats_buffer,
                                 encoding_mode,
@@ -719,6 +771,17 @@ def camera_process(
                             draco_outside_roi_encoding.speed_encode,
                             draco_outside_roi_encoding.position_quantization_bits
                         )
+                elif key == ord('v'):
+                    if (simulation):
+                    # kick off quality simulation
+                        simulation_combos = generate_combinations(encoding_mode)
+                        if simulation_combos:
+                            quality_simulation_index  = 0
+                            quality_simulation_buffer.clear()
+                            apply_combo_settings(simulation_combos[0])
+                            print(f"QUAL-SIM: starting {len(simulation_combos)} combos of {encoding_mode.name}")
+                        else:
+                            print(f"QUAL-SIM: no combos for {encoding_mode.name}, skipping.")
                 
     finally:
         pipeline.stop()

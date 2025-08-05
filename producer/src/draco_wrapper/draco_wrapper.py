@@ -1,6 +1,6 @@
 import time
 import numpy as np
-from . import encoder as enc
+from . import draco_bindings as dcb
 from stats.stats import (
     CompressionStats,
 )
@@ -76,7 +76,7 @@ class DracoWrapper:
 
         start = time.perf_counter()
         # note this calls the cpp binary
-        buffer = enc.encode_pointcloud(
+        buffer = dcb.encode_pointcloud(
             points,
             colors,
             self.position_quantization_bits,

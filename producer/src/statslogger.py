@@ -19,10 +19,14 @@ from stats.stats import (
 from itertools import product
 
 
+
 CSV_DIR     = "stats"
-NONE_CSV  = os.path.join(CSV_DIR, "stats_none.csv")
-FULL_CSV  = os.path.join(CSV_DIR, "stats_full.csv")
-IMP_CSV   = os.path.join(CSV_DIR, "stats_importance.csv")
+PERF_NONE_CSV  = os.path.join(CSV_DIR, "stats_none_performance.csv")
+
+PERF_FULL_CSV  = os.path.join(CSV_DIR, "stats_full_performance.csv")
+PERF_IMP_CSV   = os.path.join(CSV_DIR, "stats_importance_performance.csv")
+QUAL_FULL_CSV  = os.path.join(CSV_DIR, "stats_full_quality.csv")
+QUAL_IMP_CSV   = os.path.join(CSV_DIR, "stats_importance_quality.csv")
 os.makedirs(CSV_DIR, exist_ok=True)
 
 # where to write simulation results:
@@ -83,7 +87,7 @@ def write_stats_csv(
           + row["one_way_ms"]
           + row["geometry_upload_ms"]
         )
-        path = NONE_CSV
+        path = PERF_NONE_CSV
 
     elif mode == EncodingMode.FULL:
         row = {
@@ -108,7 +112,7 @@ def write_stats_csv(
           + row["encode_ms"]
           + row["decode_ms"]
         )
-        path = FULL_CSV
+        path = PERF_FULL_CSV
 
     else:  # IMPORTANCE
         in_pts  = int(avg.get("in_roi_points",  pd.NA))
@@ -139,7 +143,7 @@ def write_stats_csv(
           + row["one_way_ms"]
           + row["decode_ms"]
         )
-        path = IMP_CSV
+        path = PERF_IMP_CSV
 
     
 
@@ -244,11 +248,11 @@ def write_simulation_csv(
 
     #path
     if mode == EncodingMode.NONE:
-        path = NONE_CSV
+        path = PERF_NONE_CSV
     elif mode == EncodingMode.FULL:
-        path = FULL_CSV
+        path = PERF_FULL_CSV
     else:  # IMPORTANCE
-        path = IMP_CSV
+        path = PERF_IMP_CSV
 
     # shared fields
     timestamp = datetime.now().isoformat()
@@ -344,10 +348,47 @@ def write_simulation_csv(
           + row["geometry_upload_ms"]
         )
 
-    # append one row, headers will be created on first write
     _append_row(path, row)
 
-    # advance to next combo or finish
+    next_index = combo_index + 1
+    if next_index >= len(combos):
+        return None    # signal “done”
+    else:
+        return next_index
+    
+def write_quality_simulation_csv(
+    quality_buffer: deque,
+    combos: List[Dict],
+    combo_index: int,
+    mode: EncodingMode,
+):
+    """
+    Once qual_buffer fills up, average it and append a row with ONLY
+    mean_pos_error, max_pos_error, mean_color_error into the per-mode CSV.
+    Returns next combo_index, or None if no more combos.
+    """
+
+    if len(quality_buffer) < quality_buffer.maxlen:
+        return combo_index
+
+    avg = pd.DataFrame(quality_buffer).mean()
+    quality_buffer.clear()
+
+    if mode == EncodingMode.FULL:
+        path = QUAL_FULL_CSV
+    elif mode == EncodingMode.IMPORTANCE:
+        path = QUAL_IMP_CSV
+    else:
+        return None  # skip NONE
+
+    row = {
+        "mean_pos_error":   avg.get("mean_pos_error",   pd.NA),
+        "max_pos_error":    avg.get("max_pos_error",    pd.NA),
+        "mean_color_error": avg.get("mean_color_error", pd.NA),
+    }
+
+    _append_row(path, row)
+
     next_index = combo_index + 1
     if next_index >= len(combos):
         return None    # signal “done”
