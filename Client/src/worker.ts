@@ -15,6 +15,7 @@ self.onmessage = async (event) => {
 	// 1) Wait for the module glue to finish initializing
 	if (!Module) Module = await ModuleReady;
 
+	const dracoStart = performance.now();
 	// 2) Grab the incoming compressed bytes
 	const raw = new Uint8Array(event.data.data);
 
@@ -49,10 +50,11 @@ self.onmessage = async (event) => {
 
 	const positionsCopy = new Float32Array(positions);  // slice => new ArrayBuffer
 	const colorsCopy    = new Uint8Array(colors);       // slice => new ArrayBuffer
+	const dracoDecodeTime = performance.now() - dracoStart;
 
 	// 10) Post back, transferring ownership of the buffers
 	self.postMessage(
-		{ positions: positionsCopy, colors: colorsCopy, numPoints },
+		{ positions: positionsCopy, colors: colorsCopy, numPoints, dracoDecodeTime},
 		[ positionsCopy.buffer, colorsCopy.buffer ]
 	)
 

@@ -1,16 +1,24 @@
+import { time } from "three/tsl";
+
 export function openConnection(
     //response : (data: ArrayBuffer) => void, 
-    response : (data: ArrayBuffer) => Promise<void>, 
+    //response : (data: ArrayBuffer) => Promise<void>, 
+    response: (data: ArrayBuffer) => Promise<{
+        decodeTime: number;
+        geometryUploadTime: number;
+        frameTime: number;
+        totalTime: number;
+    }>,
     reject: (msg: string) => void
 ) {
     console.warn("WebSockets")
     // toggle this to switch between ws:// and wss://
-    const USE_TLS = false;
+    const USE_TLS = true;
 
     // host + port for each mode
     //const HOST = '192.168.1.135';
     const HOST = 'localhost';
-    const PORT = 9002; // e.g. 9003 for TLS, 9002 for plain
+    const PORT = 9003; // e.g. 9003 for TLS, 9002 for plain
 
     // pick the right protocol
     const protocol = USE_TLS ? 'wss' : 'ws';
@@ -19,9 +27,19 @@ export function openConnection(
     console.warn(`Connecting over ${protocol.toUpperCase()} to ${url}`);
 
     const socket = new WebSocket(url);
+
+    interface QueuedPacket {
+        buf: ArrayBuffer;    // the point-cloud data
+        round: number;      // snapshot of currentRound
+        sendTS: number;     // snapshot of lastSendTimestamp
+        receivedTS: number;
+    }
+
+    const packetQueue: QueuedPacket[] = [];
+    let   lastSendTimestamp: number = -1;
+    let   currentRound: number = -1;
+    let   busy = false;    
   
-    let currentRound: number | null = null;
-    let lastSendTimestamp: number | null = null;
     let syncInterval: ReturnType<typeof setInterval> | null = null;
     let pendingSync: { t0: number } | null = null;
     let lastOffset: number | null = null;
@@ -41,6 +59,40 @@ export function openConnection(
         return Date.now();
     }
 
+    async function processNextPacket(): Promise<void> {
+        if (busy) return;
+        busy = true;
+
+        try{
+            while (packetQueue.length) {
+                const {buf, round, sendTS, receivedTS} = packetQueue.shift()!;
+                if (round < 0 || sendTS < 0) continue;
+                const poppedFromQueueAt = getCorrectedTime();
+                const { decodeTime, geometryUploadTime, frameTime, totalTime } = await response(buf);
+                const processedAt = getCorrectedTime();
+                const message = JSON.stringify({
+                    type:                       'ms-and-processing',
+                    timestamp:                  receivedTS,
+                    round:                      round,
+                    pure_decode_ms:             decodeTime,
+                    pure_geometry_upload_ms:    geometryUploadTime,
+                    pure_render_ms:             frameTime,
+                    pure_processing_ms:         totalTime,
+                    wait_in_queue:              poppedFromQueueAt - receivedTS,
+                    one_way_ms:                 receivedTS - sendTS,
+                    one_way_plus_processing:    processedAt - sendTS
+                })
+
+                console.log("Sending message to server:\n" + message);
+
+                socket.send(message);
+            }
+        }finally{
+            busy = false;
+            if (packetQueue.length) processNextPacket();
+        }
+    }
+
     // Event handler for when the connection opens
     socket.addEventListener('open', (event) => {
         console.warn('WebSocket connection opened.');
@@ -50,28 +102,14 @@ export function openConnection(
 
     // Event handler for when a message is received
     socket.addEventListener('message', async (event) => {
-        //console.warn("Receive Message")
         if (typeof event.data === 'string') {
             let meta = JSON.parse(event.data);
-
             if (meta.type === 'broadcast-info') {
                 currentRound = meta.round;
                 lastSendTimestamp = meta.send_ts_ms;
+                console.log(`Setting currentRound: ${currentRound}, setting lastSendTimestamp: ${lastSendTimestamp}`);
                 return;
             }
-
-            //if (meta.type === 'sync-response' && pendingSync && meta.t0 === pendingSync.t0) {
-            //    const t1 = Date.now();
-            //    const serverTime = meta.server_time;
-            //    const rtt = t1 - pendingSync.t0;
-            //    const estimatedOffset = serverTime + rtt / 2 - t1;
-            //    lastOffset = estimatedOffset;
-
-            //    console.warn(`[SYNC] RTT: ${rtt}ms, Offset: ${estimatedOffset}ms`);
-            //    // Clear pending sync
-            //    pendingSync = null;
-            //    return;
-            //}
         }
 
         if (event.data instanceof ArrayBuffer) {
@@ -83,7 +121,7 @@ export function openConnection(
             if(lastSendTimestamp !== null) {
                 const one_way_ms              = receivedAt - lastSendTimestamp;
                 const one_way_plus_processing = timeAfterProcessing - lastSendTimestamp;
-                console.log("yo");
+
                 // send back timestamp *and* the round
                 socket.send
                 (

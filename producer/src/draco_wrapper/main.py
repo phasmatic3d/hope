@@ -174,6 +174,7 @@ def encode_point_cloud(
 
 
     broadcast_round = 0
+    batch = 0
 
     
     with Live(refresh_per_second=1, screen=False) as live:
@@ -472,15 +473,16 @@ def encode_point_cloud(
                     if buffer_out:
                         bufs.append(buffer_out)
                     count = len(bufs)
+                    any_broadcasted = False
                     for buf in bufs:
-                        server.broadcast(bytes([count]) + buf) # Prefix with byte that tells us the length
+                        any_broadcasted |= server.broadcast_batch(batch, bytes([count]) + buf)
+                        entry = server.wait_for_entry(broadcast_round)
+                        if entry:
+                            broadcast_round = broadcast_round + 1
+                            pipeline_stats.approximate_rtt_ms += entry.approximate_rtt_ms
 
-
-                    entry = server.wait_for_entry(broadcast_round)
-
-                    if entry:
-                        broadcast_round = broadcast_round + 1
-                        pipeline_stats.approximate_rtt_ms = entry.approximate_rtt_ms
+                    if any_broadcasted:
+                        batch = batch + 1
 
                     table_pipeline_stats = pipeline_stats.make_table(
                         section="End to End Pipeline Stats", 
@@ -616,7 +618,7 @@ def main():
     parser.add_argument(
         "--camera-rgb-width",
         type=int,
-        default=640,
+        default=848,
         help="Color stream width (pixels)",
     )
 
@@ -643,7 +645,7 @@ def main():
     parser.add_argument(
         "--camera-depth-fps",
         type=int,
-        default=10,
+        default=30,
         help="Depth stream framerate (fps)",
     )
     parser.add_argument(

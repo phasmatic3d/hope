@@ -22,7 +22,7 @@
 #endif
 
 
-//#define USE_TLS
+#define USE_TLS
 #ifdef USE_TLS
     #include <websocketpp/config/asio.hpp>    // TLS‐enabled config
     typedef websocketpp::config::asio_tls asio_config;
@@ -52,9 +52,15 @@ public:
         double      approximate_rtt_ms;
         double      one_way_ms;
         double      one_way_plus_processing;
+        double      wait_in_queue;
+        double      pure_decode_ms;
+        double      pure_geometry_upload_ms;
+        double      pure_render_ms;
+        double      pure_processing_ms;
         std::string connection_id;
         std::string error;
         size_t      broadcast_round;
+        size_t      batch_id;
         size_t      message_size;
         size_t      connections_size;
     };
@@ -167,9 +173,15 @@ public:
                     rtt,
                     -1,
                     -1,
+                    -1,
+                    -1,
+                    -1,
+                    -1,
+                    -1,
                     ss.str(),
                     meta.error,
                     meta.round,
+                    0,
                     meta.message_size,
                     meta.connections_size
                 };
@@ -239,9 +251,15 @@ public:
                                 0.0,   // approximate_rtt_ms
                                 0.0,   // one_way_ms
                                 0.0,   // one_way_plus_processing
+                                0.0,
+                                0.0,
+                                0.0,
+                                0.0,
+                                0.0,
                                 ss.str(),
                                 "missing metadata",
                                 round,
+                                m_current_batch_id,
                                 0,     // message_size
                                 0      // connections_size
                             };
@@ -256,15 +274,26 @@ public:
 
                     double one_way_ms = parsed_json.at("one_way_ms").get<double>();
                     double one_way_plus_processing = parsed_json.at("one_way_plus_processing").get<double>();
+                    double wait_in_queue = parsed_json.at("wait_in_queue").get<double>();
+                    double pure_decode_ms = parsed_json.at("pure_decode_ms").get<double>();
+                    double pure_geometry_upload_ms = parsed_json.at("pure_geometry_upload_ms").get<double>();
+                    double pure_render_ms = parsed_json.at("pure_render_ms").get<double>();
+                    double pure_processing_ms = parsed_json.at("pure_processing_ms").get<double>();
                     CsvFileEntry entry 
                     {
                         metadata.send_time,
                         rtt,
                         one_way_ms, 
                         one_way_plus_processing,
+                        wait_in_queue,
+                        pure_decode_ms,
+                        pure_geometry_upload_ms,
+                        pure_render_ms,
+                        pure_processing_ms,
                         ss.str(),
                         metadata.error,
                         metadata.round,
+                        metadata.batch_id,
                         metadata.message_size,
                         metadata.connections_size
                     };
@@ -344,6 +373,7 @@ public:
 
 
     // Broadcast a binary message to all clients
+    // TODO match broadcast round with the buffers of the importance sampling
     void broadcast(const nb::bytes &data)
     {
         // m_logger->debug("Broadcasting {} bytes", data.size());
@@ -420,6 +450,7 @@ public:
                 {
                     Clock::now(),
                     broadcast_round,
+                    m_current_batch_id,
                     message_size,  
                     connections_size, 
                     ec ? ec.message() : "no error"
@@ -581,10 +612,23 @@ public:
         m_logger->info("Constructed URL: {}", m_redirect_url);
     }
 
+    void set_current_batch_id(size_t id) 
+    {
+        std::lock_guard<std::mutex> lg(ping_mutex);
+        m_current_batch_id = id;
+        //m_logger->debug("Setting batch {}", m_current_batch_id);
+    }
+
+    std::size_t connection_count() const 
+    {
+        return m_connections.size();
+    }
+
 
 private:
-    size_t m_port;
+    size_t m_port = 0;
     size_t m_broadcast_counter = 0;
+    size_t m_current_batch_id = 0;
     std::shared_ptr<spdlog::logger> m_logger;
     websocketpp::server<asio_config> m_server;
     std::set<connection_hdl, std::owner_less<connection_hdl>> m_connections;
@@ -599,6 +643,7 @@ private:
     {
         Timestamp   send_time;
         size_t      round;
+        size_t      batch_id;
         size_t      message_size;
         size_t      connections_size;
         std::string error;
@@ -609,6 +654,7 @@ private:
     {
         Timestamp   send_time;
         size_t      round;
+        size_t      batch_id;
         size_t      message_size;
         size_t      connections_size;
         std::string error;
@@ -644,7 +690,8 @@ private:
    };
     std::map<MetaKey, PendingMetadata, MetaKeyCompare> m_metadata;
 
-    static constexpr const char *HEADER = "timestamp_ms_since_epoch,approximate_rtt_ms(ping or through client),one_way_ms(through client),one_way_plus_processing(through client),connection_id,error,broadcast_round,message_size,connections_size";
+    static constexpr const char *HEADER = "timestamp_ms_since_epoch,approximate_rtt_ms(ping or through client),one_way_ms(through client),one_way_plus_processing(through client),wait_in_queue(through client),pure_decode_ms(through client),pure_geometry_upload_ms(through client),pure_render_ms(through client),pure_processing_ms(through client),connection_id,error,broadcast_round,batch_id,message_size,connections_size";
+
 
     void startLoggingThread()
     {
@@ -707,9 +754,15 @@ private:
                         << entry.approximate_rtt_ms << "," 
                         << entry.one_way_ms << ","
                         << entry.one_way_plus_processing << ","
+                        << entry.wait_in_queue << ","
+                        << entry.pure_decode_ms << ","
+                        << entry.pure_geometry_upload_ms << ","
+                        << entry.pure_render_ms << ","
+                        << entry.pure_processing_ms << ","
                         << entry.connection_id << "," 
                         << entry.error << ","
                         << entry.broadcast_round << "," 
+                        << entry.batch_id << ","
                         << entry.message_size << "," 
                         << entry.connections_size << "\n";
                 }
@@ -748,6 +801,7 @@ private:
             {
                 Clock::now(),
                 broadcast_round,
+                m_current_batch_id,
                 message_size,
                 connections_size,
                 ec ? ec.message() : "no ping error"
@@ -827,6 +881,20 @@ NB_MODULE(broadcaster, m)
         .def("broadcast", &ProducerServer::broadcast,
             nb::arg("data"),
             "Broadcast raw binary data to all connected WebSocket clients")
+        .def("broadcast_batch", [](ProducerServer &s, size_t batch_id, nb::bytes data) -> bool{
+                // stash batch_id into a thread‐local or pass through to PendingMetadata
+                if (s.connection_count() == 0)
+                {
+                    return false;
+                }
+                s.set_current_batch_id(batch_id);
+                s.broadcast(data);
+
+                return true;
+            },
+            nb::arg("batch_id"),
+            nb::arg("data"),
+            "Broadcast raw binary data _and_ tag it with a user‐supplied batch_id")
         .def("get_entry_for_round",
             &ProducerServer::get_entry_for_round,
             nb::arg("broadcast_round"))
