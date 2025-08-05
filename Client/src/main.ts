@@ -41,13 +41,13 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 	>) => {
 
 		const { positions, colors, numPoints, dracoDecodeTime } = ev.data;
-
+		console.log("Received new pendingChunk");
     	pendingChunks.push({
     	  	positions,
     	  	colors,
     	  	decodeTime: dracoDecodeTime
     	});
-
+		
 
 		if (pendingChunks.length === expectedChunks) {
 			const totalDecodeTime = pendingChunks.reduce((sum, c) => sum + c.decodeTime, 0);

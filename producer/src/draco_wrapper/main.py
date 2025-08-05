@@ -475,8 +475,7 @@ def encode_point_cloud(
                     count = len(bufs)
                     any_broadcasted = False
                     for buf in bufs:
-                        #any_broadcasted |= server.broadcast_batch(batch, bytes([count]) + buf)
-                        server.broadcast(bytes([count]) + buf)
+                        any_broadcasted |= server.broadcast_batch(batch, bytes([count]) + buf)
                         entry = server.wait_for_entry(broadcast_round)
                         if entry:
                             broadcast_round = broadcast_round + 1
@@ -619,7 +618,7 @@ def main():
     parser.add_argument(
         "--camera-rgb-width",
         type=int,
-        default=640,
+        default=848,
         help="Color stream width (pixels)",
     )
 
@@ -646,7 +645,7 @@ def main():
     parser.add_argument(
         "--camera-depth-fps",
         type=int,
-        default=10,
+        default=30,
         help="Depth stream framerate (fps)",
     )
     parser.add_argument(
