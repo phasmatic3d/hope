@@ -315,6 +315,7 @@ def camera_process(
                     (depth_flat > 0)                         # non-zero depth reading
                     & np.isfinite(vertices[:, 2])      # Z isn’t NaN or ±Inf
                 )
+
                 pipeline_stats.build_valid_points_ms = (time.perf_counter() - build_valid_points_start_time) * 1000
                 
                 # --- SUBSAMPLING ---
@@ -985,3 +986,5 @@ def launch_processes(server: broadcaster.ProducerServer, args, device : str) -> 
     shm_cluster.unlink()
     shm_frame.close()
     shm_frame.unlink()
+    shm_roi.close()
+    shm_roi.unlink()
