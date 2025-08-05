@@ -1,15 +1,12 @@
 import * as THREE from 'three';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
-import { initDracoDecoder, decodePointCloud } from './dracoDecoder';
+import { initDracoDecoder } from './dracoDecoder';
 import { openConnection } from './transmissionWS';
-import { PI, rand } from 'three/tsl';
 
 let decoderModule: any;
 let pointCloud: THREE.Points | null = null;
 let pointCloudGeometry: THREE.BufferGeometry | null = null;
-
 const worker = new Worker(new URL('./worker.ts', import.meta.url), {  });
-
 
 function mergeBuffers(chunks: Array<{positions: Float32Array, colors: Uint8Array}>){
 	const totalPos = chunks.reduce((sum, c) => sum + c.positions.length, 0);
@@ -32,16 +29,33 @@ function mergeBuffers(chunks: Array<{positions: Float32Array, colors: Uint8Array
 
 function createPointCloudProcessor(scene: THREE.Scene) {
   	let expectedChunks = 0;
-  	const pendingChunks: Array<{ positions: Float32Array; colors: Uint8Array }> = [];
+  	const pendingChunks: Array<{ positions: Float32Array; colors: Uint8Array; decodeTime: number;}> = [];
 
-	worker.onmessage = (ev: MessageEvent<{ positions: Float32Array; colors: Uint8Array; numPoints: number }>) => {
-		pendingChunks.push({ positions: ev.data.positions, colors: ev.data.colors });
+	worker.onmessage = (ev: MessageEvent<
+		{ 
+			positions: Float32Array; 
+			colors: Uint8Array; 
+			numPoints: number; 
+			dracoDecodeTime: number;
+		}
+	>) => {
+
+		const { positions, colors, numPoints, dracoDecodeTime } = ev.data;
+
+    	pendingChunks.push({
+    	  	positions,
+    	  	colors,
+    	  	decodeTime: dracoDecodeTime
+    	});
+
 
 		if (pendingChunks.length === expectedChunks) {
+			const totalDecodeTime = pendingChunks.reduce((sum, c) => sum + c.decodeTime, 0);
 			// Merge all decoded chunks
 			const { positions, colors } = mergeBuffers(pendingChunks);
 
 			// Update or create the BufferGeometry
+			const geomStart = performance.now();
 			if (!pointCloudGeometry) {
 				pointCloudGeometry = new THREE.BufferGeometry();
 				const material = new THREE.PointsMaterial({
@@ -51,7 +65,7 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 				});
 				pointCloud = new THREE.Points(pointCloudGeometry, material);
 				pointCloud.scale.set(20, 20, 20); 
-				pointCloud.rotateX(Math.PI) // HARDCODED ROTATION: TODO (AND ALL OF THE OTHER TRANSFORMATIONS)
+				pointCloud.rotateX(Math.PI); // HARDCODED ROTATION: TODO (AND ALL OF THE OTHER TRANSFORMATIONS)
 				pointCloud.position.y = -10;
 				pointCloud.position.z = 13;
 				pointCloud.position.x = 0;
@@ -62,11 +76,18 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 			pointCloudGeometry.setAttribute('color',    new THREE.BufferAttribute(colors,   3, true));
 			pointCloudGeometry.attributes.position.needsUpdate = true;
 			pointCloudGeometry.attributes.color.needsUpdate    = true;
+			const totalGeomTime = performance.now() - geomStart;
+
+			lastDecodeTime = totalDecodeTime;
+      		lastGeometryTime = totalGeomTime;
 
 			pendingChunks.length = 0;      // reset for next message
 			expectedChunks = 0;
 		}
 	}
+
+	let lastDecodeTime = 0;
+  	let lastGeometryTime = 0;
 
 	return async (rawData: ArrayBuffer) => {
 		// First byte of rawData = how many chunks to expect
@@ -87,6 +108,12 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 
 		const duration = performance.now() - start;
 		console.log(`Decode + geometry update: ${duration.toFixed(1)} ms`);
+
+		// return the two timings
+    	return {
+    	  	decodeTime: lastDecodeTime,
+    	  	geometryUploadTime: lastGeometryTime
+    	};
   	};
 };
 
@@ -108,20 +135,46 @@ async function setupScenePromise(){
   	// ─── WebSocket + point-cloud pipeline ───
   	const processPointCloud = createPointCloudProcessor(scene);
 
-	openConnection(
-		async (data) => {
-			const receivedAt = performance.now();
-			await processPointCloud(data);
-			const doneAt = performance.now();
-			// send timing metrics back to server here if needed
-			console.log(`Total client processing: ${(doneAt - receivedAt).toFixed(1)} ms`);
-		},
-		(err) => console.error('WebSocket error:', err)
-  	);
-
 	renderer.setAnimationLoop(() => {
 		renderer.render(scene, camera);
 	});
+
+	function waitForNextFrame(renderer: THREE.WebGLRenderer, since: number): Promise<number> {
+		// Use XR session’s RAF when the headset is presenting, otherwise window RAF
+		const xrSession = renderer.xr?.isPresenting
+				? renderer.xr.getSession()!
+				: null;
+
+		const raf = xrSession
+				? xrSession.requestAnimationFrame.bind(xrSession)
+				: window.requestAnimationFrame;
+
+		return new Promise<number>(resolve => {
+			raf((t: DOMHighResTimeStamp /* or XRFrame timestamp */) => {
+			resolve(t - since);          // ms elapsed until *presentation*
+			});
+		});
+	}
+
+	openConnection(
+		async (data) => {
+			const { decodeTime, geometryUploadTime} = await processPointCloud(data);
+			const doneAt = performance.now();
+			const frameTime  = await waitForNextFrame(renderer, doneAt);
+			const totalTime = frameTime + decodeTime + geometryUploadTime;
+			// send timing metrics back to server here if needed
+			console.log(
+    		  	`Worker decode: ${decodeTime} ms, ` +
+    		  	`Geometry upload: ${geometryUploadTime} ms, ` +
+				`Frame Render: ${frameTime} ms, ` + 
+				`Total time: ${totalTime} ms,`
+    		);
+
+			return { decodeTime, geometryUploadTime, frameTime, totalTime};
+
+		},
+		(err) => console.error('WebSocket error:', err)
+  	);
 }
 
 async function setupScene() {

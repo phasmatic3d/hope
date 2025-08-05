@@ -22,7 +22,7 @@
 #endif
 
 
-//#define USE_TLS
+#define USE_TLS
 #ifdef USE_TLS
     #include <websocketpp/config/asio.hpp>    // TLS‐enabled config
     typedef websocketpp::config::asio_tls asio_config;
@@ -52,6 +52,11 @@ public:
         double      approximate_rtt_ms;
         double      one_way_ms;
         double      one_way_plus_processing;
+        double      wait_in_queue;
+        double      pure_decode_ms;
+        double      pure_geometry_upload_ms;
+        double      pure_render_ms;
+        double      pure_processing_ms;
         std::string connection_id;
         std::string error;
         size_t      broadcast_round;
@@ -167,6 +172,11 @@ public:
                     rtt,
                     -1,
                     -1,
+                    -1,
+                    -1,
+                    -1,
+                    -1,
+                    -1,
                     ss.str(),
                     meta.error,
                     meta.round,
@@ -239,6 +249,11 @@ public:
                                 0.0,   // approximate_rtt_ms
                                 0.0,   // one_way_ms
                                 0.0,   // one_way_plus_processing
+                                0.0,
+                                0.0,
+                                0.0,
+                                0.0,
+                                0.0,
                                 ss.str(),
                                 "missing metadata",
                                 round,
@@ -256,12 +271,22 @@ public:
 
                     double one_way_ms = parsed_json.at("one_way_ms").get<double>();
                     double one_way_plus_processing = parsed_json.at("one_way_plus_processing").get<double>();
+                    double wait_in_queue = parsed_json.at("wait_in_queue").get<double>();
+                    double pure_decode_ms = parsed_json.at("pure_decode_ms").get<double>();
+                    double pure_geometry_upload_ms = parsed_json.at("pure_geometry_upload_ms").get<double>();
+                    double pure_render_ms = parsed_json.at("pure_render_ms").get<double>();
+                    double pure_processing_ms = parsed_json.at("pure_processing_ms").get<double>();
                     CsvFileEntry entry 
                     {
                         metadata.send_time,
                         rtt,
                         one_way_ms, 
                         one_way_plus_processing,
+                        wait_in_queue,
+                        pure_decode_ms,
+                        pure_geometry_upload_ms,
+                        pure_render_ms,
+                        pure_processing_ms,
                         ss.str(),
                         metadata.error,
                         metadata.round,
@@ -344,6 +369,7 @@ public:
 
 
     // Broadcast a binary message to all clients
+    // TODO match broadcast round with the buffers of the importance sampling
     void broadcast(const nb::bytes &data)
     {
         // m_logger->debug("Broadcasting {} bytes", data.size());
@@ -644,7 +670,7 @@ private:
    };
     std::map<MetaKey, PendingMetadata, MetaKeyCompare> m_metadata;
 
-    static constexpr const char *HEADER = "timestamp_ms_since_epoch,approximate_rtt_ms(ping or through client),one_way_ms(through client),one_way_plus_processing(through client),connection_id,error,broadcast_round,message_size,connections_size";
+    static constexpr const char *HEADER = "timestamp_ms_since_epoch,approximate_rtt_ms(ping or through client),one_way_ms(through client),one_way_plus_processing(through client),wait_in_queue(through client),pure_decode_ms(through client),pure_geometry_upload_ms(through client),pure_render_ms(through client),pure_processing_ms(through client),connection_id,error,broadcast_round,message_size,connections_size";
 
     void startLoggingThread()
     {
@@ -707,6 +733,11 @@ private:
                         << entry.approximate_rtt_ms << "," 
                         << entry.one_way_ms << ","
                         << entry.one_way_plus_processing << ","
+                        << entry.wait_in_queue << ","
+                        << entry.pure_decode_ms << ","
+                        << entry.pure_geometry_upload_ms << ","
+                        << entry.pure_render_ms << ","
+                        << entry.pure_processing_ms << ","
                         << entry.connection_id << "," 
                         << entry.error << ","
                         << entry.broadcast_round << "," 
