@@ -8,4 +8,12 @@ export type DecoderMessage = {
 export type createPointCloudResult = {
 	decodeTime: number, 
 	geometryUploadTime: number,
+	lastSceneUpdateTime: number,
+}
+
+export type socketHandlerResponse = {
+	decodeTime: number,
+	geometryUploadTime: number,
+	frameTime: number,
+	totalTime: number
 }

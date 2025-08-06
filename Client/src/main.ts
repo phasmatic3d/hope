@@ -83,9 +83,11 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 		pointCloudGeometry.attributes.position.needsUpdate = true;
 		pointCloudGeometry.attributes.color.needsUpdate = true;
 
+		const lastSceneUpdate = performance.now();
+
 		const totalGeomTime = performance.now() - geomStart;
 
-		return {decodeTime: totalDecodeTime, geometryUploadTime: totalGeomTime};
+		return {decodeTime: totalDecodeTime, geometryUploadTime: totalGeomTime, lastSceneUpdateTime: lastSceneUpdate};
 	};
 }
 
@@ -164,12 +166,13 @@ async function setupScenePromise(){
 				console.log(__filename, `Buffer length: ${incomingBuffers[i].byteLength}`);
 			}
 
-			const { decodeTime, geometryUploadTime} = await processPointCloud(incomingBuffers);
+			const { decodeTime, geometryUploadTime, lastSceneUpdateTime} = await processPointCloud(incomingBuffers);
 			//processPointCloud(incomingBuffers);
 			expectedChunks = 0;
     		incomingBuffers = [];
-			const doneAt = performance.now();
-			const frameTime  = await waitForNextFrame(renderer, doneAt);
+			// this is not correct
+			// const frameTime  = await waitForNextFrame(renderer, lastSceneUpdateTime);
+			const frameTime = 0;
 			const totalTime = frameTime + decodeTime + geometryUploadTime;
 			// send timing metrics back to server here if needed
 			console.log(
