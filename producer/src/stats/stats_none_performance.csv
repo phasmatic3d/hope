@@ -1,0 +1,2 @@
+timestamp,color_resolution,depth_resolution,mode,points,frame_preparation_ms,data_preparation_ms,one_way_ms,geometry_upload_ms,total_time_ms
+2025-08-06T04:28:43.349171,848x480,848x480,NONE,407040,16.78,14.0,14.17,0.43,45.38

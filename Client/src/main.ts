@@ -33,10 +33,51 @@ function mergeBuffers(chunks: Array<{positions: Float32Array, colors: Uint8Array
 
 function createPointCloudProcessor(scene: THREE.Scene) {
 
-	let pointCloudGeometry: THREE.BufferGeometry | null = null;
-  	let pointCloud: THREE.Points | null = null;
+		let pointCloudGeometry: THREE.BufferGeometry | null = null;
+		let pointCloud: THREE.Points | null = null;
 
-	return async (buffers: ArrayBuffer[]): Promise<createPointCloudResult> => {
+		return async (buffers: ArrayBuffer[]): Promise<createPointCloudResult> => {
+				// read the first header
+		const firstBuf = buffers[0];
+		const header   = new DataView(firstBuf).getUint8(0);
+
+		// ─── NONE mode (header===0): raw floats+bytes ───
+		if (header === 0) {
+
+			const raw = firstBuf.slice(1);           // strip header
+			const byteLen = raw.byteLength;
+
+			// each point = 3×float32 (12 bytes) + 3×uint8 (3 bytes) = 15 bytes
+			const numPoints = byteLen / 15;
+
+			const posBytes = raw.slice(0, 4*3 * numPoints);
+			const colBytes = raw.slice(4*3 * numPoints);
+
+			const positions = new Float32Array(posBytes);
+			const colors    = new Uint8Array(colBytes);
+
+			const geomStart = performance.now();
+
+			if (!pointCloudGeometry) {
+			pointCloudGeometry = new THREE.BufferGeometry();
+			const mat = new THREE.PointsMaterial({ vertexColors: true, size: 0.1, sizeAttenuation: false });
+			pointCloud = new THREE.Points(pointCloudGeometry, mat);
+			pointCloud.scale.set(20,20,20);
+			pointCloud.rotateX(Math.PI);
+			pointCloud.position.set(0,-10,13);
+			scene.add(pointCloud);
+			}
+
+			pointCloudGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+			pointCloudGeometry.setAttribute("color",    new THREE.BufferAttribute(colors,    3, true));
+			pointCloudGeometry.attributes.position.needsUpdate = true;
+			pointCloudGeometry.attributes.color.needsUpdate    = true;
+
+			const geomTime = performance.now() - geomStart;
+			return { decodeTime: 0, geometryUploadTime: geomTime };
+		}
+		
+		// ─── IMPORTANCE / FULL mode ───
 		// 1) Decode each buffer *in sequence*, so we never lose a message
 		const chunks: DecoderMessage[] = [];
 		for (const fullBuf of buffers) {

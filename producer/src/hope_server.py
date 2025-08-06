@@ -473,7 +473,7 @@ def camera_process(
                             "geometry_upload_ms":                  entry.pure_geometry_upload_ms,
                             "full_encode_ms":               compression_full_stats.compression_ms,
                             "roi_encode_ms":                compression_roi_stats.compression_ms,
-                            "outside_encode_ms":            compression_out_stats.compression_ms,
+                            "out_encode_ms":            compression_out_stats.compression_ms,
                             "num_points":                   int(num_points),
                             "full_points":                  int(compression_full_stats.number_of_points),
                             "in_roi_points":                int(compression_roi_stats.number_of_points),
