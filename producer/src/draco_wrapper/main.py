@@ -401,6 +401,16 @@ def encode_point_cloud(
                             y0 = pixel_space_bounding_box.y1
                             y1 = pixel_space_bounding_box.y2
 
+                    # ---- No detections ⇒ use a hard-coded box -------------------------
+                    #DEFAULT_BOX_PX = 50          # side-length of the square
+                    #h, w = color_img.shape[:2]                           # image size
+                    #cx, cy = w // 2, h // 2                              # image centre
+
+                    #x0 = cx - DEFAULT_BOX_PX // 2
+                    #x1 = cx + DEFAULT_BOX_PX // 2
+                    #y0 = cy - DEFAULT_BOX_PX // 2
+                    #y1 = cy + DEFAULT_BOX_PX // 2
+
                     pipeline_stats.gesture_recognition_ms = (time.perf_counter() - gesture_recognition_start_time) * 1000
  
                     cv2.rectangle(display, (x0, y0), (x1, y1), (0,255,0), 2)
@@ -618,7 +628,7 @@ def main():
     parser.add_argument(
         "--camera-rgb-width",
         type=int,
-        default=848,
+        default=640,
         help="Color stream width (pixels)",
     )
 
@@ -632,7 +642,7 @@ def main():
     parser.add_argument(
         "--camera-depth-width",
         type=int,
-        default=848,
+        default=640,
         help="Depth stream width (pixels)",
     )
 
@@ -651,7 +661,7 @@ def main():
     parser.add_argument(
         "--camera-rgb-fps",
         type=int,
-        default=30,
+        default=15,
         help="Color stream framerate (fps)",
     )
 

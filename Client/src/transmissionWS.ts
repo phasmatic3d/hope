@@ -119,7 +119,7 @@ export function openConnection(
             //if (!busy) processNextPacket();
             const receivedTS = getCorrectedTime();
             const poppedFromQueueAt = getCorrectedTime();
-            const { decodeTime, geometryUploadTime, frameTime, totalTime } = await response(event.data);
+            const { decodeTime, geometryUploadTime, frameTime, totalTime, chunkDecodeTimes } = await response(event.data);
             const processedAt = getCorrectedTime();
 
             const overestimation_of_frame_time = (processedAt - receivedTS) - decodeTime - geometryUploadTime;
@@ -133,7 +133,8 @@ export function openConnection(
                 pure_processing_ms:         totalTime + overestimation_of_frame_time,
                 wait_in_queue:              poppedFromQueueAt - receivedTS,
                 one_way_ms:                 receivedTS - lastSendTimestamp,
-                one_way_plus_processing:    processedAt - lastSendTimestamp
+                one_way_plus_processing:    processedAt - lastSendTimestamp,
+                chunk_decode_times:         chunkDecodeTimes
             })
 
             console.log("Sending message to server:\n" + message);

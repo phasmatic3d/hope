@@ -53,6 +53,7 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 			chunks.push(chunk);
 		}
 
+		const chunkDecodeTimes = chunks.map(c => c.dracoDecodeTime);
 		const totalDecodeTime: number = chunks.map((c:DecoderMessage) => c.dracoDecodeTime).reduce((sum: number, t: number) => sum + t, 0);
 
 		// Merge all decoded chunks into single position/color buffers
@@ -87,7 +88,7 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 
 		const totalGeomTime = performance.now() - geomStart;
 
-		return {decodeTime: totalDecodeTime, geometryUploadTime: totalGeomTime, lastSceneUpdateTime: lastSceneUpdate};
+		return {decodeTime: totalDecodeTime, geometryUploadTime: totalGeomTime, lastSceneUpdateTime: lastSceneUpdate, chunkDecodeTimes: chunkDecodeTimes};
 	};
 }
 
@@ -155,7 +156,8 @@ async function setupScenePromise(){
 					decodeTime: 0,
 					geometryUploadTime: 0,
 					frameTime: 0,
-					totalTime: 0
+					totalTime: 0,
+					chunkDecodeTimes: [0]
 				};
 			}
 
@@ -166,7 +168,7 @@ async function setupScenePromise(){
 				console.log(__filename, `Buffer length: ${incomingBuffers[i].byteLength}`);
 			}
 
-			const { decodeTime, geometryUploadTime, lastSceneUpdateTime} = await processPointCloud(incomingBuffers);
+			const { decodeTime, chunkDecodeTimes, geometryUploadTime, lastSceneUpdateTime} = await processPointCloud(incomingBuffers);
 			//processPointCloud(incomingBuffers);
 			expectedChunks = 0;
     		incomingBuffers = [];
@@ -177,13 +179,14 @@ async function setupScenePromise(){
 			// send timing metrics back to server here if needed
 			console.log(
 				__filename,
+				`Per-chunk decode times: [${chunkDecodeTimes.join(", ")}] ms\n` +
     		  	`Worker decode: ${decodeTime} ms, ` +
     		  	`Geometry upload: ${geometryUploadTime} ms, ` +
 				`Frame Render: ${frameTime} ms, ` + 
 				`Total time: ${totalTime} ms,`
     		);
 
-			return { decodeTime, geometryUploadTime, frameTime, totalTime};
+			return { decodeTime, geometryUploadTime, frameTime, totalTime, chunkDecodeTimes};
 
 		},
 		(err) => console.log(__filename, 'WebSocket error:', err)
