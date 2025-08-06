@@ -88,6 +88,13 @@ sudo update-ca-certificates
 export NODE_EXTRA_CA_CERTS="/usr/local/share/ca-certificates/myCA.crt"
 ```
 
+
+In the worst case scenario: 
+
+```
+$env:NODE_TLS_REJECT_UNAUTHORIZED=0
+```
+
 ```
 wscat -c wss://localhost:9003       # should now connect
 ```
