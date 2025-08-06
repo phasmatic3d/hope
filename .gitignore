@@ -16,9 +16,14 @@ __pycache__/
 *.ext
 *.crt
 *.pem
-*.csr
+*.cer
 *.drc
 *.ply
+*.srl
+*.crt
+*.key
+*.csv
+*.ext
 
 /addons/gesture_recognition/src/gesture_recognition.egg-info
 /addons/gesture_recognition/src/gesture_recognition.egg-info
