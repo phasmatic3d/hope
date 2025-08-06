@@ -109,6 +109,8 @@ public:
                     asio::ssl::context::single_dh_use
                 );
                 //TODO how to generate keys and use them
+                // no client-cert verification
+                ctx->set_verify_mode(asio::ssl::verify_none);
                 ctx->use_certificate_chain_file("./broadcaster_wrapper/cert/server.crt");
                 ctx->use_private_key_file("./broadcaster_wrapper/cert/server.key", asio::ssl::context::pem);
 
@@ -316,15 +318,40 @@ public:
         );
 
         // HTTP redirect  client
-        m_server.set_http_handler
-        (
-            [this](connection_hdl hdl)
-            {
-                auto con = m_server.get_con_from_hdl(hdl);
-                con->set_status(websocketpp::http::status_code::found);
-                con->replace_header("Location", m_redirect_url);
-                m_logger->info("Redirecting HTTP client to {}", m_redirect_url);
+        m_server.set_http_handler(
+        [this](connection_hdl hdl) {
+            auto con = m_server.get_con_from_hdl(hdl);
+
+            auto base = std::filesystem::path("broadcaster_wrapper") / "public";
+            m_logger->info("Serving files from {}", base.string());
+
+            std::string req = con->get_resource();  // was get_request_uri()
+            if (req == "/") req = "/index.html";                // default
+
+            std::filesystem::path file = base / req.substr(1);
+            if (!std::filesystem::exists(file) || std::filesystem::is_directory(file)) {
+            con->set_status(websocketpp::http::status_code::not_found);
+            return;
             }
+
+            // read the file
+            std::ifstream in(file, std::ios::binary);
+            std::ostringstream buf;
+            buf << in.rdbuf();
+            std::string body = buf.str();
+
+            // set some basic headers
+            con->set_status(websocketpp::http::status_code::ok);
+            // very minimal MIME-type mapping
+            if (file.extension() == ".html") {
+            con->replace_header("Content-Type", "text/html");
+            } else if (file.extension() == ".js") {
+            con->replace_header("Content-Type", "application/javascript");
+            } else if (file.extension() == ".css") {
+            con->replace_header("Content-Type", "text/css");
+            }
+            con->set_body(body);
+        }
         );
     }
 
