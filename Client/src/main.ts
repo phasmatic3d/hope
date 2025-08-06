@@ -2,162 +2,92 @@ import * as THREE from 'three';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import { initDracoDecoder } from './dracoDecoder';
 import { openConnection } from './transmissionWS';
+import {DecoderMessage, createPointCloudResult} from './types';
+
+const worker = new Worker(new URL('./worker.ts', import.meta.url), {  });
 
 let decoderModule: any;
 let pointCloud: THREE.Points | null = null;
 let pointCloudGeometry: THREE.BufferGeometry | null = null;
-const worker = new Worker(new URL('./worker.ts', import.meta.url), {  });
+
+let __filename = "MAIN";
 
 function mergeBuffers(chunks: Array<{positions: Float32Array, colors: Uint8Array}>){
 	const totalPos = chunks.reduce((sum, c) => sum + c.positions.length, 0);
   	const totalCol = chunks.reduce((sum, c) => sum + c.colors.length, 0);
 
 
-	const positions = new Float32Array(totalPos);
-	const colors = new Uint8Array(totalCol);
+	const merged_positions = new Float32Array(totalPos);
+	const merged_colors = new Uint8Array(totalCol);
 
 	let posOffset = 0, colOffset = 0;
   	for (const { positions: p, colors: c } of chunks) {
-  	  	positions.set(p, posOffset);
-  	  	colors.set(c, colOffset);
+  	  	merged_positions.set(p, posOffset);
+  	  	merged_colors.set(c, colOffset);
   	  	posOffset += p.length;
   	  	colOffset += c.length;
   	}
 
-  	return { positions, colors };
+  	return { merged_positions, merged_colors };
 }
 
 function createPointCloudProcessor(scene: THREE.Scene) {
-  	let expectedChunks = 0;
-  	const pendingChunks: Array<{ positions: Float32Array; colors: Uint8Array; decodeTime: number;}> = [];
 
-	worker.onmessage = (ev: MessageEvent<
-		{ 
-			positions: Float32Array; 
-			colors: Uint8Array; 
-			numPoints: number; 
-			dracoDecodeTime: number;
-		}
-	>) => {
+	let pointCloudGeometry: THREE.BufferGeometry | null = null;
+  	let pointCloud: THREE.Points | null = null;
 
-		const { positions, colors, numPoints, dracoDecodeTime } = ev.data;
-		console.log("Received new pendingChunk");
-    	pendingChunks.push({
-    	  	positions,
-    	  	colors,
-    	  	decodeTime: dracoDecodeTime
-    	});
-		
+	return async (buffers: ArrayBuffer[]): Promise<createPointCloudResult> => {
+		// 1) Decode each buffer *in sequence*, so we never lose a message
+		const chunks: DecoderMessage[] = [];
+		for (const fullBuf of buffers) {
+			const dracoPayload = new Uint8Array(fullBuf, 1);  // skip the 1-byte header
 
-		if (pendingChunks.length === expectedChunks) {
-			const totalDecodeTime = pendingChunks.reduce((sum, c) => sum + c.decodeTime, 0);
-			// Update or create the BufferGeometry
-			const geomStart = performance.now();
-			// Merge all decoded chunks
-			const { positions, colors } = mergeBuffers(pendingChunks);
+			const chunk = await new Promise<DecoderMessage>(resolve => {
+				// overwrite onmessage so exactly one handler is active
+				worker.onmessage = (ev: MessageEvent<DecoderMessage>) => {
+					resolve(ev.data);
+				};
+				worker.postMessage(dracoPayload, [dracoPayload.buffer]);
+			});
 
-			if (!pointCloudGeometry) {
-				pointCloudGeometry = new THREE.BufferGeometry();
-				const material = new THREE.PointsMaterial({
-					vertexColors: true,
-					size: 0.1,
-					sizeAttenuation: false
-				});
-				pointCloud = new THREE.Points(pointCloudGeometry, material);
-				pointCloud.scale.set(20, 20, 20); 
-				pointCloud.rotateX(Math.PI); // HARDCODED ROTATION: TODO (AND ALL OF THE OTHER TRANSFORMATIONS)
-				pointCloud.position.y = -10;
-				pointCloud.position.z = 13;
-				pointCloud.position.x = 0;
-				scene.add(pointCloud);
-			}
-
-			pointCloudGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-			pointCloudGeometry.setAttribute('color',    new THREE.BufferAttribute(colors,   3, true));
-			pointCloudGeometry.attributes.position.needsUpdate = true;
-			pointCloudGeometry.attributes.color.needsUpdate    = true;
-			const totalGeomTime = performance.now() - geomStart;
-
-			lastDecodeTime = totalDecodeTime;
-      		lastGeometryTime = totalGeomTime;
-
-			pendingChunks.length = 0;      // reset for next message
-			expectedChunks = 0;
-		}
-	}
-
-	let lastDecodeTime = 0;
-  	let lastGeometryTime = 0;
-
-		return async (rawData: ArrayBuffer) => {
-
-		const header = new DataView(rawData).getUint8(0);
-		if (header === 0) {
-			const geomStart = performance.now();
-			// strip off that one byte
-			const payload = rawData.slice(1);
-			
-			// compute how many points: each point = 3×float32 + 3×uint8 = 12+3 = 15 bytes
-			const numPoints = payload.byteLength / 15;
-
-			// split into positions and colors
-			const posBytes = payload.slice(0, numPoints*12);
-			const colBytes = payload.slice(numPoints*12);
-
-			const positions = new Float32Array(posBytes);
-			const colors    = new Uint8Array(colBytes);
-
-			if (!pointCloudGeometry) {
-				pointCloudGeometry = new THREE.BufferGeometry();
-				const material = new THREE.PointsMaterial({
-					vertexColors: true,
-					size: 0.1,
-					sizeAttenuation: false
-				});
-				pointCloud = new THREE.Points(pointCloudGeometry, material);
-				pointCloud.scale.set(20, 20, 20); 
-				pointCloud.rotateX(Math.PI) // HARDCODED ROTATION: TODO (AND ALL OF THE OTHER TRANSFORMATIONS)
-				pointCloud.position.y = -10;
-				pointCloud.position.z = 13;
-				pointCloud.position.x = 0;
-				scene.add(pointCloud);
-			}
-
-			pointCloudGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-			pointCloudGeometry.setAttribute('color',    new THREE.BufferAttribute(colors,   3, true));
-			pointCloudGeometry.attributes.position.needsUpdate = true;
-			pointCloudGeometry.attributes.color.needsUpdate    = true;
-
-			const totalGeomTime = performance.now() - geomStart;
-
-			lastDecodeTime = 0;
-      		lastGeometryTime = totalGeomTime;
-
-			// done. no decoding
-			return {
-				decodeTime: 0,
-				geometryUploadTime: totalGeomTime
-			};
+			chunks.push(chunk);
 		}
 
-		expectedChunks = header
+		const totalDecodeTime: number = chunks.map((c:DecoderMessage) => c.dracoDecodeTime).reduce((sum: number, t: number) => sum + t, 0);
 
-		console.log("Posting message to worker");
-		// Send compressed bytes to Worker
-		worker.postMessage({ data: rawData.slice(1) }, [rawData.slice(1)]);
+		// Merge all decoded chunks into single position/color buffers
+		const geomStart = performance.now();
+		const { merged_positions, merged_colors } = mergeBuffers(chunks);
 
-		// Wait until onmessage has merged them (polled via a tiny Promise)
-		await new Promise<void>(resolve => {
-			const check = () => (pendingChunks.length === 0 && expectedChunks === 0) ? resolve() : setTimeout(check, 1);
-			check();
-		});
-		// return the two timings
-    	return {
-    	  	decodeTime: lastDecodeTime,
-    	  	geometryUploadTime: lastGeometryTime
-    	};
-  	};
-};
+		// On the very first call, set up the Three.js Points object
+		if (!pointCloudGeometry) {
+			pointCloudGeometry = new THREE.BufferGeometry();
+			const material = new THREE.PointsMaterial({
+				vertexColors: true,
+				size: 0.1,
+				sizeAttenuation: false,
+			});
+			pointCloud = new THREE.Points(pointCloudGeometry, material);
+
+			// apply your scene-wide transforms once
+			pointCloud.scale.set(20, 20, 20);
+			pointCloud.rotateX(Math.PI);
+			pointCloud.position.set(0, -10, 13);
+
+			scene.add(pointCloud);
+		}
+
+		// Upload the merged buffers into the geometry
+		pointCloudGeometry.setAttribute("position", new THREE.BufferAttribute(merged_positions, 3));
+		pointCloudGeometry.setAttribute("color", new THREE.BufferAttribute(merged_colors, 3, true));
+		pointCloudGeometry.attributes.position.needsUpdate = true;
+		pointCloudGeometry.attributes.color.needsUpdate = true;
+
+		const totalGeomTime = performance.now() - geomStart;
+
+		return {decodeTime: totalDecodeTime, geometryUploadTime: totalGeomTime};
+	};
+}
 
 
 async function setupScenePromise(){
@@ -198,14 +128,52 @@ async function setupScenePromise(){
 		});
 	}
 
+	let expectedChunks = 0;
+	let incomingBuffers: ArrayBuffer[] = [];
+
 	openConnection(
 		async (data) => {
-			const { decodeTime, geometryUploadTime} = await processPointCloud(data);
+			console.log(__filename, "Received new chunk...");
+			// read header byte
+    		const count = new DataView(data).getUint8(0);
+
+    		// first message of a group tells us how many to expect
+    		if (expectedChunks === 0) {
+				expectedChunks = count;
+				console.log(__filename, `Setting expectedChunks: ${expectedChunks}`);
+			}
+
+    		// strip header and stash the payload
+    		incomingBuffers.push(data);
+
+    		// if we haven’t got them all yet, bail out early
+			if (incomingBuffers.length < expectedChunks) {
+				console.log(__filename, "BAIL OUT THE SYSTEM IS GOING TO FREEZE");
+				return {
+					decodeTime: 0,
+					geometryUploadTime: 0,
+					frameTime: 0,
+					totalTime: 0
+				};
+			}
+
+			console.log(__filename, `Incoming Buffers Length: ${incomingBuffers.length}`);
+
+
+			for (let i = 0; i < incomingBuffers.length ; i++){
+				console.log(__filename, `Buffer length: ${incomingBuffers[i].byteLength}`);
+			}
+
+			const { decodeTime, geometryUploadTime} = await processPointCloud(incomingBuffers);
+			//processPointCloud(incomingBuffers);
+			expectedChunks = 0;
+    		incomingBuffers = [];
 			const doneAt = performance.now();
 			const frameTime  = await waitForNextFrame(renderer, doneAt);
 			const totalTime = frameTime + decodeTime + geometryUploadTime;
 			// send timing metrics back to server here if needed
 			console.log(
+				__filename,
     		  	`Worker decode: ${decodeTime} ms, ` +
     		  	`Geometry upload: ${geometryUploadTime} ms, ` +
 				`Frame Render: ${frameTime} ms, ` + 
@@ -215,7 +183,7 @@ async function setupScenePromise(){
 			return { decodeTime, geometryUploadTime, frameTime, totalTime};
 
 		},
-		(err) => console.error('WebSocket error:', err)
+		(err) => console.log(__filename, 'WebSocket error:', err)
   	);
 }
 
