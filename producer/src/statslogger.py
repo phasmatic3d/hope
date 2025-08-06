@@ -33,10 +33,26 @@ os.makedirs(CSV_DIR, exist_ok=True)
 SIM_CSV = os.path.join(CSV_DIR, "stats_simulation.csv")
 
 
-def _append_row(path: str, row: dict):
+def _append_row(path: str, row: dict): 
+    ERROR_COLS = ["mean_pos_error", "max_pos_error", "mean_color_error"]
+
     write_header = not os.path.exists(path)
-    df = pd.DataFrame([row]).round(2)
-    df.to_csv(path, mode="a", header=write_header, index=False)
+    df = pd.DataFrame([row])
+
+    # 1) Pre‐format your error columns to 6dp strings
+    for col in ERROR_COLS:
+        if col in df.columns:
+            df[col] = df[col].apply(lambda x: f"{x:.6f}")
+
+    # 2) Write out:
+    #    - use float_format for *all other* floats → 2dp
+    df.to_csv(
+        path,
+        mode="a",
+        header=write_header,
+        index=False,
+        float_format="%.2f"
+    )
     print(f"Appended stats to {path}")
 # CSV WRITER FUNCTION
 def write_stats_csv(
@@ -133,7 +149,10 @@ def write_stats_csv(
             "data_preparation_ms":     avg.get("data_preparation_ms",    pd.NA),
             "encode_ms":               avg.get("multiprocessing_compression_ms", pd.NA),
             "one_way_ms":              avg.get("one_way_ms",             pd.NA),
-            "decode_ms": avg.get("decode_ms", pd.NA),
+            "decode_ms":               avg.get("decode_ms", pd.NA),
+            "geometry_upload_ms":      avg.get("geometry_upload_ms", pd.NA),
+            "render_ms":               avg.get("render_ms", pd.NA),
+
         }
 
         row["total_time_ms"] = (
@@ -142,6 +161,8 @@ def write_stats_csv(
           + row["encode_ms"]
           + row["one_way_ms"]
           + row["decode_ms"]
+          + row["geometry_upload_ms"]
+          + row["render_ms"]
         )
         path = PERF_IMP_CSV
 
@@ -271,6 +292,7 @@ def write_simulation_csv(
     # shared fields
     timestamp = datetime.now().isoformat()
     common = {
+        "experiment_id":    combo_index,
         "timestamp":        timestamp,
         "color_resolution": f"{clr_res[0]}x{clr_res[1]}",
         "depth_resolution": f"{depth_res[0]}x{depth_res[1]}",
@@ -317,6 +339,7 @@ def write_simulation_csv(
         row["data_preparation_ms"]          = avg.get("data_preparation_ms",    pd.NA)
         row["one_way_ms"]                   = avg.get("one_way_ms",             pd.NA)
         row["geometry_upload_ms"]   = avg.get("geometry_upload_ms", pd.NA)
+        row["render_ms"]                   = avg.get("render_ms", pd.NA)
 
         # total_time
         row["total_time_ms"] = (
@@ -324,6 +347,7 @@ def write_simulation_csv(
           + row["data_preparation_ms"]
           + row["one_way_ms"]
           + row["geometry_upload_ms"]
+          + row["render_ms"]  
         )
 
     elif mode == EncodingMode.FULL:
@@ -334,6 +358,7 @@ def write_simulation_csv(
         row["one_way_ms"]                   = avg.get("one_way_ms",             pd.NA)
         row["decode_ms"]                    = avg.get("decode_ms", pd.NA)
         row["geometry_upload_ms"]            = avg.get("geometry_upload_ms", pd.NA)
+        row["render_ms"]                     = avg.get("render_ms", pd.NA)
 
         row["total_time_ms"] = (
             row["frame_preparation_ms"]
@@ -342,6 +367,7 @@ def write_simulation_csv(
           + row["one_way_ms"]
           + row["decode_ms"]
           + row["geometry_upload_ms"]
+          + row["render_ms"]  
         )
 
     else:  # IMPORTANCE
@@ -358,6 +384,7 @@ def write_simulation_csv(
         row["one_way_ms"]                   = avg.get("one_way_ms",             pd.NA)
         row["decode_ms"]                    = avg.get("decode_ms", pd.NA)
         row["geometry_upload_ms"]           = avg.get("geometry_upload_ms", pd.NA)
+        row["render_ms"]                   = avg.get("render_ms", pd.NA)
 
         row["total_time_ms"] = (
             row["frame_preparation_ms"]
@@ -366,6 +393,7 @@ def write_simulation_csv(
           + row["one_way_ms"]
           + row["decode_ms"]
           + row["geometry_upload_ms"]
+          + row["render_ms"]
         )
 
     _append_row(path, row)
@@ -402,9 +430,13 @@ def write_quality_simulation_csv(
         return None  # skip NONE
 
     row = {
+        "experiment_id":     combo_index,
         "mean_pos_error":   avg.get("mean_pos_error",   pd.NA),
         "max_pos_error":    avg.get("max_pos_error",    pd.NA),
         "mean_color_error": avg.get("mean_color_error", pd.NA),
+        "mean_relative_pos_error(%)":   avg.get("mean_relative_pos_error(%)",   pd.NA),
+        "max_relative_pos_error(%)":    avg.get("max_relative_pos_error(%)",    pd.NA),
+        "mean_relative_color_error(%)": avg.get("mean_relative_color_error(%)", pd.NA),
     }
 
     _append_row(path, row)

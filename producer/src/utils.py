@@ -1,4 +1,7 @@
 import math 
+import struct
+import os
+import numpy as np
 
 # Function to calculate focal length in pixels from the field of view and resolution width
 def calculate_focal_length_in_pixels(
@@ -19,3 +22,34 @@ def calculate_focal_length_in_pixels(
 
 def estimate_distance():
     pass
+
+def write_pointcloud_ply(filename: str,
+                         vertices: np.ndarray,   # shape (N,3), dtype float32
+                         colors:   np.ndarray     # shape (N,3), dtype uint8
+                        ) -> None:
+    """
+    Write a binary‐little‐endian PLY file with position+color per vertex.
+    """
+    N = vertices.shape[0]
+    header = "\n".join([
+        "ply",
+        "format binary_little_endian 1.0",
+        f"element vertex {N}",
+        "property float x",
+        "property float y",
+        "property float z",
+        "property uchar red",
+        "property uchar green",
+        "property uchar blue",
+        "end_header",
+        ""
+    ]).encode("utf-8")
+
+    # Ensure the output dir exists
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+
+    with open(filename, "wb") as f:
+        f.write(header)
+        # pack each vertex as 3×float + 3×uchar
+        for (x,y,z), (r,g,b) in zip(vertices, colors):
+            f.write(struct.pack("<fffBBB", x, y, z, r, g, b))

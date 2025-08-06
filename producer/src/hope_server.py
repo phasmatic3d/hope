@@ -23,6 +23,10 @@ from draco_wrapper.draco_wrapper import (
     VizualizationMode
 )
 
+from utils import (
+    write_pointcloud_ply
+)
+
 
 from draco_wrapper import draco_bindings as dcb # temporary, for logging quality sims
 
@@ -453,6 +457,7 @@ def camera_process(
                         "one_way_ms":                       entry.one_way_ms,
                         "decode_ms":                        entry.pure_decode_ms,
                         "geometry_upload_ms":                entry.pure_geometry_upload_ms,
+                        "render_ms":                        entry.pure_render_ms,
                         "full_encode_ms":              compression_full_stats.compression_ms,
                         "roi_encode_ms":               compression_roi_stats.compression_ms,
                         "out_encode_ms":           compression_out_stats.compression_ms,
@@ -471,6 +476,7 @@ def camera_process(
                             "one_way_ms":                       entry.one_way_ms,
                             "decode_ms":                        entry.pure_decode_ms,
                             "geometry_upload_ms":                  entry.pure_geometry_upload_ms,
+                            "render_ms":                  entry.pure_render_ms,
                             "full_encode_ms":               compression_full_stats.compression_ms,
                             "roi_encode_ms":                compression_roi_stats.compression_ms,
                             "out_encode_ms":            compression_out_stats.compression_ms,
@@ -511,31 +517,56 @@ def camera_process(
                         decoded_colors = np.vstack((decoded_colors_roi, decoded_colors_out))  
 
 
-
                     position_diffs = np.linalg.norm(points_full - decoded_positions, axis=1)
-                    colors_errs = np.abs(colors_full.astype(int) - decoded_colors.astype(int))
-                
-                    #stats
-                    mean_pos_error   = position_diffs.mean()
-                    max_pos_error    = position_diffs.max()
-                    mean_color_error = colors_errs.mean()
+
+                    radii = np.linalg.norm(points_full, axis=1)
+                    max_radius = radii.max()
+                    relative_position_diffs = position_diffs / max_radius
+
+                    color_errs = np.abs(colors_full.astype(int) - decoded_colors.astype(int))
+                    relative_color_errs = color_errs / 255.0
+
+
+                    mean_pos_error        = position_diffs.mean()
+                    max_pos_error         = position_diffs.max()
+                    mean_relative_pos_error    = relative_position_diffs.mean()
+                    max_relative_pos_error     = relative_position_diffs.max()
+
+                    mean_color_error      = color_errs.mean()
+                    mean_relative_color_error  = relative_color_errs.mean()
 
                     quality_simulation_buffer.append({
-                        "mean_pos_error":     mean_pos_error,
-                        "max_pos_error":      max_pos_error,
-                        "mean_color_error":   mean_color_error,
+                        "mean_pos_error":      mean_pos_error,
+                        "max_pos_error":       max_pos_error,
+                        "mean_color_error":    mean_color_error,
+                        "mean_relative_pos_error(%)":  mean_relative_pos_error,
+                        "max_relative_pos_error(%)":   max_relative_pos_error,
+                        "mean_relative_color_error(%)":mean_relative_color_error,
                     })
 
-                    # write one row and advance
-                    quality_simulation_index = write_quality_simulation_csv(
-                        quality_simulation_buffer,
-                        simulation_combos,
-                        quality_simulation_index,
-                        encoding_mode
-                    )
-
                     if quality_simulation_index is not None:
+
                         apply_combo_settings(simulation_combos[quality_simulation_index])
+                        # dump .ply file
+                        if(len(quality_simulation_buffer) == quality_simulation_buffer.maxlen):
+                            try:
+                                filename = f"experiments/{encoding_mode.name}_exp_{quality_simulation_index}.ply"
+                                write_pointcloud_ply(
+                                    filename,
+                                    decoded_positions, 
+                                    decoded_colors     
+                                )
+                                print(f"Saved PLY for exp {quality_simulation_index} → {filename}")
+                            except Exception as e:
+                                print(f"Error saving PLY for exp {quality_simulation_index}: {e}")
+                        # write one row and advance
+                        quality_simulation_index = write_quality_simulation_csv(
+                            quality_simulation_buffer,
+                            simulation_combos,
+                            quality_simulation_index,
+                            encoding_mode
+                        )
+                    
                     else:
                         print("QUALITY-SIM COMPLETE ✅")
 
