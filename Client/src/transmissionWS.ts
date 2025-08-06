@@ -1,14 +1,10 @@
 import { time } from "three/tsl";
+import { socketHandlerResponse } from "./types";
 
 export function openConnection(
     //response : (data: ArrayBuffer) => void, 
     //response : (data: ArrayBuffer) => Promise<void>, 
-    response: (data: ArrayBuffer) => Promise<{
-        decodeTime: number;
-        geometryUploadTime: number;
-        frameTime: number;
-        totalTime: number;
-    }>,
+    response: (data: ArrayBuffer) => Promise<socketHandlerResponse>,
     reject: (msg: string) => void
 ) {
     console.warn("WebSockets")
@@ -70,6 +66,7 @@ export function openConnection(
                 const poppedFromQueueAt = getCorrectedTime();
                 const { decodeTime, geometryUploadTime, frameTime, totalTime } = await response(buf);
                 const processedAt = getCorrectedTime();
+
                 const message = JSON.stringify({
                     type:                       'ms-and-processing',
                     timestamp:                  receivedTS,
@@ -122,19 +119,22 @@ export function openConnection(
             //if (!busy) processNextPacket();
             const receivedTS = getCorrectedTime();
             const poppedFromQueueAt = getCorrectedTime();
-            const { decodeTime, geometryUploadTime, frameTime, totalTime } = await response(event.data);
+            const { decodeTime, geometryUploadTime, frameTime, totalTime, chunkDecodeTimes } = await response(event.data);
             const processedAt = getCorrectedTime();
+
+            const overestimation_of_frame_time = (processedAt - receivedTS) - decodeTime - geometryUploadTime;
             const message = JSON.stringify({
                 type:                       'ms-and-processing',
                 timestamp:                  getCorrectedTime(),
                 round:                      currentRound,
                 pure_decode_ms:             decodeTime,
                 pure_geometry_upload_ms:    geometryUploadTime,
-                pure_render_ms:             frameTime,
-                pure_processing_ms:         totalTime,
+                pure_render_ms:             overestimation_of_frame_time,
+                pure_processing_ms:         totalTime + overestimation_of_frame_time,
                 wait_in_queue:              poppedFromQueueAt - receivedTS,
                 one_way_ms:                 receivedTS - lastSendTimestamp,
-                one_way_plus_processing:    processedAt - lastSendTimestamp
+                one_way_plus_processing:    processedAt - lastSendTimestamp,
+                chunk_decode_times:         chunkDecodeTimes
             })
 
             console.log("Sending message to server:\n" + message);

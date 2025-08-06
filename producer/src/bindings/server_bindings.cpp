@@ -63,6 +63,7 @@ public:
         size_t      batch_id;
         size_t      message_size;
         size_t      connections_size;
+        std::vector<double> chunk_decode_times;
     };
 
     ProducerServer
@@ -183,7 +184,8 @@ public:
                     meta.round,
                     0,
                     meta.message_size,
-                    meta.connections_size
+                    meta.connections_size,
+                    {0}
                 };
                 enqueueLogEntry(entry);
             }
@@ -222,10 +224,9 @@ public:
                     //    m_server.send(hdl, response.dump(), websocketpp::frame::opcode::text);
                     //    return;
                     //}
-
                     if (parsed_json.value("type","") != "ms-and-processing")
                     {
-                        m_logger->debug("Message doesn't contain timestamp field...");
+                        m_logger->debug("The message cannot be processed...");
                         return;
                     }
 
@@ -261,7 +262,8 @@ public:
                                 round,
                                 m_current_batch_id,
                                 0,     // message_size
-                                0      // connections_size
+                                0,      // connections_size
+                                {0},
                             };
                             enqueueLogEntry(dummy);
                             return;
@@ -279,6 +281,12 @@ public:
                     double pure_geometry_upload_ms = parsed_json.at("pure_geometry_upload_ms").get<double>();
                     double pure_render_ms = parsed_json.at("pure_render_ms").get<double>();
                     double pure_processing_ms = parsed_json.at("pure_processing_ms").get<double>();
+                    std::vector<double> chunk_decode_times;
+                    if (parsed_json.contains("chunk_decode_times") && parsed_json["chunk_decode_times"].is_array()) 
+                    {
+                        // this does an element‐wise conversion to double
+                        chunk_decode_times = parsed_json["chunk_decode_times"].get<std::vector<double>>();
+                    }
                     CsvFileEntry entry 
                     {
                         metadata.send_time,
@@ -295,7 +303,8 @@ public:
                         metadata.round,
                         metadata.batch_id,
                         metadata.message_size,
-                        metadata.connections_size
+                        metadata.connections_size,
+                        std::move(chunk_decode_times),
                     };
                     enqueueLogEntry(entry);
                 }
@@ -690,7 +699,7 @@ private:
    };
     std::map<MetaKey, PendingMetadata, MetaKeyCompare> m_metadata;
 
-    static constexpr const char *HEADER = "timestamp_ms_since_epoch,approximate_rtt_ms(ping or through client),one_way_ms(through client),one_way_plus_processing(through client),wait_in_queue(through client),pure_decode_ms(through client),pure_geometry_upload_ms(through client),pure_render_ms(through client),pure_processing_ms(through client),connection_id,error,broadcast_round,batch_id,message_size,connections_size";
+    static constexpr const char *HEADER = "timestamp_ms_since_epoch,approximate_rtt_ms(ping or through client),one_way_ms(through client),one_way_plus_processing(through client),wait_in_queue(through client),pure_decode_ms(through client),pure_geometry_upload_ms(through client),pure_render_ms(through client),pure_processing_ms(through client),chunk_decode_times(through client),connection_id,error,broadcast_round,batch_id,message_size,connections_size";
 
 
     void startLoggingThread()
@@ -749,6 +758,15 @@ private:
                     // convert timestamp to milliseconds since epoch
                     auto epoch = std::chrono::time_point_cast<std::chrono::milliseconds>(entry.timestamp).time_since_epoch().count();
 
+                    std::ostringstream chunk_ss;
+                    for (size_t i = 0; i < entry.chunk_decode_times.size(); ++i) {
+                        if (i) chunk_ss << '+';
+                        chunk_ss << entry.chunk_decode_times[i];
+                    }
+
+                    std::string chunk_cell = "[" + chunk_ss.str() + "]";
+
+
                     csv 
                         << epoch << "," 
                         << entry.approximate_rtt_ms << "," 
@@ -759,6 +777,7 @@ private:
                         << entry.pure_geometry_upload_ms << ","
                         << entry.pure_render_ms << ","
                         << entry.pure_processing_ms << ","
+                        << chunk_cell << ","
                         << entry.connection_id << "," 
                         << entry.error << ","
                         << entry.broadcast_round << "," 
