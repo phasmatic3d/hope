@@ -319,7 +319,7 @@ async function loadAndUpdatePointCloudFromWS_worker(scene: THREE.Scene) {
     	}
 	};
   
-  	openConnection(
+  	/*openConnection(
 		(data: ArrayBuffer) => {
  	 		// first byte tells us how many chunks to expect
  	 		const dv = new DataView(data);
@@ -336,7 +336,7 @@ async function loadAndUpdatePointCloudFromWS_worker(scene: THREE.Scene) {
 		(msg) => {
  	 	  	console.log("Reject", msg);
  	 	}
-	);
+	);*/
 }
 
 //setupScene();
