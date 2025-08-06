@@ -1,4 +1,4 @@
-# 🛠️ Local “localhost” TLS Setup for Your WebSocket Server
+# 🛠️ Local TLS Setup for Your WebSocket Server
 
 All commands assume you’re in your project root:
 
@@ -30,7 +30,7 @@ openssl req -x509 -new -nodes \
   -subj "/C=US/ST=State/L=City/O=Local Dev CA/CN=Local Dev Root CA"
 ```
 
-# Create a server key & CSR for “localhost”
+# Create a server key & CSR
 
 ## 3a. Server private key
 ```
@@ -42,7 +42,7 @@ openssl genrsa -out server.key 2048
 openssl req -new \
   -key server.key \
   -out server.csr \
-  -subj "/C=US/ST=State/L=City/O=Hope Dev/CN=localhost"
+  -subj "/C=US/ST=State/L=City/O=Hope Dev/CN=Hope Producer"
 ```
 
 # Create the SAN extension file
@@ -56,9 +56,10 @@ keyUsage = digitalSignature, keyEncipherment
 subjectAltName = @alt_names
 
 [alt_names]
-DNS.1 = localhost
+DNS.1 = "The Server's local IP goes here"
 IP.1  = 127.0.0.1
 IP.2  = ::1
+IP.3  = "The Server's local IP goes here"
 ```
 
 # Sign the CSR with your CA, injecting the SANs
@@ -72,7 +73,8 @@ openssl x509 -req \
   -extfile server.ext
 ```
 
-# Install your CA into Ubuntu’s trust store ( I don't know the windows equiv. )
+# Install your CA into the trust store 
+**For Linux/Ubuntu**
 ```
 # Copy the CA cert into the system store
 sudo cp myCA.pem /usr/local/share/ca-certificates/myCA.crt
@@ -81,26 +83,20 @@ sudo cp myCA.pem /usr/local/share/ca-certificates/myCA.crt
 sudo update-ca-certificates
 ```
 
+**For Windows**
+```
+openssl x509 -outform DER -in myCA.pem -out myCA.cer
 
+certutil -addstore Root .\myCA.cer
+```
 # Test if the key is trusted by the system
 
 ```
 export NODE_EXTRA_CA_CERTS="/usr/local/share/ca-certificates/myCA.crt"
 ```
 
-
-In the worst case scenario: 
-
-```
-$env:NODE_TLS_REJECT_UNAUTHORIZED=0
-```
-
-```
-wscat -c wss://localhost:9003       # should now connect
-```
-
 # Make the browser trust the key 
-
+**For Linux/Ubuntu**
 ```
 sudo apt install libnss3-tools
 ```
@@ -113,6 +109,33 @@ certutil -d sql:"$HOME/.pki/nssdb" \
         -i ~/Github/hope/producer/src/broadcaster_wrapper/cert/myCA.pem
 ```
 
+**For Windows**
+```bash
+#on the working directory copied you copied your myCA.crt on the viewer machine
+certutil -addstore Root .\myCA.crt 
+```
+
+# Build the Client in the producer's source
+1. **Build the client** (on the producer machine):
+   ```bash
+   cd /path/to/client/root
+   npm install        # if npm isn't available
+   npm run build      # outputs to dist/ or build/ folder
+   ```
+
+2. **Copy the built files into the server’s public/ folder:**
+  ```bash
+  cd /path/to/broadcaster_wrapper
+  mkdir .\public # then copy the dist folder into here
+  ```
+3. **Run the producer server from .\src**
+   ```bash
+   python producer.py
+   ```
+4. **Connect from any machine in the network**
+   ```bash
+   https:\\<server-ip>:9003 # or whatever port the server is listening to
+   ```
 # Clock Synchronization
 
 ## ⏰ Synchronize Server-Client clocks via Public NTP Pools for Windows Machines

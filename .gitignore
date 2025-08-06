@@ -17,6 +17,7 @@ __pycache__/
 *.crt
 *.pem
 *.csr
+*.drc
 
 /addons/gesture_recognition/src/gesture_recognition.egg-info
 /addons/gesture_recognition/src/gesture_recognition.egg-info
