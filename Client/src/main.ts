@@ -72,9 +72,10 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 			pointCloudGeometry.setAttribute("color",    new THREE.BufferAttribute(colors,    3, true));
 			pointCloudGeometry.attributes.position.needsUpdate = true;
 			pointCloudGeometry.attributes.color.needsUpdate    = true;
-
-			const geomTime = performance.now() - geomStart;
-			return { decodeTime: 0, geometryUploadTime: geomTime };
+			
+			const lastSceneUpdate = performance.now();
+			const totalGeomTime = performance.now() - geomStart;
+			return {decodeTime: 0, geometryUploadTime: totalGeomTime, lastSceneUpdateTime: lastSceneUpdate, chunkDecodeTimes: [0,0]};
 		}
 		
 		// ─── IMPORTANCE / FULL mode ───

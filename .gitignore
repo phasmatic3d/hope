@@ -12,7 +12,14 @@ __pycache__/
 *.exp
 *.dll
 *.pyd
+*.ext
+*.crt
+*.pem
+*.csr
+
 /addons/gesture_recognition/src/gesture_recognition.egg-info
 /addons/gesture_recognition/src/gesture_recognition.egg-info
 producer/src/mobileclip_blt.ts
 producer/src/yoloe-11l-seg.pt
+
+

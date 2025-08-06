@@ -9,12 +9,12 @@ export function openConnection(
 ) {
     console.warn("WebSockets")
     // toggle this to switch between ws:// and wss://
-    const USE_TLS = false;
+    const USE_TLS = true;
 
     // host + port for each mode
     //const HOST = '192.168.1.135';
     const HOST = 'localhost';
-    const PORT = 9002; // e.g. 9003 for TLS, 9002 for plain
+    const PORT = 9003; // e.g. 9003 for TLS, 9002 for plain
 
     // pick the right protocol
     const protocol = USE_TLS ? 'wss' : 'ws';
