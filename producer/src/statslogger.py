@@ -191,12 +191,20 @@ def make_total_time_table(total_time: float, section: str = "Overall Total") -> 
 
 # example search‐spaces
 FULL_POS_BITS  = [10, 11, 12]
-FULL_SPEEDS    = [0, 5, 10]
+FULL_COL_BITS          = [8]
+FULL_ENCODING_SPEED    = [0, 5, 10]
+FULL_DECODING_SPEED    = [0, 5, 10]
+
 
 ROI_POS_BITS   = [10, 11, 12]
-ROI_SPEEDS     = [0, 5, 10]
+ROI_COL_BITS   = [7,8]
+ROI_ENCODING_SPEED     = [0, 5, 10]
+ROI_DECODING_SPEED     = [0, 5, 10]
+
 OUT_POS_BITS   = [8, 9, 10]
-OUT_SPEEDS     = [5, 10]
+OUT_COL_BITS   = [6,7]
+OUT_ENCODING_SPEED     = [5, 10]
+OUT_DECODING_SPEED     = [5, 10]
 # all 3-bit on/off combos except the all-False case
 LAYER_OPTIONS = [
     combo
@@ -207,19 +215,25 @@ LAYER_OPTIONS = [
 def generate_combinations(mode):
     if mode == EncodingMode.FULL:
         return [
-            {"pos_bits": p, "speed": s}
-            for p, s in product(FULL_POS_BITS, FULL_SPEEDS)
+            {"pos_bits": p, "col_bits": c, "encoding_speed": enc_s, "decoding_speed": dec_s}
+            for p, c, enc_s, dec_s in product(FULL_POS_BITS, FULL_COL_BITS, FULL_ENCODING_SPEED, FULL_DECODING_SPEED)
         ]
     elif mode == EncodingMode.IMPORTANCE:
         combos = []
-        for quant_roi, speed_roi, quan_out, speed_out, layers in product(
-            ROI_POS_BITS, ROI_SPEEDS, OUT_POS_BITS, OUT_SPEEDS, LAYER_OPTIONS
+        for quant_pos_roi, quant_col_roi, encoding_speed_roi, decoding_speed_roi, \
+            quant_pos_out, quant_col_out, encoding_speed_out, decoding_speed_out, layers in product(
+            ROI_POS_BITS, ROI_COL_BITS, ROI_ENCODING_SPEED, ROI_DECODING_SPEED,
+            OUT_POS_BITS, OUT_COL_BITS, OUT_ENCODING_SPEED, OUT_DECODING_SPEED, LAYER_OPTIONS
         ):
             combos.append({
-                "pos_bits_in":  quant_roi,
-                "speed_in":     speed_roi,
-                "pos_bits_out": quan_out,
-                "speed_out":    speed_out,
+                "pos_bits_in":  quant_pos_roi,
+                "col_bits_in":  quant_col_roi,
+                "encoding_speed_in":     encoding_speed_roi,
+                "decoding_speed_in":     decoding_speed_roi,
+                "pos_bits_out":          quant_pos_out,
+                "col_bits_out":          quant_col_out,
+                "encoding_speed_out":    encoding_speed_out,
+                "decoding_speed_out":    decoding_speed_out,
                 "layers":       layers,
             })
         return combos
@@ -274,19 +288,23 @@ def write_simulation_csv(
 
     elif mode == EncodingMode.FULL:
         # full‐mode hyperparams
-        row["encoding_speed"]      = combo["speed"]
+        row["encoding_speed"]      = combo["encoding_speed"]
+        row["decoding_speed"]      = combo["decoding_speed"]
         row["position_quant_bits"] = combo["pos_bits"]
-        # layers always on for FULL
-        row["layer0_on"] = True
-        row["layer1_on"] = True
-        row["layer2_on"] = True
+        row["color_quant_bits"]    = combo["col_bits"]
 
     else:  # IMPORTANCE
         # importance hyperparams
-        row["encoding_speed_in"]       = combo["speed_in"]
         row["position_quant_bits_in"]  = combo["pos_bits_in"]
-        row["encoding_speed_out"]      = combo["speed_out"]
+        row["color_quant_bits_in"]  = combo["col_bits_in"]
+        row["encoding_speed_in"]       = combo["encoding_speed_in"]
+        row["decoding_speed_in"]       = combo["decoding_speed_in"]
+
         row["position_quant_bits_out"] = combo["pos_bits_out"]
+        row["color_quant_bits_out"] = combo["col_bits_out"]
+        row["encoding_speed_out"]      = combo["encoding_speed_out"]
+        row["decoding_speed_out"]      = combo["decoding_speed_out"]
+        
         # now the layers tuple
         for i, on in enumerate(combo["layers"]):
             row[f"layer{i}_on"] = on
@@ -334,6 +352,8 @@ def write_simulation_csv(
         row["points"]                       = in_pts + out_pts
         row["frame_preparation_ms"]         = avg.get("frame_preparation_ms",   pd.NA)
         row["data_preparation_ms"]          = avg.get("data_preparation_ms",    pd.NA)
+        row["roi_encode_ms"]                    = avg.get("roi_encode_ms", pd.NA)
+        row["out_encode_ms"]                    = avg.get("out_encode_ms", pd.NA)
         row["encode_ms"]                    = avg.get("multiprocessing_compression_ms", pd.NA)
         row["one_way_ms"]                   = avg.get("one_way_ms",             pd.NA)
         row["decode_ms"]                    = avg.get("decode_ms", pd.NA)

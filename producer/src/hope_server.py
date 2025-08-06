@@ -87,18 +87,18 @@ def camera_process(
     def apply_combo_settings(combo): # Helper function for setting a combination for simulations
         if encoding_mode == EncodingMode.FULL:
             draco_full_encoding.position_quantization_bits = combo["pos_bits"]
-            draco_full_encoding.color_quantization_bits    = combo["pos_bits"]
-            draco_full_encoding.speed_encode               = combo["speed"]
-            draco_full_encoding.speed_decode               = combo["speed"]
+            draco_full_encoding.color_quantization_bits    = combo["col_bits"]
+            draco_full_encoding.speed_encode               = combo["encoding_speed"]
+            draco_full_encoding.speed_decode               = combo["decoding_speed"]
         elif encoding_mode == EncodingMode.IMPORTANCE:
             draco_roi_encoding.position_quantization_bits        = combo["pos_bits_in"]
-            draco_roi_encoding.color_quantization_bits           = combo["pos_bits_in"]
-            draco_roi_encoding.speed_encode                      = combo["speed_in"]
-            draco_roi_encoding.speed_decode                      = combo["speed_in"]
+            draco_roi_encoding.color_quantization_bits           = combo["col_bits_in"]
+            draco_roi_encoding.speed_encode                      = combo["encoding_speed_in"]
+            draco_roi_encoding.speed_decode                      = combo["decoding_speed_in"]
             draco_outside_roi_encoding.position_quantization_bits = combo["pos_bits_out"]
-            draco_outside_roi_encoding.color_quantization_bits    = combo["pos_bits_out"]
-            draco_outside_roi_encoding.speed_encode               = combo["speed_out"]
-            draco_outside_roi_encoding.speed_decode               = combo["speed_out"]
+            draco_outside_roi_encoding.color_quantization_bits    = combo["col_bits_out"]
+            draco_outside_roi_encoding.speed_encode               = combo["encoding_speed_out"]
+            draco_outside_roi_encoding.speed_decode               = combo["decoding_speed_out"]
             active_layers[:] = combo["layers"]
     
     global DEBUG
@@ -455,7 +455,7 @@ def camera_process(
                         "geometry_upload_ms":                entry.pure_geometry_upload_ms,
                         "full_encode_ms":              compression_full_stats.compression_ms,
                         "roi_encode_ms":               compression_roi_stats.compression_ms,
-                        "outside_encode_ms":           compression_out_stats.compression_ms,
+                        "out_encode_ms":           compression_out_stats.compression_ms,
                         "num_points":                  int(num_points),
                         "full_points":                  int(compression_full_stats.number_of_points),
                         "in_roi_points":                int(compression_roi_stats.number_of_points),
@@ -570,7 +570,8 @@ def camera_process(
                     settings_full = [
                         f"PosQuant bits: {draco_full_encoding.position_quantization_bits} / 20",
                         f"ColorQuant bits: {draco_full_encoding.color_quantization_bits} / 16",
-                        f"Speed setting: {draco_full_encoding.speed_encode} / 10",
+                        f"Encoding Speed setting: {draco_full_encoding.speed_encode} / 10",
+                        f"Decoding Speed setting: {draco_full_encoding.speed_decode} / 10",
                     ]
 
                     for i, txt in enumerate(settings_full):
@@ -605,7 +606,8 @@ def camera_process(
                     group1 = [
                         f"PosQuant bits (in-ROI):  {draco_roi_encoding.position_quantization_bits} / 20",
                         f"ColorQuant bits (in-ROI):{draco_roi_encoding.color_quantization_bits} / 16",
-                        f"Speed setting (in-ROI):  {draco_roi_encoding.speed_encode} / 10",
+                        f"Encoding Speed setting (in-ROI):  {draco_roi_encoding.speed_encode} / 10",
+                        f"Decoding Speed setting (in-ROI):  {draco_roi_encoding.speed_decode} / 10",
                     ]
                     for i, txt in enumerate(group1):
                         cv2.putText(
@@ -621,7 +623,8 @@ def camera_process(
                     group2 = [
                         f"PosQuant bits (out-ROI):  {draco_outside_roi_encoding.position_quantization_bits} / 20",
                         f"ColorQuant bits (out-ROI):{draco_outside_roi_encoding.color_quantization_bits} / 16",
-                        f"Speed setting (out-ROI):  {draco_outside_roi_encoding.speed_encode} / 10",
+                        f"Encoding Speed setting (out-ROI):  {draco_outside_roi_encoding.speed_encode} / 10",
+                        f"Decoding Speed setting (out-ROI):  {draco_outside_roi_encoding.speed_decode} / 10",
                     ]
                     start2_y = y0 + (len(group1) + 2) * dy
                     for j, txt in enumerate(group2):
@@ -680,40 +683,46 @@ def camera_process(
                         if visualization_mode is visualization_mode.COLOR
                         else visualization_mode.COLOR
                     )
-                # HIGH IMPORTANCE (FULL, ROI)
-                elif key == ord('='):
+                # HIGH IMPORTANCE (FULL, ROI) POSITION QUANTIZATION BITS
+                elif key == ord('='): 
                     draco_full_encoding.position_quantization_bits = min(draco_full_encoding.position_quantization_bits+1, 20)
                 elif key == ord('-'):
                     draco_full_encoding.position_quantization_bits = max(draco_full_encoding.position_quantization_bits-1, 1)
-                # LOW IMPORTANCE (OUT-ROI)    
+                # LOW IMPORTANCE (OUT-ROI) POSITION QUANTIZATION BITS
                 elif key == ord('+'):
                     draco_outside_roi_encoding.position_quantization_bits = min(draco_outside_roi_encoding.position_quantization_bits+1, 20)
                 elif key == ord('_'):
                     draco_outside_roi_encoding.position_quantization_bits = max(draco_outside_roi_encoding.position_quantization_bits-1, 1)
-                # HIGH IMPORTANCE (FULL, ROI)
+                # HIGH IMPORTANCE (FULL, ROI)  COLOR QUANTIZATION BITS
                 elif key == ord(']'):
                     draco_full_encoding.color_quantization_bits = min(draco_full_encoding.color_quantization_bits+1, 16)
                 elif key == ord('['):
                     draco_full_encoding.color_quantization_bits = max(draco_full_encoding.color_quantization_bits-1, 1)
-                # LOW IMPORTANCE (OUT-ROI)    
+                # LOW IMPORTANCE (OUT-ROI)  COLOR QUANTIZATION BITS
                 elif key == ord('}'):
                     draco_outside_roi_encoding.color_quantization_bits = min(draco_outside_roi_encoding.color_quantization_bits+1, 16)
                 elif key == ord('{'):
                     draco_outside_roi_encoding.color_quantization_bits = max(draco_outside_roi_encoding.color_quantization_bits-1, 1)
-                 # HIGH IMPORTANCE (FULL, ROI)
+                 # HIGH IMPORTANCE (FULL, ROI) ENCODING SPEED
                 elif key == ord('.'):
                     draco_full_encoding.speed_encode = min(draco_full_encoding.speed_encode+1, 10)
-                    draco_full_encoding.speed_decode = draco_full_encoding.speed_decode
                 elif key == ord(','):
                     draco_full_encoding.speed_encode = max(draco_full_encoding.speed_encode-1, 0)
-                    draco_full_encoding.speed_decode = draco_full_encoding.speed_decode
-                 # LOW IMPORTANCE (OUT-ROI)    
+                 # LOW IMPORTANCE (OUT-ROI)  ENCODING SPEED
                 elif key == ord('>'):
                     draco_outside_roi_encoding.speed_encode = min(draco_outside_roi_encoding.speed_encode+1, 10)
-                    draco_outside_roi_encoding.speed_decode = draco_outside_roi_encoding.speed_decode
                 elif key == ord('<'):
                     draco_outside_roi_encoding.speed_encode = max(draco_outside_roi_encoding.speed_encode-1, 0)
-                    draco_outside_roi_encoding.speed_decode = draco_outside_roi_encoding.speed_decode
+                 # HIGH IMPORTANCE (FULL, ROI) DECODING SPEED
+                elif key == ord('\''):
+                    draco_full_encoding.speed_decode = min(draco_full_encoding.speed_decode+1, 10)
+                elif key == ord(';'):
+                    draco_full_encoding.speed_decode = max(draco_full_encoding.speed_decode-1, 0)
+                 # LOW IMPORTANCE (OUT-ROI) DECODING  SPEED
+                elif key == ord('"'):
+                    draco_outside_roi_encoding.speed_decode = min(draco_outside_roi_encoding.speed_decode+1, 10)
+                elif key == ord(':'):
+                    draco_outside_roi_encoding.speed_decode = max(draco_outside_roi_encoding.speed_decode-1, 0)
                 elif key == ord(' '):
                     # save full point cloud PLY
                     points.export_to_ply("snapshot.ply", color_frame)
