@@ -25,6 +25,7 @@ __pycache__/
 *.csv
 *.ext
 *.js
+*.html
 
 /addons/gesture_recognition/src/gesture_recognition.egg-info
 /addons/gesture_recognition/src/gesture_recognition.egg-info
