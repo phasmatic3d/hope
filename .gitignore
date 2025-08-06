@@ -31,5 +31,6 @@ __pycache__/
 /addons/gesture_recognition/src/gesture_recognition.egg-info
 producer/src/mobileclip_blt.ts
 producer/src/yoloe-11l-seg.pt
+producer/src/broadcaster_wrapper/public
 
 
