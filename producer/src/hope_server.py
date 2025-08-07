@@ -784,14 +784,20 @@ def camera_process(
                                 (cmr_depth_width, cmr_depth_height),
                                 # FULL mode params
                                 draco_full_encoding.speed_encode,
+                                draco_full_encoding.speed_decode,
                                 draco_full_encoding.position_quantization_bits,
+                                draco_full_encoding.color_quantization_bits,
                                 active_layers,
                                 # IMPORTANCE mode “in” params
                                 draco_roi_encoding.speed_encode,
+                                draco_roi_encoding.speed_decode,
                                 draco_roi_encoding.position_quantization_bits,
+                                draco_roi_encoding.color_quantization_bits,
                                 # IMPORTANCE mode “out” params
                                 draco_outside_roi_encoding.speed_encode,
-                                draco_outside_roi_encoding.position_quantization_bits
+                                draco_outside_roi_encoding.speed_decode,
+                                draco_outside_roi_encoding.position_quantization_bits,
+                                draco_outside_roi_encoding.color_quantization_bits
                             )
                     else:
                         write_stats_csv(
@@ -802,14 +808,20 @@ def camera_process(
                             (cmr_depth_width, cmr_depth_height),
                             # FULL mode params
                             draco_full_encoding.speed_encode,
+                            draco_full_encoding.speed_decode,
                             draco_full_encoding.position_quantization_bits,
+                            draco_full_encoding.color_quantization_bits,
                             active_layers,
                             # IMPORTANCE mode “in” params
                             draco_roi_encoding.speed_encode,
+                            draco_roi_encoding.speed_decode,
                             draco_roi_encoding.position_quantization_bits,
+                            draco_roi_encoding.color_quantization_bits,
                             # IMPORTANCE mode “out” params
                             draco_outside_roi_encoding.speed_encode,
-                            draco_outside_roi_encoding.position_quantization_bits
+                            draco_outside_roi_encoding.speed_decode,
+                            draco_outside_roi_encoding.position_quantization_bits,
+                            draco_outside_roi_encoding.color_quantization_bits
                         )
                 elif key == ord('v'):
                     if (simulation):

@@ -62,13 +62,19 @@ def write_stats_csv(
     depth_res: Tuple[int,int],
     # for FULL
     encoding_speed: int = None,
+    decoding_speed: int = None,
     pos_quant_bits: int = None,
-    active_layers: list[bool] = None,
+    col_quant_bits: int = None,
     # for IMPORTANCE
+    active_layers: list[bool] = None,
     encoding_speed_in: int = None,
+    decoding_speed_in: int = None,
     pos_quant_bits_in: int = None,
+    col_quant_bits_in: int = None,
     encoding_speed_out: int = None,
+    decoding_speed_out: int = None,
     pos_quant_bits_out: int = None,
+    col_quant_bits_out: int = None,
 ):
     # need 30 frames before writing
     if len(stats_buffer) < stats_buffer.maxlen:
@@ -95,6 +101,7 @@ def write_stats_csv(
             "data_preparation_ms":         avg.get("data_preparation_ms",    pd.NA),
             "one_way_ms":                  avg.get("one_way_ms",             pd.NA),
             "geometry_upload_ms":  avg.get("geometry_upload_ms", pd.NA),
+            "render_ms":           avg.get("render_ms", pd.NA),
         }
         # total_time = frame_prep + data_prep + one_way+proc
         row["total_time_ms"] = (
@@ -102,6 +109,7 @@ def write_stats_csv(
           + row["data_preparation_ms"]
           + row["one_way_ms"]
           + row["geometry_upload_ms"]
+          + row["render_ms"]
         )
         path = PERF_NONE_CSV
 
@@ -109,10 +117,9 @@ def write_stats_csv(
         row = {
             **common,
             "encoding_speed":        encoding_speed,
+            "decoding_speed":        decoding_speed,
             "position_quant_bits":   pos_quant_bits,
-            "layer0_on":             active_layers[0],
-            "layer1_on":             active_layers[1],
-            "layer2_on":             active_layers[2],
+            "color_quant_bits":      col_quant_bits,
             "points":                int(avg.get("full_points", pd.NA)),
             "frame_preparation_ms":  avg.get("frame_preparation_ms",   pd.NA),
             "data_preparation_ms":   avg.get("data_preparation_ms",    pd.NA),
@@ -137,8 +144,12 @@ def write_stats_csv(
             **common,
             "encoding_speed_in":       encoding_speed_in,
             "position_quant_bits_in":  pos_quant_bits_in,
+            "decoding_speed_in":       decoding_speed_in,
+            "color_quant_bits_in":       col_quant_bits_in,
             "encoding_speed_out":      encoding_speed_out,
             "position_quant_bits_out": pos_quant_bits_out,
+            "decoding_speed_out":      decoding_speed_out,
+            "color_quant_bits_out":    col_quant_bits_out,
             "layer0_on":               active_layers[0],
             "layer1_on":               active_layers[1],
             "layer2_on":               active_layers[2],
@@ -147,6 +158,8 @@ def write_stats_csv(
             "points":                  in_pts + out_pts,
             "frame_preparation_ms":    avg.get("frame_preparation_ms",   pd.NA),
             "data_preparation_ms":     avg.get("data_preparation_ms",    pd.NA),
+            "roi_encode_ms":           avg.get("roi_encode_ms", pd.NA),
+            "out_encode_ms":            avg.get("out_encode_ms", pd.NA),
             "encode_ms":               avg.get("multiprocessing_compression_ms", pd.NA),
             "one_way_ms":              avg.get("one_way_ms",             pd.NA),
             "decode_ms":               avg.get("decode_ms", pd.NA),
