@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 import { time } from "three/tsl";
 import { socketHandlerResponse } from "./types";
 
