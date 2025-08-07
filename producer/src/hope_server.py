@@ -448,6 +448,19 @@ def camera_process(
 
             # Logging and display
             if DEBUG:
+                if (encoding_mode == EncodingMode.IMPORTANCE):
+                    points_full = vertices[out_roi & subsample_mask | in_roi ]
+                    colors_full = colors[out_roi & subsample_mask | in_roi]
+
+                    raw_size_in  = points_in_roi.nbytes  + colors_in_roi.nbytes
+                    raw_size_out = points_out_roi.nbytes + colors_out_roi.nbytes
+                    raw_size = raw_size_in + raw_size_out
+                    encoded_size = compression_roi_stats.encoded_bytes + compression_out_stats.encoded_bytes
+                elif (encoding_mode == EncodingMode.FULL):
+                    raw_size = points_full.nbytes  + colors_full.nbytes
+
+                encoded_size = compression_full_stats.encoded_bytes
+
                 # Logging
                 if(entry): # If broadcasting
                     frame_stats_buffer.append({
@@ -463,12 +476,16 @@ def camera_process(
                         "out_encode_ms":           compression_out_stats.compression_ms,
                         "num_points":                  int(num_points),
                         "full_points":                  int(compression_full_stats.number_of_points),
+                        "raw_points_size":                  int(raw_size),
+                        "encoded_points_size":              int (encoded_size),
                         "in_roi_points":                int(compression_roi_stats.number_of_points),
                         "out_roi_points":               int(compression_out_stats.number_of_points)
                     })
 
                     # Performance simulation
                     if performance_simulation_index is not None: # only if simulation is running
+
+
                         performance_simulation_buffer.append({
                             "frame_preparation_ms":         pipeline_stats.frame_preparation_ms,
                             "data_preparation_ms":          pipeline_stats.data_preparation_ms,
@@ -482,8 +499,11 @@ def camera_process(
                             "out_encode_ms":            compression_out_stats.compression_ms,
                             "num_points":                   int(num_points),
                             "full_points":                  int(compression_full_stats.number_of_points),
+                            "raw_points_size":                  int(raw_size),
+                            "encoded_points_size":              int (encoded_size),
                             "in_roi_points":                int(compression_roi_stats.number_of_points),
                             "out_roi_points":               int(compression_out_stats.number_of_points),
+                            
                         })
 
                         performance_simulation_index = write_simulation_csv(

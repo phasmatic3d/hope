@@ -93,6 +93,10 @@ def write_stats_csv(
         "mode":              mode.name,
     }
 
+
+    raw_kb     = avg.get("raw_points_size", 0.0)      / 1024.0
+    encoded_kb = avg.get("encoded_points_size", 0.0)  / 1024.0
+    savings = ((raw_kb - encoded_kb) / raw_kb * 100.0) if raw_kb else 0.0
     if mode == EncodingMode.NONE:
         row = {
             **common,
@@ -121,6 +125,9 @@ def write_stats_csv(
             "position_quant_bits":   pos_quant_bits,
             "color_quant_bits":      col_quant_bits,
             "points":                int(avg.get("full_points", pd.NA)),
+            "raw_kb":               raw_kb,
+            "encoded_kb":           encoded_kb,
+            "savings(%)":                   savings,
             "frame_preparation_ms":  avg.get("frame_preparation_ms",   pd.NA),
             "data_preparation_ms":   avg.get("data_preparation_ms",    pd.NA),
             "encode_ms":             avg.get("full_encode_ms",         pd.NA),
@@ -156,6 +163,9 @@ def write_stats_csv(
             "points_in":               in_pts,
             "points_out":              out_pts,
             "points":                  in_pts + out_pts,
+            "raw_kb":               raw_kb,
+            "encoded_kb":           encoded_kb,
+            "savings(%)":                   savings,
             "frame_preparation_ms":    avg.get("frame_preparation_ms",   pd.NA),
             "data_preparation_ms":     avg.get("data_preparation_ms",    pd.NA),
             "roi_encode_ms":           avg.get("roi_encode_ms", pd.NA),
@@ -224,10 +234,10 @@ def make_total_time_table(total_time: float, section: str = "Overall Total") -> 
 
 
 # example search‐spaces
-FULL_POS_BITS  = [10, 11, 12]
+FULL_POS_BITS  = [14]
 FULL_COL_BITS          = [8]
-FULL_ENCODING_SPEED    = [0, 5, 10]
-FULL_DECODING_SPEED    = [0, 5, 10]
+FULL_ENCODING_SPEED    = [0,1,2,3,4,5,6,7,8,9,10]
+FULL_DECODING_SPEED    = [0]
 
 
 ROI_POS_BITS   = [10, 11, 12]
@@ -249,8 +259,8 @@ LAYER_OPTIONS = [
 def generate_combinations(mode):
     if mode == EncodingMode.FULL:
         return [
-            {"pos_bits": p, "col_bits": c, "encoding_speed": enc_s, "decoding_speed": dec_s}
-            for p, c, enc_s, dec_s in product(FULL_POS_BITS, FULL_COL_BITS, FULL_ENCODING_SPEED, FULL_DECODING_SPEED)
+            {"pos_bits": p, "col_bits": c, "encoding_speed": 5, "decoding_speed": enc_s}
+            for p, c, enc_s in product(FULL_POS_BITS, FULL_COL_BITS, FULL_ENCODING_SPEED)
         ]
     elif mode == EncodingMode.IMPORTANCE:
         combos = []
@@ -344,7 +354,11 @@ def write_simulation_csv(
         for i, on in enumerate(combo["layers"]):
             row[f"layer{i}_on"] = on
 
-    # now the averaged statistics, in the same order as write_stats_csv:
+    
+    raw_kb     = avg.get("raw_points_size", 0.0)      / 1024.0
+    encoded_kb = avg.get("encoded_points_size", 0.0)  / 1024.0
+    savings = ((raw_kb - encoded_kb) / raw_kb * 100.0) if raw_kb else 0.0
+
     if mode == EncodingMode.NONE:
         # points = total number of pts in sim_buffer: use avg.num_points
         row["points"]                       = int(avg.get("num_points", pd.NA))
@@ -363,8 +377,11 @@ def write_simulation_csv(
           + row["render_ms"]  
         )
 
-    elif mode == EncodingMode.FULL:
-        row["points"]                       = int(avg.get("full_points", pd.NA))
+    elif (mode == EncodingMode.FULL):
+        row["points"]                       = int(avg.get("full_points", pd.NA)) 
+        row["raw_kb"]              = raw_kb
+        row["encoded_kb"]          = encoded_kb
+        row["savings(%)"]                   = savings
         row["frame_preparation_ms"]         = avg.get("frame_preparation_ms", pd.NA)
         row["data_preparation_ms"]          = avg.get("data_preparation_ms",    pd.NA)
         row["encode_ms"]                    = avg.get("full_encode_ms",         pd.NA)
@@ -389,6 +406,9 @@ def write_simulation_csv(
         row["points_in"]                    = in_pts
         row["points_out"]                   = out_pts
         row["points"]                       = in_pts + out_pts
+        row["raw_kb"]                       = raw_kb
+        row["encoded_kb"]                   = encoded_kb
+        row["savings(%)"]                   = savings
         row["frame_preparation_ms"]         = avg.get("frame_preparation_ms",   pd.NA)
         row["data_preparation_ms"]          = avg.get("data_preparation_ms",    pd.NA)
         row["roi_encode_ms"]                    = avg.get("roi_encode_ms", pd.NA)
