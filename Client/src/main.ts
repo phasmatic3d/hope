@@ -4,6 +4,19 @@ import { initDracoDecoder } from './dracoDecoder';
 import { openConnection } from './transmissionWS';
 import {DecoderMessage, createPointCloudResult} from './types';
 
+import Stats from 'three/examples/jsm/libs/stats.module.js';
+
+const statsFPS = Stats();
+statsFPS.showPanel(0);    // 0: fps
+document.body.appendChild(statsFPS.dom);
+
+const statsMS  = Stats();
+statsMS.showPanel(1);     // 1: ms
+// bump the MS panel down so it doesn’t sit on top of the FPS panel
+statsMS.dom.style.position = 'absolute';
+statsMS.dom.style.top      = '32px';  // height of the fps panel
+document.body.appendChild(statsMS.dom);
+
 //import DrawCallInspector from './draw-call-inspector/DrawCallInspector.min.js';
 
 const worker = new Worker(new URL('./worker.ts', import.meta.url), {  });
@@ -115,9 +128,13 @@ async function setupScenePromise(){
 	//dci.mount();
 
 	renderer.setAnimationLoop(() => {
-		//dci.begin();
+		statsFPS.begin();
+		statsMS.begin();
+
 		renderer.render(scene, camera);
-		//dci.end();
+
+		statsFPS.end();
+		statsMS.end();
 	});
 
 	//function animate() {
