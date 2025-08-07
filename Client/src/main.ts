@@ -1,23 +1,25 @@
-import * as THREE from 'three';
+// @ts-nocheck
+
+//import * as THREE from 'three';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import { initDracoDecoder } from './dracoDecoder';
 import { openConnection } from './transmissionWS';
 import {DecoderMessage, createPointCloudResult} from './types';
 
-import Stats from 'three/examples/jsm/libs/stats.module.js';
+//import Stats from 'three/examples/jsm/libs/stats.module.js';
+//
+//const statsFPS = Stats();
+//statsFPS.showPanel(0);    // 0: fps
+//document.body.appendChild(statsFPS.dom);
+//
+//const statsMS  = Stats();
+//statsMS.showPanel(1);     // 1: ms
+//// bump the MS panel down so it doesn’t sit on top of the FPS panel
+//statsMS.dom.style.position = 'absolute';
+//statsMS.dom.style.top      = '32px';  // height of the fps panel
+//document.body.appendChild(statsMS.dom);
 
-const statsFPS = Stats();
-statsFPS.showPanel(0);    // 0: fps
-document.body.appendChild(statsFPS.dom);
-
-const statsMS  = Stats();
-statsMS.showPanel(1);     // 1: ms
-// bump the MS panel down so it doesn’t sit on top of the FPS panel
-statsMS.dom.style.position = 'absolute';
-statsMS.dom.style.top      = '32px';  // height of the fps panel
-document.body.appendChild(statsMS.dom);
-
-//import DrawCallInspector from './draw-call-inspector/DrawCallInspector.min.js';
+import DrawCallInspector from './draw-call-inspector/DrawCallInspector.min.js';
 
 const worker = new Worker(new URL('./worker.ts', import.meta.url), {  });
 
@@ -124,28 +126,28 @@ async function setupScenePromise(){
 
   	// ─── WebSocket + point-cloud pipeline ───
   	const processPointCloud = createPointCloudProcessor(scene);
-	//const dci = new DrawCallInspector( renderer, scene, camera, {} );
-	//dci.mount();
+	const dci = new DrawCallInspector( renderer, scene, camera, {} );
+	dci.mount();
 
-	renderer.setAnimationLoop(() => {
-		statsFPS.begin();
-		statsMS.begin();
+	//renderer.setAnimationLoop(() => {
+	//	statsFPS.begin();
+	//	statsMS.begin();
 
-		renderer.render(scene, camera);
+	//	renderer.render(scene, camera);
 
-		statsFPS.end();
-		statsMS.end();
-	});
+	//	statsFPS.end();
+	//	statsMS.end();
+	//});
 
-	//function animate() {
-	//    requestAnimationFrame( animate );
-	//	dci.update();
-	//	dci.begin();
-	//	renderer.render( scene, camera );
-	//	dci.end();
-	//}
+	function animate() {
+	    requestAnimationFrame( animate );
+		dci.update();
+		dci.begin();
+		renderer.render( scene, camera );
+		dci.end();
+	}
 
-	//animate();
+	animate();
 
 	function waitForNextFrame(renderer: THREE.WebGLRenderer, since: number): Promise<number> {
 		// Use XR session’s RAF when the headset is presenting, otherwise window RAF

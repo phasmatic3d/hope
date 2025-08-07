@@ -4,6 +4,8 @@ keyUsage = digitalSignature, keyEncipherment
 subjectAltName = @alt_names
 
 [alt_names]
-DNS.1 = localhost
+DNS.1 = 192.168.1.135
+DNS.2 = localhost
 IP.1  = 127.0.0.1
 IP.2  = ::1
+IP.3  = 192.168.1.135

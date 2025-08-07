@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 import { time } from "three/tsl";
 import { socketHandlerResponse } from "./types";
 
@@ -12,8 +14,8 @@ export function openConnection(
     const USE_TLS = true;
 
     // host + port for each mode
-    //const HOST = '192.168.1.135';
-    const HOST = 'localhost';
+    const HOST = '192.168.1.135';
+    //const HOST = 'localhost';
     const PORT = 9003; // e.g. 9003 for TLS, 9002 for plain
 
     // pick the right protocol
