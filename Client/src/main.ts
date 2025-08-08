@@ -101,8 +101,7 @@ function createPointCloudProcessor(
 				worker.postMessage({ 
 				type: 'decode', 
 				offset, 
-				length, 
-				pointOffset: totalPoints 
+				length
 				});
 			});
 			chunks.push(chunk);

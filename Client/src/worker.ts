@@ -4,11 +4,15 @@ importScripts('/dracoCustom/draco_decoder.js');
 
 import type { DecoderMessage } from './types';
 
+let scratchPtr = 0;
+const MAX_CHUNK_BYTES = 500_000;  
+
 let Module: any = null;
 const ModuleReady: Promise<void> = (self as any).DracoDecoderModule({
   locateFile: (file: string) => `/dracoCustom/${file}`
 }).then((m: any) => {
   Module = m;
+  scratchPtr = Module._malloc(MAX_CHUNK_BYTES);
 });
 
 let sharedEncodedView: Uint8Array;
@@ -31,15 +35,15 @@ self.onmessage = async (ev: MessageEvent<any>) => {
 if (data.type === 'decode') {
 	if (!Module) await ModuleReady;
 	
-	const { offset, length, pointOffset } = data;
+	const { offset, length } = data;
 	const raw = sharedEncodedView.subarray(offset, offset + length);
 
 	const dracoStart = performance.now();
 
-	const ptr = Module._malloc(length);
-	Module.HEAPU8.set(raw, ptr);
-	const pcPtr = Module._decode_draco(ptr, length);
-	Module._free(ptr);
+	//const ptr = Module._malloc(length);
+	Module.HEAPU8.set(raw, scratchPtr);
+	const pcPtr = Module._decode_draco(scratchPtr, length);
+	//Module._free(ptr);
 	if (pcPtr === 0) throw new Error('Draco decode failed');
 
 	// unpack
@@ -52,8 +56,8 @@ if (data.type === 'decode') {
 
 	Module._free_pointcloud(pcPtr);
 
-	decodedPosView.set(inPos, pointOffset * 3);
-	decodedColView.set(inCol, pointOffset * 3);
+	decodedPosView.set(inPos, offset * 3);
+	decodedColView.set(inCol, offset * 3);
 
 	const dracoDecodeTime = performance.now() - dracoStart;
 	const msg: DecoderMessage = {
