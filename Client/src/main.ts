@@ -34,11 +34,7 @@ function mergeBuffers(chunks: Array<{positions: Float32Array, colors: Uint8Array
   	return { merged_positions, merged_colors };
 }
 
-function createPointCloudProcessor(
-		scene: THREE.Scene,
-		decodedPosView: Float32Array,
-		decodedColView: Uint8Array
-	) {
+function createPointCloudProcessor(scene: THREE.Scene) {
 
 	let pointCloudGeometry: THREE.BufferGeometry | null = null;
 	let pointCloud: THREE.Points | null = null;
@@ -93,77 +89,63 @@ function createPointCloudProcessor(
 		}
 		// ─── IMPORTANCE / FULL mode ───
 		const chunks: DecoderMessage[] = [];
-		let totalPoints = 0;
-		for (const { offset, length } of incomingBuffers) {
-			// send decode + where to write
-			const chunk: DecoderMessage = await new Promise<DecoderMessage>(resolve => {
+		for (const { offset, length }  of incomingBuffers) {
+			const msg: DecoderMessage = await new Promise(resolve => {
 				worker.onmessage = ev => resolve(ev.data);
+<<<<<<< HEAD
 				worker.postMessage({ 
 				type: 'decode', 
 				offset, 
 				length
 				});
+=======
+				worker.postMessage({type:'decode', offset, length});
+>>>>>>> parent of e60cb37 (successfully writing into shared buffer)
 			});
-			chunks.push(chunk);
-			totalPoints += chunk.numPoints;
+			chunks.push(msg);
 		}
 
-
 		const chunkDecodeTimes = chunks.map(c => c.dracoDecodeTime);
-		const totalDecodeTime  = chunkDecodeTimes.reduce((sum, t) => sum + t, 0);	
+		const totalDecodeTime: number = chunks.map((c:DecoderMessage) => c.dracoDecodeTime).reduce((sum: number, t: number) => sum + t, 0);
 
 		// Merge all decoded chunks into single position/color buffers
 		const geomStart = performance.now();
+		const { merged_positions, merged_colors } = mergeBuffers(chunks);
+
+		// On the very first call, set up the Three.js Points object
 		if (!pointCloudGeometry) {
 			pointCloudGeometry = new THREE.BufferGeometry();
-			const mat = new THREE.PointsMaterial({ vertexColors: true, size: 0.1, sizeAttenuation: false });
-			pointCloud = new THREE.Points(pointCloudGeometry, mat);
-			pointCloud.scale.set(20,20,20);
+			const material = new THREE.PointsMaterial({
+				vertexColors: true,
+				size: 0.1,
+				sizeAttenuation: false,
+			});
+			pointCloud = new THREE.Points(pointCloudGeometry, material);
+
+			// apply your scene-wide transforms once
+			pointCloud.scale.set(20, 20, 20);
 			pointCloud.rotateX(Math.PI);
-			pointCloud.position.set(0,-10,13);
+			pointCloud.position.set(0, -10, 13);
+
 			scene.add(pointCloud);
 		}
 
-		// Update
-		pointCloudGeometry.setAttribute(
-		'position',
-			new THREE.BufferAttribute(
-				decodedPosView.subarray(0, totalPoints * 3),
-				3
-			)
-		);
-		pointCloudGeometry.setAttribute(
-			'color',
-			new THREE.BufferAttribute(
-				decodedColView.subarray(0, totalPoints * 3),
-				3,
-				true
-			)
-		);
+		// Upload the merged buffers into the geometry
+		pointCloudGeometry.setAttribute("position", new THREE.BufferAttribute(merged_positions, 3));
+		pointCloudGeometry.setAttribute("color", new THREE.BufferAttribute(merged_colors, 3, true));
 		pointCloudGeometry.attributes.position.needsUpdate = true;
 		pointCloudGeometry.attributes.color.needsUpdate = true;
+
 		const lastSceneUpdate = performance.now();
 
 		const totalGeomTime = performance.now() - geomStart;
 
-		// collect your timing stats as before
-		return {decodeTime: totalDecodeTime, geometryUploadTime: totalGeomTime, lastSceneUpdateTime: lastSceneUpdate, chunkDecodeTimes: chunkDecodeTimes};	
+		return {decodeTime: totalDecodeTime, geometryUploadTime: totalGeomTime, lastSceneUpdateTime: lastSceneUpdate, chunkDecodeTimes: chunkDecodeTimes};
 	};
 }
 
 
 async function setupScenePromise(){
-
-	const POINT_BUDGET = 100_000_000;
-
-	const sharedEncodedBuffer = new SharedArrayBuffer(POINT_BUDGET);
-	const sharedEncodedView   = new Uint8Array(sharedEncodedBuffer);
-
-	const decodedPosBuffer = new SharedArrayBuffer(POINT_BUDGET * 3 * 4);
-	const decodedColBuffer = new SharedArrayBuffer(POINT_BUDGET * 3 * 1);
-
-	const decodedPosView = new Float32Array(decodedPosBuffer);
-	const decodedColView = new Uint8Array(decodedColBuffer);
 
   	const scene    = new THREE.Scene();
   	const camera   = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
@@ -176,12 +158,7 @@ async function setupScenePromise(){
   	camera.position.set(0, -10, 15);
 
   	// ─── WebSocket + point-cloud pipeline ───
-  	const processPointCloud = createPointCloudProcessor(
-		scene,
-		decodedPosView,
-		decodedColView
-	);
-
+  	const processPointCloud = createPointCloudProcessor(scene);
 	const dci = new DrawCallInspector( renderer, scene, camera, {} );
 	dci.mount();
 
@@ -222,12 +199,11 @@ async function setupScenePromise(){
 		});
 	}
 
-	worker.postMessage({
-		type: 'init',
-		sharedEncodedBuffer,
-		decodedPosBuffer,
-		decodedColBuffer
-	});
+	const POINT_BUDGET   = 100_000_000;  // in bytes
+	const sharedEncodedBuffer = new SharedArrayBuffer(POINT_BUDGET);
+	const sharedEncodedView   = new Uint8Array(sharedEncodedBuffer);
+
+	worker.postMessage({ type: 'init', sharedBuf: sharedEncodedBuffer });
 
 	let expectedChunks = 0;
 	let incomingBuffers: { offset: number; length: number }[] = [];
