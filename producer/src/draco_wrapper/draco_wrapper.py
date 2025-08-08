@@ -59,6 +59,7 @@ class DracoWrapper:
         self,
         points: np.ndarray,
         colors: np.ndarray,
+        deduplicate: bool
     ) -> bytes:
 
         # This records the number of points in the point-cloud.
@@ -82,7 +83,8 @@ class DracoWrapper:
             self.position_quantization_bits,
             self.color_quantization_bits,
             self.speed_encode,
-            self.speed_decode
+            self.speed_decode,
+            deduplicate
         )
         end = time.perf_counter()
 

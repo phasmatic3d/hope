@@ -24,7 +24,8 @@ NB_MODULE(draco_bindings, m) {
 			int                                            pos_quant,
 			int                                            col_quant,
 			int                                            speed_encode,
-			int                                            speed_decode) -> nb::bytes {
+			int                                            speed_decode,
+            bool                                           deduplicate) -> nb::bytes {
 				const int N = int(positions.shape(0));
 
 				draco::PointCloudBuilder builder;
@@ -44,7 +45,7 @@ NB_MODULE(draco_bindings, m) {
 				builder.SetAttributeValuesForAllPoints(col_att_id, col_ptr, 0);
 
 				// Finalize the PointCloud (allocates storage, etc)
-				std::unique_ptr<draco::PointCloud> pc = builder.Finalize(false);
+				std::unique_ptr<draco::PointCloud> pc = builder.Finalize(deduplicate);
 
 				// Encode
 				draco::EncoderBuffer buffer;
@@ -66,6 +67,7 @@ NB_MODULE(draco_bindings, m) {
 		nb::arg("col_quant"),
 		nb::arg("speed_encode"),
 		nb::arg("speed_decode"),
+        nb::arg("deduplicate"),
 		R"pbdoc(
             Encode a point cloud by giving:
               - positions: float32[N,3]
