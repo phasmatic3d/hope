@@ -459,7 +459,7 @@ def camera_process(
                 elif (encoding_mode == EncodingMode.FULL):
                     raw_size = points_full.nbytes  + colors_full.nbytes
 
-                encoded_size = compression_full_stats.encoded_bytes
+                    encoded_size = compression_full_stats.encoded_bytes
 
                 # Logging
                 if(entry): # If broadcasting

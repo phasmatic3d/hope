@@ -259,7 +259,7 @@ LAYER_OPTIONS = [
 def generate_combinations(mode):
     if mode == EncodingMode.FULL:
         return [
-            {"pos_bits": p, "col_bits": c, "encoding_speed": 5, "decoding_speed": enc_s}
+            {"pos_bits": p, "col_bits": c, "encoding_speed": enc_s, "decoding_speed": enc_s}
             for p, c, enc_s in product(FULL_POS_BITS, FULL_COL_BITS, FULL_ENCODING_SPEED)
         ]
     elif mode == EncodingMode.IMPORTANCE:
