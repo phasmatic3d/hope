@@ -22,7 +22,7 @@
 #endif
 
 
-//#define USE_TLS
+#define USE_TLS
 #ifdef USE_TLS
     #include <websocketpp/config/asio.hpp>    // TLS‐enabled config
     typedef websocketpp::config::asio_tls asio_config;

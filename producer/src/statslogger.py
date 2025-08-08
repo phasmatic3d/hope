@@ -236,19 +236,19 @@ def make_total_time_table(total_time: float, section: str = "Overall Total") -> 
 # example search‐spaces
 FULL_POS_BITS  = [14]
 FULL_COL_BITS          = [8]
-FULL_ENCODING_SPEED    = [10]
+FULL_ENCODING_SPEED    = [0,1,2,3,4,5,6,7,8,9,10]
 FULL_DECODING_SPEED    = [0]
 
 
-ROI_POS_BITS   = [14]
-ROI_COL_BITS   = [8]
-ROI_ENCODING_SPEED     = [10]
-ROI_DECODING_SPEED     = [10]
+ROI_POS_BITS   = [10, 11, 12]
+ROI_COL_BITS   = [7,8]
+ROI_ENCODING_SPEED     = [0, 5, 10]
+ROI_DECODING_SPEED     = [0, 5, 10]
 
-OUT_POS_BITS   = [9]
-OUT_COL_BITS   = [6]
-OUT_ENCODING_SPEED     = [10]
-OUT_DECODING_SPEED     = [10]
+OUT_POS_BITS   = [8, 9, 10]
+OUT_COL_BITS   = [6,7]
+OUT_ENCODING_SPEED     = [5, 10]
+OUT_DECODING_SPEED     = [5, 10]
 # all 3-bit on/off combos except the all-False case
 LAYER_OPTIONS = [
     combo
@@ -273,12 +273,12 @@ def generate_combinations(mode):
                 "pos_bits_in":  quant_pos_roi,
                 "col_bits_in":  quant_col_roi,
                 "encoding_speed_in":     encoding_speed_roi,
-                "decoding_speed_in":     encoding_speed_roi,
+                "decoding_speed_in":     decoding_speed_roi,
                 "pos_bits_out":          quant_pos_out,
                 "col_bits_out":          quant_col_out,
                 "encoding_speed_out":    encoding_speed_out,
-                "decoding_speed_out":    encoding_speed_out,
-                "layers":       [False, True, True],
+                "decoding_speed_out":    decoding_speed_out,
+                "layers":       layers,
             })
         return combos
     else:

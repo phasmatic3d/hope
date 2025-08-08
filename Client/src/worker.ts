@@ -54,7 +54,7 @@ if (data.type === 'decode') {
 	const inPos = new Float32Array(heap, positionsPtr, numPoints * 3);
 	const inCol = new Uint8Array (heap, colorsPtr,    numPoints * 3);
 
-	//Module._free_pointcloud(pcPtr);
+	Module._free_pointcloud(pcPtr);
 
 	decodedPosView.set(inPos, offset * 3);
 	decodedColView.set(inCol, offset * 3);

@@ -4,7 +4,7 @@
 
 extern "C" {
 
-    static constexpr int MAX_POINTS = 100000000;
+    static constexpr int MAX_POINTS = 1000000;
 
     struct PointCloud {
         float*    positions;

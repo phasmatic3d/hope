@@ -389,7 +389,6 @@ def camera_process(
                             draco_roi_encoding.encode,
                             points_in_roi,
                             colors_in_roi,
-                            False
                         )
                     else:
                         buffer_roi = b""
@@ -399,7 +398,6 @@ def camera_process(
                             draco_outside_roi_encoding.encode,
                             points_out_roi,
                             colors_out_roi,
-                            False
                         )
                     else:
                         buffer_out = b""
@@ -448,7 +446,7 @@ def camera_process(
                     pipeline_stats.data_preparation_ms = (time.perf_counter() - pipeline_stats.data_preparation_ms) * 1000 #prep end
                     offset  = 0 
                     if(points_full.any()):
-                        buffer_full = draco_full_encoding.encode(points_full, colors_full, deduplicate=False)
+                        buffer_full = draco_full_encoding.encode(points_full, colors_full)
                         header = bytes([1]) + offset.to_bytes(4, byteorder='little')
                         packet = header + buffer_full
                         server.broadcast(packet) 
