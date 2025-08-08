@@ -307,8 +307,11 @@ def camera_process(
 
 
                 if(raw_points.size > 0):
-                    payload = bytes([0]) + raw_points.tobytes() + raw_cols.tobytes()
-                    server.broadcast(payload)
+                    offset = 0
+                    header = bytes([0]) + offset.to_bytes(4, byteorder='little')
+                    payload = raw_points.tobytes() + raw_cols.tobytes()
+                    packet = header + payload
+                    server.broadcast(packet)
 
                 entry = server.wait_for_entry(broadcast_round)
                 if entry:

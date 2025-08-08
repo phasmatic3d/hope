@@ -40,14 +40,13 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 	let pointCloud: THREE.Points | null = null;
 
 	return async( sharedBuf: SharedArrayBuffer, incomingBuffers: { offset: number; length: number}[] , bufferCount: number): Promise<createPointCloudResult> => {
-				// read the first header
-		const encView = new Uint8Array(sharedBuf);
-		const firstOffset = incomingBuffers[0].offset;
 
+		const encView     = new Uint8Array(sharedBuf);
+		const firstChunk  = incomingBuffers[0];      // { offset: number; length: number }
+	const { offset, length } = firstChunk;
 		// ─── NONE mode (header===0): raw floats+bytes ───
 		if (bufferCount === 0) {
-
-			const raw = firstOffset.slice(1);           // strip header
+			const raw = encView.subarray(offset, offset + length);
 			const byteLen = raw.byteLength;
 
 			// each point = 3×float32 (12 bytes) + 3×uint8 (3 bytes) = 15 bytes
@@ -56,8 +55,16 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 			const posBytes = raw.slice(0, 4*3 * numPoints);
 			const colBytes = raw.slice(4*3 * numPoints);
 
-			const positions = new Float32Array(posBytes);
-			const colors    = new Uint8Array(colBytes);
+			const positions = new Float32Array(
+				posBytes.buffer,
+				posBytes.byteOffset,
+				numPoints * 3
+			);
+			 const colors = new Uint8Array(
+				colBytes.buffer,
+				colBytes.byteOffset,
+				numPoints * 3
+  			);
 
 			const geomStart = performance.now();
 
@@ -184,7 +191,7 @@ async function setupScenePromise(){
 		});
 	}
 
-	const POINT_BUDGET   = 500_000;  // in bytes
+	const POINT_BUDGET   = 100_000_000;  // in bytes
 	const sharedEncodedBuffer = new SharedArrayBuffer(POINT_BUDGET);
 	const sharedEncodedView   = new Uint8Array(sharedEncodedBuffer);
 
@@ -211,6 +218,7 @@ async function setupScenePromise(){
 
     		const payload = new Uint8Array(data, ENCODED_HEADER);
      		sharedEncodedView.set(payload, offset);
+
     		incomingBuffers.push({ offset, length: payload.byteLength });
 
     		// if we haven’t got them all yet, bail out early
