@@ -4,19 +4,11 @@
 
 extern "C" {
 
-    static constexpr int MAX_POINTS = 1000000;
-
     struct PointCloud {
         float*    positions;
         uint8_t*  colors;
         int       num_points;
     };
-
-    
-    static PointCloud g_out;
-
-    static float    g_positions[MAX_POINTS * 3];
-    static uint8_t  g_colors   [MAX_POINTS * 3];
 
     PointCloud* decode_draco(const uint8_t* data, size_t length) {
         draco::DecoderBuffer buffer;
@@ -25,36 +17,33 @@ extern "C" {
         draco::Decoder decoder;
         auto pc_or = decoder.DecodePointCloudFromBuffer(&buffer);
         if (!pc_or.ok()) {
-        fprintf(stderr, "Draco decode error: %s\n",
-                pc_or.status().error_msg_string().c_str());
-        return nullptr;
+            fprintf(stderr, "Draco decode error: %s\n",
+                    pc_or.status().error_msg_string().c_str());
+            return nullptr;
         }
         std::unique_ptr<draco::PointCloud> pc = std::move(pc_or).value();
 
         const int N = pc->num_points();
-        if (N > MAX_POINTS) {
-        fprintf(stderr, "Too many points (%d > %d)\n", N, MAX_POINTS);
-        return nullptr;
-        }
+        int pos_att_id = pc->GetNamedAttributeId(draco::GeometryAttribute::POSITION);
+        auto pos_att = pc->attribute(pos_att_id);
 
-        g_out.num_points = N;
-        g_out.positions  = g_positions;
-        g_out.colors     = g_colors;
+        int col_att_id = pc->GetNamedAttributeId(draco::GeometryAttribute::COLOR);
+        auto col_att = pc->attribute(col_att_id);
 
-        auto pos_att = pc->attribute(
-            pc->GetNamedAttributeId(draco::GeometryAttribute::POSITION));
-        auto col_att = pc->attribute(
-            pc->GetNamedAttributeId(draco::GeometryAttribute::COLOR));
+        // Allocate output
+        auto out = (PointCloud*)malloc(sizeof(PointCloud));
+        out->num_points = N;
+        out->positions  = (float*)malloc(sizeof(float)*3*N);
+        out->colors     = (uint8_t*)malloc(sizeof(uint8_t)*3*N);
 
-        draco::AttributeValueIndex avi;
-
+        draco::AttributeValueIndex avi(0);
         for (int i = 0; i < N; ++i) {
             avi = draco::AttributeValueIndex(i);
-            pos_att->ConvertValue<float>(avi, g_positions  + 3*i);
-            col_att->ConvertValue<uint8_t>(avi, g_colors + 3*i);
+            pos_att->ConvertValue<float>(avi, out->positions  + 3*i);
+            col_att->ConvertValue<uint8_t>(avi, out->colors + 3*i);
         }
 
-        return &g_out;
+        return out;
     }
 
     // Free the struct and its buffers
