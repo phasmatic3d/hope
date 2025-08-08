@@ -4,23 +4,10 @@
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import { openConnection } from './transmissionWS';
 import {DecoderMessage, createPointCloudResult} from './types';
-
-//import Stats from 'three/examples/jsm/libs/stats.module.js';
-//
-//const statsFPS = Stats();
-//statsFPS.showPanel(0);    // 0: fps
-//document.body.appendChild(statsFPS.dom);
-//
-//const statsMS  = Stats();
-//statsMS.showPanel(1);     // 1: ms
-//// bump the MS panel down so it doesn’t sit on top of the FPS panel
-//statsMS.dom.style.position = 'absolute';
-//statsMS.dom.style.top      = '32px';  // height of the fps panel
-//document.body.appendChild(statsMS.dom);
-
 import DrawCallInspector from './draw-call-inspector/DrawCallInspector.min.js';
 
 const worker = new Worker(new URL('./worker.ts', import.meta.url), {  });
+const ENCODED_HEADER = 5
 
 let decoderModule: any;
 let pointCloud: THREE.Points | null = null;
@@ -52,15 +39,15 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 	let pointCloudGeometry: THREE.BufferGeometry | null = null;
 	let pointCloud: THREE.Points | null = null;
 
-	return async (buffers: ArrayBuffer[]): Promise<createPointCloudResult> => {
+	return async( sharedBuf: SharedArrayBuffer, incomingBuffers: { offset: number; length: number}[] , bufferCount: number): Promise<createPointCloudResult> => {
 				// read the first header
-		const firstBuf = buffers[0];
-		const header   = new DataView(firstBuf).getUint8(0);
+		const encView = new Uint8Array(sharedBuf);
+		const firstOffset = incomingBuffers[0].offset;
 
 		// ─── NONE mode (header===0): raw floats+bytes ───
-		if (header === 0) {
+		if (bufferCount === 0) {
 
-			const raw = firstBuf.slice(1);           // strip header
+			const raw = firstOffset.slice(1);           // strip header
 			const byteLen = raw.byteLength;
 
 			// each point = 3×float32 (12 bytes) + 3×uint8 (3 bytes) = 15 bytes
@@ -93,21 +80,14 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 			const totalGeomTime = performance.now() - geomStart;
 			return {decodeTime: 0, geometryUploadTime: totalGeomTime, lastSceneUpdateTime: lastSceneUpdate, chunkDecodeTimes: [0,0]};
 		}
-		
 		// ─── IMPORTANCE / FULL mode ───
 		const chunks: DecoderMessage[] = [];
-		for (const fullBuf of buffers) {
-			const dracoPayload = new Uint8Array(fullBuf, 1);  // skip the 1-byte header
-
-			const chunk = await new Promise<DecoderMessage>(resolve => {
-				// overwrite onmessage so exactly one handler is active
-				worker.onmessage = (ev: MessageEvent<DecoderMessage>) => {
-					resolve(ev.data);
-				};
-				worker.postMessage(dracoPayload, [dracoPayload.buffer]);
+		for (const { offset, length }  of incomingBuffers) {
+			const msg: DecoderMessage = await new Promise(resolve => {
+				worker.onmessage = ev => resolve(ev.data);
+				worker.postMessage({type:'decode', offset, length});
 			});
-
-			chunks.push(chunk);
+			chunks.push(msg);
 		}
 
 		const chunkDecodeTimes = chunks.map(c => c.dracoDecodeTime);
@@ -204,23 +184,34 @@ async function setupScenePromise(){
 		});
 	}
 
+	const POINT_BUDGET   = 500_000;  // in bytes
+	const sharedEncodedBuffer = new SharedArrayBuffer(POINT_BUDGET);
+	const sharedEncodedView   = new Uint8Array(sharedEncodedBuffer);
+
+	worker.postMessage({ type: 'init', sharedBuf: sharedEncodedBuffer });
+
 	let expectedChunks = 0;
-	let incomingBuffers: ArrayBuffer[] = [];
+	let incomingBuffers: { offset: number; length: number }[] = [];
 
 	openConnection(
 		async (data) => {
+			const dv     = new DataView(data);
+			const bufferCount  = dv.getUint8(0);
+			const offset = dv.getUint32(1, true);
+
+
 			console.log(__filename, "Received new chunk...");
-			// read header byte
-    		const count = new DataView(data).getUint8(0);
+	
 
     		// first message of a group tells us how many to expect
     		if (expectedChunks === 0) {
-				expectedChunks = count;
+				expectedChunks = bufferCount;
 				console.log(__filename, `Setting expectedChunks: ${expectedChunks}`);
 			}
 
-    		// strip header and stash the payload
-    		incomingBuffers.push(data);
+    		const payload = new Uint8Array(data, ENCODED_HEADER);
+     		sharedEncodedView.set(payload, offset);
+    		incomingBuffers.push({ offset, length: payload.byteLength });
 
     		// if we haven’t got them all yet, bail out early
 			if (incomingBuffers.length < expectedChunks) {
@@ -238,11 +229,12 @@ async function setupScenePromise(){
 
 
 			for (let i = 0; i < incomingBuffers.length ; i++){
-				console.log(__filename, `Buffer length: ${incomingBuffers[i].byteLength}`);
+				console.log(__filename, `Buffer length: ${incomingBuffers[i].length}`);
 			}
 
-			const { decodeTime, chunkDecodeTimes, geometryUploadTime, lastSceneUpdateTime} = await processPointCloud(incomingBuffers);
-			//processPointCloud(incomingBuffers);
+			const { decodeTime, chunkDecodeTimes, geometryUploadTime, lastSceneUpdateTime}
+			 = await processPointCloud(sharedEncodedBuffer, incomingBuffers, bufferCount);
+
 			expectedChunks = 0;
     		incomingBuffers = [];
 			// this is not correct

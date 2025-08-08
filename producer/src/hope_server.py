@@ -2,6 +2,7 @@ from enum import Enum, auto
 from pyexpat import model
 import time
 import os
+import struct
 
 import pandas as pd
 
@@ -412,15 +413,20 @@ def camera_process(
                     if buffer_out:
                         buffers.append(buffer_out)
                     count = len(buffers)
+                    offset  = 0   
 
                     any_broadcasted = False
                     for buffer in buffers:
-                        any_broadcasted |= server.broadcast_batch(batch, bytes([count]) + buffer)
+                        header = count.to_bytes(1, byteorder='little') + offset.to_bytes(4, byteorder='little')
+                        packet = header + buffer
+
+                        any_broadcasted |= server.broadcast_batch(batch, packet)
                         entry = server.wait_for_entry(broadcast_round)
                         if entry:
                             broadcast_round += 1
                             pipeline_stats.approximate_rtt_ms += entry.approximate_rtt_ms
 
+                        offset += len(buffer)
                     if any_broadcasted:
                         batch += 1
 
@@ -435,9 +441,12 @@ def camera_process(
 
                     # Encode entire valid cloud
                     pipeline_stats.data_preparation_ms = (time.perf_counter() - pipeline_stats.data_preparation_ms) * 1000 #prep end
+                    offset  = 0 
                     if(points_full.any()):
                         buffer_full = draco_full_encoding.encode(points_full, colors_full)
-                        server.broadcast(bytes([1]) + buffer_full) # prefix with single byte to understand that we are sending one buffer
+                        header = bytes([1]) + offset.to_bytes(4, byteorder='little')
+                        packet = header + buffer_full
+                        server.broadcast(packet) 
                     
                     entry = server.wait_for_entry(broadcast_round)
                     if entry:
