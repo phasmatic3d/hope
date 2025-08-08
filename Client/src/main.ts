@@ -43,7 +43,7 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 
 		const encView     = new Uint8Array(sharedBuf);
 		const firstChunk  = incomingBuffers[0];      // { offset: number; length: number }
-	const { offset, length } = firstChunk;
+		const { offset, length } = firstChunk;
 		// ─── NONE mode (header===0): raw floats+bytes ───
 		if (bufferCount === 0) {
 			const raw = encView.subarray(offset, offset + length);

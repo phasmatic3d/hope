@@ -1,8 +1,13 @@
 import basicSsl from '@vitejs/plugin-basic-ssl'
 
 export default {
+  
   server: {
     port: 5173, // change to the port you want
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+    }
   },
   plugins: [
     basicSsl({
