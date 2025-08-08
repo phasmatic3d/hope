@@ -2,7 +2,6 @@
 
 //import * as THREE from 'three';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
-import { initDracoDecoder } from './dracoDecoder';
 import { openConnection } from './transmissionWS';
 import {DecoderMessage, createPointCloudResult} from './types';
 
@@ -50,10 +49,10 @@ function mergeBuffers(chunks: Array<{positions: Float32Array, colors: Uint8Array
 
 function createPointCloudProcessor(scene: THREE.Scene) {
 
-		let pointCloudGeometry: THREE.BufferGeometry | null = null;
-		let pointCloud: THREE.Points | null = null;
+	let pointCloudGeometry: THREE.BufferGeometry | null = null;
+	let pointCloud: THREE.Points | null = null;
 
-		return async (buffers: ArrayBuffer[]): Promise<createPointCloudResult> => {
+	return async (buffers: ArrayBuffer[]): Promise<createPointCloudResult> => {
 				// read the first header
 		const firstBuf = buffers[0];
 		const header   = new DataView(firstBuf).getUint8(0);
@@ -76,13 +75,13 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 			const geomStart = performance.now();
 
 			if (!pointCloudGeometry) {
-			pointCloudGeometry = new THREE.BufferGeometry();
-			const mat = new THREE.PointsMaterial({ vertexColors: true, size: 0.1, sizeAttenuation: false });
-			pointCloud = new THREE.Points(pointCloudGeometry, mat);
-			pointCloud.scale.set(20,20,20);
-			pointCloud.rotateX(Math.PI);
-			pointCloud.position.set(0,-10,13);
-			scene.add(pointCloud);
+				pointCloudGeometry = new THREE.BufferGeometry();
+				const mat = new THREE.PointsMaterial({ vertexColors: true, size: 0.1, sizeAttenuation: false });
+				pointCloud = new THREE.Points(pointCloudGeometry, mat);
+				pointCloud.scale.set(20,20,20);
+				pointCloud.rotateX(Math.PI);
+				pointCloud.position.set(0,-10,13);
+				scene.add(pointCloud);
 			}
 
 			pointCloudGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
@@ -96,7 +95,6 @@ function createPointCloudProcessor(scene: THREE.Scene) {
 		}
 		
 		// ─── IMPORTANCE / FULL mode ───
-		// 1) Decode each buffer *in sequence*, so we never lose a message
 		const chunks: DecoderMessage[] = [];
 		for (const fullBuf of buffers) {
 			const dracoPayload = new Uint8Array(fullBuf, 1);  // skip the 1-byte header
@@ -163,8 +161,6 @@ async function setupScenePromise(){
   	document.body.appendChild(VRButton.createButton(renderer));
 
   	camera.position.set(0, -10, 15);
-  	// ─── Draco decoder init ───
-  	decoderModule = await initDracoDecoder();
 
   	// ─── WebSocket + point-cloud pipeline ───
   	const processPointCloud = createPointCloudProcessor(scene);
@@ -279,9 +275,6 @@ async function setupScene() {
 	renderer.xr.enabled = true;
 	document.body.appendChild(renderer.domElement);
 	document.body.appendChild(VRButton.createButton(renderer));
-
-	// Set up Draco decoder (once)
-	decoderModule = await initDracoDecoder();
 
 	loadAndUpdatePointCloudFromWS_worker(scene);
 
