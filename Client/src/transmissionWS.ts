@@ -48,8 +48,6 @@ export function openConnection(
     });
 
     socket.addEventListener('close', (event) => {
-        if (syncInterval) clearInterval(syncInterval);
-        syncInterval = null;
         console.warn('WebSocket connection closed.', event);
         reject("Close");
     });

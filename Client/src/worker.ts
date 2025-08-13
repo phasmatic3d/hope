@@ -38,8 +38,6 @@ if (data.type === 'decode') {
 	const { offset, length } = data;
 	const raw = sharedEncodedView.subarray(offset, offset + length);
 
-	const dracoStart = performance.now();
-
 	//const ptr = Module._malloc(length);
 	Module.HEAPU8.set(raw, scratchPtr);
 	const pcPtr = Module._decode_draco(scratchPtr, length);
@@ -59,10 +57,9 @@ if (data.type === 'decode') {
 	decodedPosView.set(inPos, offset * 3);
 	decodedColView.set(inCol, offset * 3);
 
-	const dracoDecodeTime = performance.now() - dracoStart;
 	const msg: DecoderMessage = {
+		type: 'decoded',
 		numPoints,
-		dracoDecodeTime
 	};
 	self.postMessage( msg );
 	}

@@ -151,9 +151,6 @@ def camera_process(
     sampling_layers = [0.60, 0.15, 0.25]
     active_layers   = [True,  True,  True]
 
-    broadcast_round = 0 # Keep track of broadcasting round to query cpp csv for logging
-    batch = 0
-    
     try:
         while not stop_event.is_set():
             # Sync hyperparameter changes
