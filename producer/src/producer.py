@@ -21,13 +21,11 @@ def main():
     server = setup_server(
         args.server_port,
         args.server_host,
-        args.server_write_to_csv,
-        args.server_use_pings_for_rtt
     )
     server.listen()
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
-    
+
     hope_server.launch_processes(server, args, DEVICE)
         
 def realsense_config() :

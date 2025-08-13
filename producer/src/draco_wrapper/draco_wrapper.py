@@ -1,9 +1,6 @@
 import time
 import numpy as np
 from . import draco_bindings as dcb
-from stats.stats import (
-    CompressionStats,
-)
 
 from enum import Enum, auto
 
@@ -11,11 +8,12 @@ from enum import Enum, auto
 class EncodingMode(Enum):
     NONE = auto()
     FULL = auto()          
-    IMPORTANCE = auto()    
+    IMPORTANCE = auto()  
 
-class VizualizationMode(Enum):
+class VisualizationMode(Enum):
     COLOR = auto()
     DEPTH = auto()
+  
 
 class DracoWrapper:
     """
@@ -31,7 +29,6 @@ class DracoWrapper:
     """
     def __init__(
         self,
-        compression_stats: CompressionStats = None,
         position_quantization_bits: int = 11,
         color_quantization_bits: int = 8,
         speed_encode: int = 10,
@@ -45,7 +42,6 @@ class DracoWrapper:
         self.speed_decode = speed_decode
         self.roi_width = roi_width
         self.roi_height = roi_height
-        self.compression_stats = compression_stats
 
     def __str__(self) -> str:
         return (
@@ -62,20 +58,9 @@ class DracoWrapper:
         deduplicate: bool
     ) -> bytes:
 
-        # This records the number of points in the point-cloud.
-        # N×3 array of XYZ coordinates.
-        if self.compression_stats != None:
-            self.compression_stats.number_of_points = points.shape[0]
-
-        # 3 coordinates, stored as 32-bit floats → 3×4 bytes
-        # 3 color channels, stored as 8-bit ints → 3×1 bytes
-        if self.compression_stats != None:
-            self.compression_stats.raw_bytes = points.nbytes + colors.nbytes
-
         if points.size == 0: 
             return b"";
-
-        start = time.perf_counter()
+    
         # note this calls the cpp binary
         buffer = dcb.encode_pointcloud(
             points,
@@ -86,11 +71,4 @@ class DracoWrapper:
             self.speed_decode,
             deduplicate
         )
-        end = time.perf_counter()
-
-        if self.compression_stats != None:
-            self.compression_stats.compression_ms = (end - start) * 1000
-            self.compression_stats.encoded_bytes = len(buffer)
-
-
         return buffer

@@ -1,10 +1,9 @@
 // @ts-nocheck
 
-//import * as THREE from 'three';
+import * as THREE from 'three';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import { openConnection } from './transmissionWS';
 import {DecoderMessage, createPointCloudResult} from './types';
-import DrawCallInspector from './draw-call-inspector/DrawCallInspector.min.js';
 
 const worker = new Worker(new URL('./worker.ts', import.meta.url), {  });
 const ENCODED_HEADER = 5
@@ -12,27 +11,7 @@ const ENCODED_HEADER = 5
 let decoderModule: any;
 let pointCloud: THREE.Points | null = null;
 let pointCloudGeometry: THREE.BufferGeometry | null = null;
-
-let __filename = "MAIN";
-
-function mergeBuffers(chunks: Array<{positions: Float32Array, colors: Uint8Array}>){
-	const totalPos = chunks.reduce((sum, c) => sum + c.positions.length, 0);
-  	const totalCol = chunks.reduce((sum, c) => sum + c.colors.length, 0);
-
-
-	const merged_positions = new Float32Array(totalPos);
-	const merged_colors = new Uint8Array(totalCol);
-
-	let posOffset = 0, colOffset = 0;
-  	for (const { positions: p, colors: c } of chunks) {
-  	  	merged_positions.set(p, posOffset);
-  	  	merged_colors.set(c, colOffset);
-  	  	posOffset += p.length;
-  	  	colOffset += c.length;
-  	}
-
-  	return { merged_positions, merged_colors };
-}
+let __filename: "MAIN"
 
 function createPointCloudProcessor(
 		scene: THREE.Scene,
@@ -43,7 +22,10 @@ function createPointCloudProcessor(
 	let pointCloudGeometry: THREE.BufferGeometry | null = null;
 	let pointCloud: THREE.Points | null = null;
 
-	return async( sharedBuf: SharedArrayBuffer, incomingBuffers: { offset: number; length: number}[] , bufferCount: number): Promise<createPointCloudResult> => {
+	return async( sharedBuf: SharedArrayBuffer,
+		 incomingBuffers: { offset: number; length: number}[] ,
+		 bufferCount: number)
+		 : Promise<void> => {
 
 		const encView     = new Uint8Array(sharedBuf);
 		const firstChunk  = incomingBuffers[0];      // { offset: number; length: number }
@@ -70,7 +52,6 @@ function createPointCloudProcessor(
 				numPoints * 3
   			);
 
-			const geomStart = performance.now();
 
 			if (!pointCloudGeometry) {
 				pointCloudGeometry = new THREE.BufferGeometry();
@@ -86,10 +67,7 @@ function createPointCloudProcessor(
 			pointCloudGeometry.setAttribute("color",    new THREE.BufferAttribute(colors,    3, true));
 			pointCloudGeometry.attributes.position.needsUpdate = true;
 			pointCloudGeometry.attributes.color.needsUpdate    = true;
-			
-			const lastSceneUpdate = performance.now();
-			const totalGeomTime = performance.now() - geomStart;
-			return {decodeTime: 0, geometryUploadTime: totalGeomTime, lastSceneUpdateTime: lastSceneUpdate, chunkDecodeTimes: [0,0]};
+
 		}
 		// ─── IMPORTANCE / FULL mode ───
 		const chunks: DecoderMessage[] = [];
@@ -108,12 +86,7 @@ function createPointCloudProcessor(
 			totalPoints += chunk.numPoints;
 		}
 
-
-		const chunkDecodeTimes = chunks.map(c => c.dracoDecodeTime);
-		const totalDecodeTime  = chunkDecodeTimes.reduce((sum, t) => sum + t, 0);	
-
 		// Merge all decoded chunks into single position/color buffers
-		const geomStart = performance.now();
 		if (!pointCloudGeometry) {
 			pointCloudGeometry = new THREE.BufferGeometry();
 			const mat = new THREE.PointsMaterial({ vertexColors: true, size: 0.1, sizeAttenuation: false });
@@ -142,12 +115,7 @@ function createPointCloudProcessor(
 		);
 		pointCloudGeometry.attributes.position.needsUpdate = true;
 		pointCloudGeometry.attributes.color.needsUpdate = true;
-		const lastSceneUpdate = performance.now();
 
-		const totalGeomTime = performance.now() - geomStart;
-
-		// collect your timing stats as before
-		return {decodeTime: totalDecodeTime, geometryUploadTime: totalGeomTime, lastSceneUpdateTime: lastSceneUpdate, chunkDecodeTimes: chunkDecodeTimes};	
 	};
 }
 
@@ -182,45 +150,7 @@ async function setupScenePromise(){
 		decodedColView
 	);
 
-	const dci = new DrawCallInspector( renderer, scene, camera, {} );
-	dci.mount();
-
-	//renderer.setAnimationLoop(() => {
-	//	statsFPS.begin();
-	//	statsMS.begin();
-
-	//	renderer.render(scene, camera);
-
-	//	statsFPS.end();
-	//	statsMS.end();
-	//});
-
-	function animate() {
-	    requestAnimationFrame( animate );
-		dci.update();
-		dci.begin();
-		renderer.render( scene, camera );
-		dci.end();
-	}
-
-	animate();
-
-	function waitForNextFrame(renderer: THREE.WebGLRenderer, since: number): Promise<number> {
-		// Use XR session’s RAF when the headset is presenting, otherwise window RAF
-		const xrSession = renderer.xr?.isPresenting
-				? renderer.xr.getSession()!
-				: null;
-
-		const raf = xrSession
-				? xrSession.requestAnimationFrame.bind(xrSession)
-				: window.requestAnimationFrame;
-
-		return new Promise<number>(resolve => {
-			raf((t: DOMHighResTimeStamp /* or XRFrame timestamp */) => {
-			resolve(t - since);          // ms elapsed until *presentation*
-			});
-		});
-	}
+	renderer.render( scene, camera );
 
 	worker.postMessage({
 		type: 'init',
@@ -253,18 +183,6 @@ async function setupScenePromise(){
 
     		incomingBuffers.push({ offset, length: payload.byteLength });
 
-    		// if we haven’t got them all yet, bail out early
-			if (incomingBuffers.length < expectedChunks) {
-				console.log(__filename, "BAIL OUT THE SYSTEM IS GOING TO FREEZE");
-				return {
-					decodeTime: 0,
-					geometryUploadTime: 0,
-					frameTime: 0,
-					totalTime: 0,
-					chunkDecodeTimes: [0]
-				};
-			}
-
 			console.log(__filename, `Incoming Buffers Length: ${incomingBuffers.length}`);
 
 
@@ -272,26 +190,10 @@ async function setupScenePromise(){
 				console.log(__filename, `Buffer length: ${incomingBuffers[i].length}`);
 			}
 
-			const { decodeTime, chunkDecodeTimes, geometryUploadTime, lastSceneUpdateTime}
-			 = await processPointCloud(sharedEncodedBuffer, incomingBuffers, bufferCount);
+			await processPointCloud(sharedEncodedBuffer, incomingBuffers, bufferCount);
 
 			expectedChunks = 0;
     		incomingBuffers = [];
-			// this is not correct
-			// const frameTime  = await waitForNextFrame(renderer, lastSceneUpdateTime);
-			const frameTime = 0;
-			const totalTime = frameTime + decodeTime + geometryUploadTime;
-			// send timing metrics back to server here if needed
-			console.log(
-				__filename,
-				`Per-chunk decode times: [${chunkDecodeTimes.join(", ")}] ms\n` +
-    		  	`Worker decode: ${decodeTime} ms, ` +
-    		  	`Geometry upload: ${geometryUploadTime} ms, ` +
-				`Frame Render: ${frameTime} ms, ` + 
-				`Total time: ${totalTime} ms,`
-    		);
-
-			return { decodeTime, geometryUploadTime, frameTime, totalTime, chunkDecodeTimes};
 
 		},
 		(err) => console.log(__filename, 'WebSocket error:', err)

@@ -21,7 +21,7 @@ from ultralytics import YOLOE
 from draco_wrapper.draco_wrapper import (
     DracoWrapper,
     EncodingMode,
-    VizualizationMode
+    VisualizationMode
 )
 
 from draco_wrapper import draco_bindings as dcb # temporary, for logging quality sims
@@ -74,7 +74,7 @@ def camera_process(
     global DEBUG
 
     # Hyperparameters to move to argparse
-    visualization_mode = VizualizationMode.COLOR
+    visualization_mode = VisualizationMode.COLOR
     encoding_mode      = EncodingMode.FULL
 
     thread_executor = ThreadPoolExecutor(max_workers=2)
@@ -210,7 +210,6 @@ def camera_process(
             # View the raw texture buffer as a (num_points × 2) float32 array: each row is one UV pair (u, v)
             texcoords = np.frombuffer(texture_buffer, dtype=np.float32).reshape(num_points, 2) # 1ms
 
-            texture_scaling_time_start = time.perf_counter()
             # Precompute the scale factors once
             # Flatten and mask arrays
             # Each u,v is normalized in [0.0, 1.0]. Scale u by (width-1) to get a column index in [0, width-1],
@@ -283,7 +282,6 @@ def camera_process(
                     points_out_roi = vertices[out_roi]; colors_out_roi = colors[out_roi]
                 
                     # MULTIPROCESSING IMPORTANCE
-                    multiprocessing_compression_time_start = time.perf_counter()
                     futures: dict[str, concurrent.futures.Future] = {}
                 
                     buffer_roi = None
@@ -469,7 +467,7 @@ def camera_process(
                     cv2.rectangle(display, (roi[0], roi[1]), (roi[2], roi[3]), (0,255,0), 2)
             
 
-                if visualization_mode is VizualizationMode.DEPTH:
+                if visualization_mode is VisualizationMode.DEPTH:
                     depth_8u = cv2.convertScaleAbs(depth_img, alpha=255.0 / depth_img.max())
                     depth_colormap = cv2.applyColorMap(depth_8u, cv2.COLORMAP_JET)
                     display = depth_colormap
@@ -719,8 +717,6 @@ def launch_processes(server: broadcaster.ProducerServer, args, device : str) -> 
     cmr_depth_width, cmr_depth_height = producer_cli.map_to_camera_res[args.realsense_depth_stream]
     cmr_fps = args.realsense_target_fps
 
-    simulation = args.simulation
-
     stop_event = mp.Event()
     ready_frame_event = mp.Event()
     ready_cluster_event = mp.Event()
@@ -793,8 +789,7 @@ def launch_processes(server: broadcaster.ProducerServer, args, device : str) -> 
         camera_process(server, shm_frame.name, shm_cluster.name, shm_roi.name,
             cmr_clr_width, cmr_clr_height,
             cmr_depth_width, cmr_depth_height, cmr_fps,
-            stop_event, ready_frame_event, ready_cluster_event, ready_roi_event,
-            simulation)
+            stop_event, ready_frame_event, ready_cluster_event, ready_roi_event)
         
         predictor_proc.terminate()
         predictor_proc.join()

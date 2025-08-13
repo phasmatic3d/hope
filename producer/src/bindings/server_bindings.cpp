@@ -39,15 +39,9 @@
 namespace nb = nanobind;
 using websocketpp::connection_hdl;
 
-class ProducerServer
-{
+class ProducerServer {
 public:
-    ProducerServer
-    (
-        int port,
-    ):
-    m_port(port),
-    {
+    ProducerServer(int port):m_port(port) {
         m_logger = spdlog::stdout_color_mt("broadcaster");
         m_logger->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [%n] %v");
         m_logger->set_level(spdlog::level::debug);
@@ -203,7 +197,7 @@ public:
             {
                 m_logger->error("Send Failed: {}", ec.message());
             }
-
+        }
     }
 
 
@@ -300,12 +294,6 @@ public:
         m_logger->info("Constructed URL: {}", m_redirect_url);
     }
 
-    std::size_t connection_count() const 
-    {
-        return m_connections.size();
-    }
-
-
 private:
     size_t m_port = 0;
     std::shared_ptr<spdlog::logger> m_logger;
@@ -314,15 +302,15 @@ private:
     std::mutex m_connection_mutex;
     std::string m_redirect_url = "/";
 
-}
+};
 
 NB_MODULE(broadcaster, m)
 {
     m.doc() = "WebSocket++ Producer server binding";
 
     nb::class_<ProducerServer>(m, "ProducerServer")
-        .def(nb::init<int, bool, bool>(),
-            nb::arg("port"),
+        .def(nb::init<int>(),
+            nb::arg("port"))
         .def("listen", &ProducerServer::listen,
             nb::call_guard<nb::gil_scoped_release>(),
             "Begin listening on the configured port")
