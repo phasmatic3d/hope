@@ -325,7 +325,6 @@ def camera_process(
                         header = count.to_bytes(1, byteorder='little') + offset.to_bytes(4, byteorder='little')
                         packet = header + buffer
                         server.broadcast(packet)
-                        entry = server.wait_for_entry(broadcast_round)
                         offset += len(buffer)
 
 

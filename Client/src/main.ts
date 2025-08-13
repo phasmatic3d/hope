@@ -120,7 +120,7 @@ function createPointCloudProcessor(
 }
 
 
-async function setupScenePromise(){
+async function setupScene(){
 
 	const POINT_BUDGET = 100_000_000;
 
@@ -157,22 +157,6 @@ async function setupScenePromise(){
 
 	animate();
 
-	function waitForNextFrame(renderer: THREE.WebGLRenderer, since: number): Promise<number> {
-		// Use XR session’s RAF when the headset is presenting, otherwise window RAF
-		const xrSession = renderer.xr?.isPresenting
-				? renderer.xr.getSession()!
-				: null;
-
-		const raf = xrSession
-				? xrSession.requestAnimationFrame.bind(xrSession)
-				: window.requestAnimationFrame;
-
-		return new Promise<number>(resolve => {
-			raf((t: DOMHighResTimeStamp /* or XRFrame timestamp */) => {
-			resolve(t - since);          // ms elapsed until *presentation*
-			});
-		});
-	}
 	worker.postMessage({
 		type: 'init',
 		sharedEncodedBuffer,
@@ -221,106 +205,4 @@ async function setupScenePromise(){
   	);
 }
 
-async function setupScene() {
-	const scene = new THREE.Scene();
-	const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-
-	const renderer = new THREE.WebGLRenderer();
-	renderer.setSize(window.innerWidth, window.innerHeight);
-	renderer.xr.enabled = true;
-	document.body.appendChild(renderer.domElement);
-	document.body.appendChild(VRButton.createButton(renderer));
-
-	loadAndUpdatePointCloudFromWS_worker(scene);
-
-
-	camera.position.z = 15;
-	camera.position.y = -10;
-
-	//animate();
-	renderer.setAnimationLoop(() => {
-		
-		renderer.render(scene, camera);
-	});
-}
-
-async function loadAndUpdatePointCloudFromWS_worker(scene: THREE.Scene) {
-
-	const pending: Array<{ positions: Float32Array; colors: Uint8Array; numPoints: number }> = [];
-	let numPC = 0;
-
-	worker.onmessage = (event: MessageEvent<{positions: Float32Array; colors: Uint8Array; numPoints: number}>) => {
-    	pending.push({ positions: event.data.positions, colors: event.data.colors, numPoints: event.data.numPoints });
-    	console.time("Rendering")
-    	if (pending.length === numPC) {
-    		// concatenate all N chunks
-    		let totalPts = 0;
-    		let totalCols = 0;
-    		for (const c of pending) {
-				totalPts += c.positions.length;
-				totalCols += c.colors.length;
-    		}
-
-			const mergedPos = new Float32Array(totalPts);
-			const mergedCol = new Uint8Array(totalCols);
-
-			let posOffset = 0, colorOffset = 0; // offsets for the buffers
-			for (const pc of pending) {
-				mergedPos.set(pc.positions, posOffset);
-				mergedCol.set(pc.colors, colorOffset);
-				posOffset += pc.positions.length;
-				colorOffset += pc.colors.length;
-			}
-
-			// update or create geometry
-			if (pointCloudGeometry) {
-				pointCloudGeometry.setAttribute('position', new THREE.BufferAttribute(mergedPos, 3));
-				pointCloudGeometry.setAttribute('color',    new THREE.BufferAttribute(mergedCol, 3, true));
-				pointCloudGeometry.attributes.position.needsUpdate = true;
-				pointCloudGeometry.attributes.color.needsUpdate    = true;
-			} else {
-				pointCloudGeometry = new THREE.BufferGeometry();
-				pointCloudGeometry.setAttribute('position', new THREE.BufferAttribute(mergedPos, 3));
-				pointCloudGeometry.setAttribute('color',    new THREE.BufferAttribute(mergedCol, 3, true));
-				const material = new THREE.PointsMaterial({
-					vertexColors: true,
-					size: 0.01,
-					sizeAttenuation: false
-				});
-				pointCloud = new THREE.Points(pointCloudGeometry, material);
-				pointCloud.scale.set(20, 20, 20); 
-				pointCloud.rotateX(3.14) // HARDCODED ROTATION: TODO (AND ALL OF THE OTHER TRANSFORMATIONS)
-				pointCloud.position.y = -10;
-				pointCloud.position.z = 13;
-				pointCloud.position.x = 0;
-				scene.add(pointCloud);
-			}
-
-			numPC = 0;
-			pending.length = 0;
-			console.timeEnd("Rendering")
-    	}
-	};
-  
-  	/*openConnection(
-		(data: ArrayBuffer) => {
- 	 		// first byte tells us how many chunks to expect
- 	 		const dv = new DataView(data);
- 	 		const count = dv.getUint8(0);
-
- 	 		if (numPC === 0) {
- 	 		  	numPC = count;
- 	 		}
-
- 	 		// slice off that prefix and send the raw Draco bytes to the worker
- 	 		const dracoBuf = data.slice(1);
- 	 		worker.postMessage({ data: dracoBuf });
- 	 	}, 
-		(msg) => {
- 	 	  	console.log("Reject", msg);
- 	 	}
-	);*/
-}
-
-//setupScene();
-setupScenePromise();
+setupScene();
