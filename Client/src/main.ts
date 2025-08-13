@@ -150,8 +150,29 @@ async function setupScenePromise(){
 		decodedColView
 	);
 
-	renderer.render( scene, camera );
+	function animate() {
+	    requestAnimationFrame( animate );
+		renderer.render( scene, camera );
+	}
 
+	animate();
+
+	function waitForNextFrame(renderer: THREE.WebGLRenderer, since: number): Promise<number> {
+		// Use XR session’s RAF when the headset is presenting, otherwise window RAF
+		const xrSession = renderer.xr?.isPresenting
+				? renderer.xr.getSession()!
+				: null;
+
+		const raf = xrSession
+				? xrSession.requestAnimationFrame.bind(xrSession)
+				: window.requestAnimationFrame;
+
+		return new Promise<number>(resolve => {
+			raf((t: DOMHighResTimeStamp /* or XRFrame timestamp */) => {
+			resolve(t - since);          // ms elapsed until *presentation*
+			});
+		});
+	}
 	worker.postMessage({
 		type: 'init',
 		sharedEncodedBuffer,
