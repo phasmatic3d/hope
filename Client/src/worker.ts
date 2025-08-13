@@ -32,35 +32,25 @@ self.onmessage = async (ev: MessageEvent<any>) => {
 	}
 
   // Decode request
-if (data.type === 'decode') {
-	if (!Module) await ModuleReady;
-	
-	const { offset, length } = data;
-	const raw = sharedEncodedView.subarray(offset, offset + length);
+	if (data.type === 'decode') {
+		const { offset, length, writeIndex } = data;
+		const raw = sharedEncodedView.subarray(offset, offset + length);
 
-	//const ptr = Module._malloc(length);
-	Module.HEAPU8.set(raw, scratchPtr);
-	const pcPtr = Module._decode_draco(scratchPtr, length);
-	//Module._free(ptr);
-	if (pcPtr === 0) throw new Error('Draco decode failed');
+		Module.HEAPU8.set(raw, scratchPtr);
+		const pcPtr = Module._decode_draco(scratchPtr, length);
+		if (pcPtr === 0) throw new Error('Draco decode failed');
 
-	// unpack
-	const positionsPtr = Module.getValue(pcPtr + 0, 'i32');
-	const colorsPtr    = Module.getValue(pcPtr + 4, 'i32');
-	const numPoints    = Module.getValue(pcPtr + 8, 'i32');
-	const heap = Module.HEAPU8.buffer;
-	const inPos = new Float32Array(heap, positionsPtr, numPoints * 3);
-	const inCol = new Uint8Array (heap, colorsPtr,    numPoints * 3);
+		const positionsPtr = Module.getValue(pcPtr + 0, 'i32');
+		const colorsPtr    = Module.getValue(pcPtr + 4, 'i32');
+		const numPoints    = Module.getValue(pcPtr + 8, 'i32');
 
-	//Module._free_pointcloud(pcPtr);
+		const heap  = Module.HEAPU8.buffer;
+		const inPos = new Float32Array(heap, positionsPtr, numPoints * 3);
+		const inCol = new Uint8Array(heap, colorsPtr,    numPoints * 3);
 
-	decodedPosView.set(inPos, offset * 3);
-	decodedColView.set(inCol, offset * 3);
+		decodedPosView.set(inPos, writeIndex * 3);
+		decodedColView.set(inCol, writeIndex * 3);
 
-	const msg: DecoderMessage = {
-		type: 'decoded',
-		numPoints,
-	};
-	self.postMessage( msg );
+		self.postMessage({ type: 'decoded', numPoints } as DecoderMessage);
 	}
 };

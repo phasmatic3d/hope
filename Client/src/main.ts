@@ -1,17 +1,13 @@
-// @ts-nocheck
 
 import * as THREE from 'three';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import { openConnection } from './transmissionWS';
-import {DecoderMessage, createPointCloudResult} from './types';
+import { DecoderMessage } from './types';
 
-const worker = new Worker(new URL('./worker.ts', import.meta.url), {  });
-const ENCODED_HEADER = 5
+const worker = new Worker(new URL('./worker.ts', import.meta.url), { });
+const ENCODED_HEADER = 5;
 
-let decoderModule: any;
-let pointCloud: THREE.Points | null = null;
-let pointCloudGeometry: THREE.BufferGeometry | null = null;
-let __filename: "MAIN"
+let __filename: "MAIN";
 
 function createPointCloudProcessor(
 	scene: THREE.Scene,
@@ -21,12 +17,14 @@ function createPointCloudProcessor(
 	let pointCloudGeometry: THREE.BufferGeometry | null = null;
 	let pointCloud: THREE.Points | null = null;
 
-	// State for IMPORTANCE/FULL mode
-	let expectedChunks = 0;   // how many chunks we expect for the current frame/batch
-	let decodedChunks  = 0;   // how many chunks have finished decoding
-	let totalPoints    = 0;   // total points across decoded chunks in this batch
+	// Frame state (importance/full mode)
+	let expectedChunks = 0;	
+	let decodedChunks  = 0;	
+	let totalPoints    = 0;		
+	let currentPointCursor = 0;	// next write start (in points)
+	let inFlight = false;		// true while a chunk is being decoded
+	const queue: { offset: number; length: number }[] = [];
 
-	// Make the Points object once
 	function ensurePointCloud() {
 		if (pointCloudGeometry) return;
 		pointCloudGeometry = new THREE.BufferGeometry();
@@ -35,43 +33,77 @@ function createPointCloudProcessor(
 		pointCloud.scale.set(20, 20, 20);
 		pointCloud.rotateX(Math.PI);
 		pointCloud.position.set(0, -10, 13);
+		//pointCloud.frustumCulled = false;
 		scene.add(pointCloud);
 	}
 
-	// One persistent worker message listener
+	function startNext() {
+		if (inFlight) return;
+		if (queue.length === 0) return;
+		const next = queue.shift()!;
+		const writeIndex = currentPointCursor; // in points
+		inFlight = true;
+		worker.postMessage({
+			type: 'decode',
+			offset: next.offset,
+			length: next.length,
+			writeIndex
+		});
+	}
+
+	// Persistent worker listener
 	const onWorkerMessage = (ev: MessageEvent) => {
-		const msg = ev.data;
-		if (!msg || msg.type !== 'decoded') return;
+		const msg = ev.data as DecoderMessage | { type: 'error'; message: string };
+		if (!msg) return;
 
+		if ((msg as any).type === 'error') {
+			console.error('Worker error:', (msg as any).message);
+			// Fail-safe: end the frame so we don't get stuck
+			expectedChunks = 0;
+			decodedChunks  = 0;
+			totalPoints    = 0;
+			currentPointCursor = 0;
+			inFlight = false;
+			queue.length = 0;
+			return;
+		}
+
+		if (msg.type !== 'decoded') return;
+
+		// advance cursors
 		decodedChunks += 1;
-		totalPoints   += (msg.numPoints ?? 0);
+		totalPoints   += msg.numPoints;
+		currentPointCursor += msg.numPoints;
+		inFlight = false;
 
-		// When we’ve decoded them all, update the geometry
+		if (decodedChunks < expectedChunks) {
+			startNext();
+			return;
+		}
+
 		if (expectedChunks > 0 && decodedChunks === expectedChunks) {
 			ensurePointCloud();
 
 			pointCloudGeometry!.setAttribute(
 				'position',
-				new THREE.BufferAttribute(
-					decodedPosView.subarray(0, totalPoints * 3),
-					3
-				)
+				new THREE.BufferAttribute(decodedPosView.subarray(0, totalPoints * 3), 3)
 			);
 			pointCloudGeometry!.setAttribute(
 				'color',
-				new THREE.BufferAttribute(
-					decodedColView.subarray(0, totalPoints * 3),
-					3,
-					true
-				)
+				new THREE.BufferAttribute(decodedColView.subarray(0, totalPoints * 3), 3, true)
 			);
+
+			pointCloudGeometry!.setDrawRange(0, totalPoints); // prevents leftover points
 			pointCloudGeometry!.attributes.position.needsUpdate = true;
 			pointCloudGeometry!.attributes.color.needsUpdate    = true;
 
-			// reset for next batch
+			// Reset frame state
 			expectedChunks = 0;
 			decodedChunks  = 0;
 			totalPoints    = 0;
+			currentPointCursor = 0;
+			inFlight = false;
+			queue.length = 0;
 		}
 	};
 
@@ -82,7 +114,7 @@ function createPointCloudProcessor(
 		(worker as any).__pcpHandlerAttached = true;
 	}
 
-	// Synchronous per-message entry point
+	// Per-message entry point
 	return (
 		sharedBuf: SharedArrayBuffer,
 		chunk: { offset: number; length: number },
@@ -90,7 +122,7 @@ function createPointCloudProcessor(
 	): void => {
 		const encView = new Uint8Array(sharedBuf);
 
-		// NONE mode
+		// NONE mode 
 		if (bufferCount === 0) {
 			const { offset, length } = chunk;
 			const raw = encView.subarray(offset, offset + length);
@@ -100,40 +132,32 @@ function createPointCloudProcessor(
 			const posBytes = raw.slice(0, 4 * 3 * numPoints);
 			const colBytes = raw.slice(4 * 3 * numPoints);
 
-			const positions = new Float32Array(
-				posBytes.buffer,
-				posBytes.byteOffset,
-				numPoints * 3
-			);
-			const colors = new Uint8Array(
-				colBytes.buffer,
-				colBytes.byteOffset,
-				numPoints * 3
-			);
+			const positions = new Float32Array(posBytes.buffer, posBytes.byteOffset, numPoints * 3);
+			const colors    = new Uint8Array(  colBytes.buffer, colBytes.byteOffset, numPoints * 3);
 
 			ensurePointCloud();
 			pointCloudGeometry!.setAttribute('position', new THREE.BufferAttribute(positions, 3));
 			pointCloudGeometry!.setAttribute('color',    new THREE.BufferAttribute(colors, 3, true));
+			pointCloudGeometry!.setDrawRange(0, numPoints);
 			pointCloudGeometry!.attributes.position.needsUpdate = true;
 			pointCloudGeometry!.attributes.color.needsUpdate    = true;
 			return;
 		}
 
-		// IMPORTANCE/FULL mode
+		// IMPORTANCE / FULL mode: queue chunks, decode sequentially
 		if (expectedChunks === 0) {
 			expectedChunks = bufferCount;
 			decodedChunks  = 0;
 			totalPoints    = 0;
+			currentPointCursor = 0;
+			inFlight = false;
+			queue.length = 0;
 		}
 
-		worker.postMessage({
-			type: 'decode',
-			offset: chunk.offset,
-			length: chunk.length
-		});
+		queue.push({ offset: chunk.offset, length: chunk.length });
+		startNext();
 	};
 }
-
 
 async function setupScene() {
 	const POINT_BUDGET = 100_000_000;
@@ -179,12 +203,13 @@ async function setupScene() {
 	openConnection(
 		(data: ArrayBuffer) => {
 			const dv          = new DataView(data);
-			const bufferCount = dv.getUint8(0);
-			const offset      = dv.getUint32(1, true);
+			const bufferCount = dv.getUint8(0);          // number of chunks in this frame (0 = NONE mode)
+			const offset      = dv.getUint32(1, true);   // where to place payload in sharedEncodedBuffer
 
 			const payload = new Uint8Array(data, ENCODED_HEADER);
 			sharedEncodedView.set(payload, offset);
 
+			// Submit this one chunk; processor queues and serializes decoding
 			processPointCloud(sharedEncodedBuffer, { offset, length: payload.byteLength }, bufferCount);
 		},
 		(err: unknown) => console.log(__filename, 'WebSocket error:', err)
