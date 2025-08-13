@@ -24,11 +24,6 @@ from draco_wrapper.draco_wrapper import (
     VizualizationMode
 )
 
-from utils import (
-    write_pointcloud_ply
-)
-
-
 from draco_wrapper import draco_bindings as dcb # temporary, for logging quality sims
 
 from broadcaster_wrapper import (
@@ -37,23 +32,11 @@ from broadcaster_wrapper import (
 
 
 from concurrent.futures import (
-    ProcessPoolExecutor, 
     ThreadPoolExecutor,
 )
 
 from rich.live import Live
 from rich.console import Group
-
-from statslogger import (
-    PipelineTiming,
-    CompressionStats,
-    calculate_overall_time,
-    make_total_time_table,
-    write_stats_csv,
-    write_simulation_csv,
-    write_quality_simulation_csv,
-    generate_combinations
-)
 
 import multiprocessing as mp
 from multiprocessing import shared_memory
@@ -86,41 +69,13 @@ def camera_process(
         stop_event: mp.Event,
         ready_frame_event: mp.Event,
         ready_cluster_event: mp.Event,
-        ready_roi_event: mp.Event,
-        simulation: bool) :
-    
-    def apply_combo_settings(combo): # Helper function for setting a combination for simulations
-        if encoding_mode == EncodingMode.FULL:
-            draco_full_encoding.position_quantization_bits = combo["pos_bits"]
-            draco_full_encoding.color_quantization_bits    = combo["col_bits"]
-            draco_full_encoding.speed_encode               = combo["encoding_speed"]
-            draco_full_encoding.speed_decode               = combo["decoding_speed"]
-        elif encoding_mode == EncodingMode.IMPORTANCE:
-            draco_roi_encoding.position_quantization_bits        = combo["pos_bits_in"]
-            draco_roi_encoding.color_quantization_bits           = combo["col_bits_in"]
-            draco_roi_encoding.speed_encode                      = combo["encoding_speed_in"]
-            draco_roi_encoding.speed_decode                      = combo["decoding_speed_in"]
-            draco_outside_roi_encoding.position_quantization_bits = combo["pos_bits_out"]
-            draco_outside_roi_encoding.color_quantization_bits    = combo["col_bits_out"]
-            draco_outside_roi_encoding.speed_encode               = combo["encoding_speed_out"]
-            draco_outside_roi_encoding.speed_decode               = combo["decoding_speed_out"]
-            active_layers[:] = combo["layers"]
-    
+        ready_roi_event: mp.Event) :
+
     global DEBUG
 
     # Hyperparameters to move to argparse
     visualization_mode = VizualizationMode.COLOR
     encoding_mode      = EncodingMode.FULL
-
-    frame_stats_buffer = deque(maxlen=30) # buffer for dynamic stats logging (CSV)
-
-    # simulation settings for simulation csv logging
-    simulation_combos   = []
-    performance_simulation_index    = None
-    performance_simulation_buffer   = deque(maxlen=30)
-
-    quality_simulation_index    = None
-    quality_simulation_buffer   = deque(maxlen=30)
 
     thread_executor = ThreadPoolExecutor(max_workers=2)
     
@@ -170,23 +125,12 @@ def camera_process(
     fps = 0.0
 
 
-    compression_roi_stats  = CompressionStats()
-    compression_out_stats  = CompressionStats()
-    compression_full_stats = CompressionStats()
-    pipeline_stats = PipelineTiming()
-
     # Settings
-    draco_full_encoding = DracoWrapper(
-        compression_stats=compression_full_stats
-    )
+    draco_full_encoding = DracoWrapper()
 
-    draco_roi_encoding = DracoWrapper(
-        compression_stats=compression_roi_stats
-    )
+    draco_roi_encoding = DracoWrapper()
 
-    draco_outside_roi_encoding = DracoWrapper(
-        compression_stats=compression_out_stats
-    )
+    draco_outside_roi_encoding = DracoWrapper()
 
     # SAM
     sf = shared_memory.SharedMemory(name=shared_frame_name)
@@ -223,22 +167,16 @@ def camera_process(
             frame_count += 1
             frames = pipeline.wait_for_frames()
 
-            pipeline_stats.frame_preparation_ms = time.perf_counter()
-
-            pipeline_stats.frame_alignment_ms = time.perf_counter()
             frames = align.process(frames)
-            pipeline_stats.frame_alignment_ms = (time.perf_counter() - pipeline_stats.frame_alignment_ms) * 1000
 
             depth_frame = frames.get_depth_frame()  
             color_frame = frames.get_color_frame()    
                         
             depth_height, depth_width = depth_frame.get_height(), depth_frame.get_width()
 
-            pipeline_stats.depth_culling_ms = time.perf_counter()
             # Apply the depth-threshold filter to drop pixels too near or too far
             if(encoding_mode != EncodingMode.NONE):
                 depth_frame = depth_thresh.process(depth_frame)
-            pipeline_stats.depth_culling_ms = (time.perf_counter() - pipeline_stats.depth_culling_ms) * 1000
 
             # Prepare image for display
             # Extract raw data buffers from the RealSense frames into NumPy arrays:
@@ -250,7 +188,6 @@ def camera_process(
             display = color_img
 
             # Generate point cloud
-            point_cloud_time_start = time.perf_counter()
             # Create a point-cloud processor object. This handles generating 3D point data from depth frames.
             rpc = rs.pointcloud()
             # Associate the upcoming depth-to-3D mapping with the given color frame.
@@ -260,12 +197,7 @@ def camera_process(
             # The output 'points' contains 3D coordinates (X, Y, Z) for each pixel,
             # along with indices into 'color_frame' so that each point can be colored.
             points = rpc.calculate(depth_frame)
-            pipeline_stats.point_cloud_creation_ms = (time.perf_counter() - point_cloud_time_start) * 1000
 
-            pipeline_stats.frame_preparation_ms = (time.perf_counter() - pipeline_stats.frame_preparation_ms) * 1000 # frame prep end
-            
-            
-            pipeline_stats.data_preparation_ms = time.perf_counter()
             num_points = points.size()
 
             # [x0, y0, z0,  x1, y1, z1,  x2, y2, z2, …]
@@ -289,22 +221,13 @@ def camera_process(
 
             pixel_indices = row_coordinates * depth_width + column_coordinates
 
-            pipeline_stats.texture_scaling_ms = (time.perf_counter() - texture_scaling_time_start) * 1000
-
-            pipeline_stats.color_lookup_ms = time.perf_counter()
             # Flatten the H×W×3 BGR image into a (H*W)×3 array so each row is one pixel’s BGR triplet
             flat_color_pixels = color_img.reshape(-1, 3)
             colors = flat_color_pixels[pixel_indices]  # shape: (N, 3) in [R, G, B] order
-            pipeline_stats.color_lookup_ms = ((time.perf_counter() - pipeline_stats.color_lookup_ms) * 1000)
 
-            if (encoding_mode == EncodingMode.NONE):
-                pipeline_stats.data_preparation_ms = (time.perf_counter() - pipeline_stats.data_preparation_ms) * 1000 #prep end
-
-       
+            if (encoding_mode == EncodingMode.NONE):   
                 raw_points = vertices    # shape: (N,3) float32
                 raw_cols = colors     # shape: (N,3) uint8
-
-
 
                 if(raw_points.size > 0):
                     offset = 0
@@ -313,14 +236,7 @@ def camera_process(
                     packet = header + payload
                     server.broadcast(packet)
 
-                entry = server.wait_for_entry(broadcast_round)
-                if entry:
-                    broadcast_round += 1
-                    pipeline_stats.approximate_rtt_ms = entry.approximate_rtt_ms
-
             else:
-
-                build_valid_points_start_time = time.perf_counter()
                 # find valid points
                 depth_flat = depth_img.ravel()
                 # Build a (H*W,) boolean mask where True means:
@@ -330,21 +246,13 @@ def camera_process(
                     (depth_flat > 0)                         # non-zero depth reading
                     & np.isfinite(vertices[:, 2])      # Z isn’t NaN or ±Inf
                 )
-
-                pipeline_stats.build_valid_points_ms = (time.perf_counter() - build_valid_points_start_time) * 1000
                 
                 # --- SUBSAMPLING ---
-                subsampling_time_start = time.perf_counter()
                 effective_ratio = sum(r for r, on in zip(sampling_layers, active_layers) if on)
 
                 # roll one random array and reject ~ (1‑effective_ratio) of valid points
                 rnd = np.random.rand(valid.shape[0])
                 subsample_mask = rnd < effective_ratio
-
-                # Add the subsampling mask to the valid points
-                #valid &= subsample_mask # TODO: Maybe do not subsample the entire point cloud (maybe this has use in IMPORTANCE mode)
-                pipeline_stats.subsampling_ms = (time.perf_counter() - subsampling_time_start ) * 1000
-                
                 if(encoding_mode == EncodingMode.IMPORTANCE):
                     # ---GESTURE RECOGNITION---
                     gesture_recognizer.recognize(display, frame_id)
@@ -369,14 +277,10 @@ def camera_process(
 
                     flat_cluster = prev_cluster.flatten()
 
-                    compression_full_stats.masking_ms = time.perf_counter()
                     in_roi = valid & flat_cluster
                     out_roi = valid & ~in_roi & subsample_mask
                     points_in_roi = vertices[in_roi]; colors_in_roi = colors[in_roi]
                     points_out_roi = vertices[out_roi]; colors_out_roi = colors[out_roi]
-                    compression_full_stats.masking_ms = (time.perf_counter() - compression_full_stats.masking_ms ) * 1000
-
-                    pipeline_stats.data_preparation_ms = (time.perf_counter() - pipeline_stats.data_preparation_ms) * 1000 #prep end
                 
                     # MULTIPROCESSING IMPORTANCE
                     multiprocessing_compression_time_start = time.perf_counter()
@@ -409,7 +313,6 @@ def camera_process(
                             buffer_roi = future.result()  
                         if label == "out_roi":
                             buffer_out = future.result() 
-                    pipeline_stats.multiprocessing_compression_ms = (time.perf_counter() - multiprocessing_compression_time_start) * 1000
 
                     # Broadcast
                     buffers = []
@@ -420,190 +323,34 @@ def camera_process(
                     count = len(buffers)
                     offset  = 0   
 
-                    any_broadcasted = False
                     for buffer in buffers:
                         header = count.to_bytes(1, byteorder='little') + offset.to_bytes(4, byteorder='little')
                         packet = header + buffer
-
-                        any_broadcasted |= server.broadcast_batch(batch, packet)
+                        server.broadcast(packet)
                         entry = server.wait_for_entry(broadcast_round)
-                        if entry:
-                            broadcast_round += 1
-                            pipeline_stats.approximate_rtt_ms += entry.approximate_rtt_ms
-
                         offset += len(buffer)
-                    if any_broadcasted:
-                        batch += 1
+
 
 
                 else: # ENCODE THE FULL FRAME
                     # Masking
-                    compression_full_stats.masking_ms = time.perf_counter()
                     points_full = vertices[valid]
                     colors_full = colors[valid]
-                    compression_full_stats.masking_ms = (time.perf_counter() - compression_full_stats.masking_ms ) * 1000
-                
+
 
                     # Encode entire valid cloud
-                    pipeline_stats.data_preparation_ms = (time.perf_counter() - pipeline_stats.data_preparation_ms) * 1000 #prep end
                     offset  = 0 
                     if(points_full.any()):
                         buffer_full = draco_full_encoding.encode(points_full, colors_full, deduplicate=False)
                         header = bytes([1]) + offset.to_bytes(4, byteorder='little')
                         packet = header + buffer_full
                         server.broadcast(packet) 
-                    
-                    entry = server.wait_for_entry(broadcast_round)
-                    if entry:
-                        broadcast_round += 1
                        
                         
             
 
             # Logging and display
             if DEBUG:
-                if (encoding_mode == EncodingMode.IMPORTANCE):
-                    points_full = vertices[out_roi & subsample_mask | in_roi ]
-                    colors_full = colors[out_roi & subsample_mask | in_roi]
-
-                    raw_size_in  = points_in_roi.nbytes  + colors_in_roi.nbytes
-                    raw_size_out = points_out_roi.nbytes + colors_out_roi.nbytes
-                    raw_size = raw_size_in + raw_size_out
-                    encoded_size = compression_roi_stats.encoded_bytes + compression_out_stats.encoded_bytes
-                elif (encoding_mode == EncodingMode.FULL):
-                    raw_size = points_full.nbytes  + colors_full.nbytes
-
-                    encoded_size = compression_full_stats.encoded_bytes
-
-                # Logging
-                if(entry): # If broadcasting
-                    frame_stats_buffer.append({
-                        "frame_preparation_ms":         pipeline_stats.frame_preparation_ms,
-                        "data_preparation_ms":         pipeline_stats.data_preparation_ms,
-                        "multiprocessing_compression_ms": pipeline_stats.multiprocessing_compression_ms,
-                        "one_way_ms":                       entry.one_way_ms,
-                        "decode_ms":                        entry.pure_decode_ms,
-                        "geometry_upload_ms":                entry.pure_geometry_upload_ms,
-                        "render_ms":                        entry.pure_render_ms,
-                        "full_encode_ms":              compression_full_stats.compression_ms,
-                        "roi_encode_ms":               compression_roi_stats.compression_ms,
-                        "out_encode_ms":           compression_out_stats.compression_ms,
-                        "num_points":                  int(num_points),
-                        "full_points":                  int(compression_full_stats.number_of_points),
-                        "raw_points_size":                  int(raw_size),
-                        "encoded_points_size":              int (encoded_size),
-                        "in_roi_points":                int(compression_roi_stats.number_of_points),
-                        "out_roi_points":               int(compression_out_stats.number_of_points)
-                    })
-
-                    # Performance simulation
-                    if performance_simulation_index is not None: # only if simulation is running
-
-
-                        performance_simulation_buffer.append({
-                            "frame_preparation_ms":         pipeline_stats.frame_preparation_ms,
-                            "data_preparation_ms":          pipeline_stats.data_preparation_ms,
-                            "multiprocessing_compression_ms": pipeline_stats.multiprocessing_compression_ms,
-                            "one_way_ms":                       entry.one_way_ms,
-                            "decode_ms":                        entry.pure_decode_ms,
-                            "geometry_upload_ms":                  entry.pure_geometry_upload_ms,
-                            "render_ms":                  entry.pure_render_ms,
-                            "full_encode_ms":               compression_full_stats.compression_ms,
-                            "roi_encode_ms":                compression_roi_stats.compression_ms,
-                            "out_encode_ms":            compression_out_stats.compression_ms,
-                            "num_points":                   int(num_points),
-                            "full_points":                  int(compression_full_stats.number_of_points),
-                            "raw_points_size":                  int(raw_size),
-                            "encoded_points_size":              int (encoded_size),
-                            "in_roi_points":                int(compression_roi_stats.number_of_points),
-                            "out_roi_points":               int(compression_out_stats.number_of_points),
-                            
-                        })
-
-                        performance_simulation_index = write_simulation_csv(
-                            performance_simulation_buffer,
-                            simulation_combos,
-                            performance_simulation_index,
-                            encoding_mode,
-                            (cmr_clr_width, cmr_clr_height),
-                            (cmr_depth_width, cmr_depth_height),
-                        )
-                        if performance_simulation_index is not None:
-                            apply_combo_settings(simulation_combos[performance_simulation_index])
-                        else:
-                            print("SIMULATION COMPLETE ✅")
-
-
-                # now append into quality buffer if running quality simulation
-                if quality_simulation_index is not None :
-                    # decode points
-                    if encoding_mode == EncodingMode.FULL:
-                        decoded_positions, decoded_colors = dcb.decode_pointcloud(buffer_full)            
-                    elif encoding_mode == EncodingMode.IMPORTANCE and buffer_roi:
-                        #recalculate points full here (we don't have it from earlier)
-
-                        points_full = vertices[out_roi & subsample_mask | in_roi ]
-                        colors_full = colors[out_roi & subsample_mask | in_roi]
-
-                        decoded_positions_roi, decoded_colors_roi = dcb.decode_pointcloud(buffer_roi)
-                        decoded_positions_out, decoded_colors_out = dcb.decode_pointcloud(buffer_out)
-                        decoded_positions = np.vstack((decoded_positions_roi, decoded_positions_out)) 
-                        decoded_colors = np.vstack((decoded_colors_roi, decoded_colors_out))  
-
-
-                    position_diffs = np.linalg.norm(points_full - decoded_positions, axis=1)
-
-                    radii = np.linalg.norm(points_full, axis=1)
-                    max_radius = radii.max()
-                    relative_position_diffs = position_diffs / max_radius
-
-                    color_errs = np.abs(colors_full.astype(int) - decoded_colors.astype(int))
-                    relative_color_errs = color_errs / 255.0
-
-
-                    mean_pos_error        = position_diffs.mean()
-                    max_pos_error         = position_diffs.max()
-                    mean_relative_pos_error    = relative_position_diffs.mean()
-                    max_relative_pos_error     = relative_position_diffs.max()
-
-                    mean_color_error      = color_errs.mean()
-                    mean_relative_color_error  = relative_color_errs.mean()
-
-                    quality_simulation_buffer.append({
-                        "mean_pos_error":      mean_pos_error,
-                        "max_pos_error":       max_pos_error,
-                        "mean_color_error":    mean_color_error,
-                        "mean_relative_pos_error(%)":  mean_relative_pos_error,
-                        "max_relative_pos_error(%)":   max_relative_pos_error,
-                        "mean_relative_color_error(%)":mean_relative_color_error,
-                    })
-
-                    if quality_simulation_index is not None:
-
-                        apply_combo_settings(simulation_combos[quality_simulation_index])
-                        # dump .ply file
-                        if(len(quality_simulation_buffer) == quality_simulation_buffer.maxlen):
-                            try:
-                                filename = f"experiments/{encoding_mode.name}_exp_{quality_simulation_index}.ply"
-                                write_pointcloud_ply(
-                                    filename,
-                                    decoded_positions, 
-                                    decoded_colors     
-                                )
-                                print(f"Saved PLY for exp {quality_simulation_index} → {filename}")
-                            except Exception as e:
-                                print(f"Error saving PLY for exp {quality_simulation_index}: {e}")
-                        # write one row and advance
-                        quality_simulation_index = write_quality_simulation_csv(
-                            quality_simulation_buffer,
-                            simulation_combos,
-                            quality_simulation_index,
-                            encoding_mode
-                        )
-                    
-                    else:
-                        print("QUALITY-SIM COMPLETE ✅")
-
 
 
                 #---- CV DRAW ON SCREEN----
@@ -799,75 +546,6 @@ def camera_process(
                     active_layers[1] = not active_layers[1]
                 elif key == ord('3'):
                     active_layers[2] = not active_layers[2]
-                elif key == ord('c'): # Logging button
-                    if simulation:
-                        # kick off the full simulation sweep
-                        simulation_combos = generate_combinations(encoding_mode)
-                        if simulation_combos:
-                            performance_simulation_index    = 0
-                            performance_simulation_buffer.clear()
-                            apply_combo_settings(simulation_combos[0])
-                            print(f"PERF-SIM: starting {len(simulation_combos)} combos of {encoding_mode.name}")
-                        else:
-                            print(f"PERF-SIM: no combos for {encoding_mode.name}, falling back to normal CSV logging")
-                            write_stats_csv(
-                                frame_stats_buffer,
-                                encoding_mode,
-                                # color & depth resolutions
-                                (cmr_clr_width, cmr_clr_height),
-                                (cmr_depth_width, cmr_depth_height),
-                                # FULL mode params
-                                draco_full_encoding.speed_encode,
-                                draco_full_encoding.speed_decode,
-                                draco_full_encoding.position_quantization_bits,
-                                draco_full_encoding.color_quantization_bits,
-                                active_layers,
-                                # IMPORTANCE mode “in” params
-                                draco_roi_encoding.speed_encode,
-                                draco_roi_encoding.speed_decode,
-                                draco_roi_encoding.position_quantization_bits,
-                                draco_roi_encoding.color_quantization_bits,
-                                # IMPORTANCE mode “out” params
-                                draco_outside_roi_encoding.speed_encode,
-                                draco_outside_roi_encoding.speed_decode,
-                                draco_outside_roi_encoding.position_quantization_bits,
-                                draco_outside_roi_encoding.color_quantization_bits
-                            )
-                    else:
-                        write_stats_csv(
-                            frame_stats_buffer,
-                            encoding_mode,
-                            # resolutions
-                            (cmr_clr_width, cmr_clr_height),
-                            (cmr_depth_width, cmr_depth_height),
-                            # FULL mode params
-                            draco_full_encoding.speed_encode,
-                            draco_full_encoding.speed_decode,
-                            draco_full_encoding.position_quantization_bits,
-                            draco_full_encoding.color_quantization_bits,
-                            active_layers,
-                            # IMPORTANCE mode “in” params
-                            draco_roi_encoding.speed_encode,
-                            draco_roi_encoding.speed_decode,
-                            draco_roi_encoding.position_quantization_bits,
-                            draco_roi_encoding.color_quantization_bits,
-                            # IMPORTANCE mode “out” params
-                            draco_outside_roi_encoding.speed_encode,
-                            draco_outside_roi_encoding.speed_decode,
-                            draco_outside_roi_encoding.position_quantization_bits,
-                            draco_outside_roi_encoding.color_quantization_bits
-                        )
-                elif key == ord('v'):
-                    if (simulation):
-                    # kick off quality simulation
-                        simulation_combos = generate_combinations(encoding_mode)
-                        if simulation_combos:
-                            quality_simulation_index  = 0
-                            quality_simulation_buffer.clear()
-                            apply_combo_settings(simulation_combos[0])
-                            print(f"QUAL-SIM: starting {len(simulation_combos)} combos of {encoding_mode.name}")
-                        else:
-                            print(f"QUAL-SIM: no combos for {encoding_mode.name}, skipping.")
                 
     finally:
         pipeline.stop()

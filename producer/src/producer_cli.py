@@ -83,28 +83,6 @@ producer_cli.add_argument(
     help="Broadcast server port"
 )
 
-producer_cli.add_argument(
-        "--server_write_to_csv",        
-        type=bool, 
-        choices=[False, True],
-        default=True,
-        help="Write latency values to csv"
-    )
-
-producer_cli.add_argument(
-        "--server_use_pings_for_rtt",        
-        type=bool, 
-        choices=[False, True],
-        default=False,
-        help="Calculate RTT using pings instead of timestamps."
-    )
-
-producer_cli.add_argument(
-    "--simulation",
-    action="store_true",
-    default=False,
-    help="When true, pressing ‘c’ will run a full 90-frame hyperparam simulation. Otherwise it writes a last 30-frame csv pe press"
-)
 
 def getRequest(outputPath : Path, url : str) -> None:
     req = requests.get(url, stream=True, allow_redirects=True, timeout=10)
