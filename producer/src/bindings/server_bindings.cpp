@@ -123,8 +123,11 @@ public:
 
             std::filesystem::path file = base / req.substr(1);
             if (!std::filesystem::exists(file) || std::filesystem::is_directory(file)) {
-            con->set_status(websocketpp::http::status_code::not_found);
-            return;
+                con->set_status(websocketpp::http::status_code::not_found);
+                con->replace_header("Cross-Origin-Opener-Policy",  "same-origin");
+                con->replace_header("Cross-Origin-Embedder-Policy","require-corp");
+                con->replace_header("Cross-Origin-Resource-Policy","same-origin");
+                return;
             }
 
             // read the file
@@ -135,6 +138,10 @@ public:
 
             // set some basic headers
             con->set_status(websocketpp::http::status_code::ok);
+            con->replace_header("Cross-Origin-Opener-Policy",   "same-origin");
+            con->replace_header("Cross-Origin-Embedder-Policy", "require-corp");
+            con->replace_header("Cross-Origin-Resource-Policy", "same-origin");
+
             // very minimal MIME-type mapping
             if (file.extension() == ".html") {
             con->replace_header("Content-Type", "text/html");

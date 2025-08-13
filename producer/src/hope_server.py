@@ -315,9 +315,9 @@ def camera_process(
                         buffers.append(buffer_roi)
                     if buffer_out:
                         buffers.append(buffer_out)
+
                     count = len(buffers)
                     offset  = 0   
-
                     for buffer in buffers:
                         header = count.to_bytes(1, byteorder='little') + offset.to_bytes(4, byteorder='little')
                         packet = header + buffer

@@ -5,7 +5,7 @@ importScripts('/dracoCustom/draco_decoder.js');
 import type { DecoderMessage } from './types';
 
 let scratchPtr = 0;
-const MAX_CHUNK_BYTES = 500_000;  
+const MAX_CHUNK_BYTES = 15_500_000;  
 
 let Module: any = null;
 const ModuleReady: Promise<void> = (self as any).DracoDecoderModule({

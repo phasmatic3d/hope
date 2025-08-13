@@ -3,11 +3,10 @@ import * as THREE from 'three';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import { openConnection } from './transmissionWS';
 import { DecoderMessage } from './types';
+import { FreeRoamController } from './FreeRoamController';
 
 const worker = new Worker(new URL('./worker.ts', import.meta.url), { });
-const ENCODED_HEADER = 5;
-
-let __filename: "MAIN";
+const ENCODED_HEADER = 5; // Header bytes
 
 function createPointCloudProcessor(
 	scene: THREE.Scene,
@@ -172,14 +171,19 @@ async function setupScene() {
 	const decodedColView = new Uint8Array(decodedColBuffer);
 
 	const scene    = new THREE.Scene();
-	const camera   = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 	const renderer = new THREE.WebGLRenderer();
 	renderer.setSize(window.innerWidth, window.innerHeight);
 	renderer.xr.enabled = true;
 	document.body.appendChild(renderer.domElement);
 	document.body.appendChild(VRButton.createButton(renderer));
 
-	camera.position.set(0, -10, 15);
+	const camCtrl = new FreeRoamController(scene, renderer, {
+		startPosition: [0, -10, 15],
+		baseSpeed: 10,
+		sprintMultiplier: 2.5,
+		damping: 10
+	});
+	const camera = camCtrl.camera;
 
 	const processPointCloud = createPointCloudProcessor(
 		scene,
@@ -187,11 +191,18 @@ async function setupScene() {
 		decodedColView
 	);
 
+	// animation loop
+	const clock = new THREE.Clock();
 	function animate() {
-		requestAnimationFrame(animate);
+		const dt = clock.getDelta();
+		camCtrl.update(dt); // mouse+WASD when not in VR
 		renderer.render(scene, camera);
+		renderer.setAnimationLoop(animate); // VR-friendly
 	}
-	animate();
+	renderer.setAnimationLoop(animate);
+
+	// window resize
+	window.addEventListener('resize', () => camCtrl.onResize(window.innerWidth, window.innerHeight));
 
 	worker.postMessage({
 		type: 'init',
@@ -212,7 +223,7 @@ async function setupScene() {
 			// Submit this one chunk; processor queues and serializes decoding
 			processPointCloud(sharedEncodedBuffer, { offset, length: payload.byteLength }, bufferCount);
 		},
-		(err: unknown) => console.log(__filename, 'WebSocket error:', err)
+		(err: unknown) => console.log('WebSocket error:', err)
 	);
 }
 
