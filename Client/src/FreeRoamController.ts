@@ -68,12 +68,18 @@ export class FreeRoamController {
 		const near = opts.near ?? 0.1;
 		const far  = opts.far ?? 2000;
 
-		this.baseSpeed  = opts.baseSpeed ?? 10;
+		this.baseSpeed  = opts.baseSpeed ?? 1.5;
 		this.sprintMult = opts.sprintMultiplier ?? 2.5;
 		this.damping    = opts.damping ?? 10;
 
 		this.touchLookSensitivity = opts.touchLookSensitivity ?? 0.0025;
 		this.joystickDeadzone     = opts.joystickDeadzone ?? 0.12;
+
+		const startPos = opts.startPosition
+			? (Array.isArray(opts.startPosition)
+				? new THREE.Vector3(...opts.startPosition)
+				: opts.startPosition.clone())
+			: new THREE.Vector3(0, -10, 15);
 
 		this.camera = new THREE.PerspectiveCamera(fov, window.innerWidth / window.innerHeight, near, far);
 
@@ -86,14 +92,14 @@ export class FreeRoamController {
 			this.scene.add(this.yawObj);
 			this.installMobileUI();
 			this.installMobileEvents();
-			this.setPosition(0, -10, 15);
+			this.setPosition(startPos.x, startPos.y, startPos.z);
 		} else {
 			// Desktop: pointer lock + keyboard
 			this.plc = new PointerLockControls(this.camera, this.renderer.domElement);
-			this.scene.add(this.plc.getObject());
+			this.scene.add(this.plc.object);
 			this.installDesktopOverlay(opts.pointerLockUI ?? true);
 			this.installDesktopKeyboard();
-			this.setPosition(0, -10, 15);
+			this.setPosition(startPos.x, startPos.y, startPos.z);
 		}
 	}
 
@@ -110,9 +116,9 @@ export class FreeRoamController {
 
 		// Build intent vector (from keyboard or virtual joystick)
 		if (this.isMobile) {
-			const joy = this.getJoystickDir(); // x: strafe, y: forward
-			this.direction.set(joy.x, 0, -joy.y); // forward = -Z
-			// Vertical on mobile: two-fingers? simple buttons? For now none → can add later
+			const joy = this.getJoystickDir();
+			this.direction.set(joy.x, 0, -joy.y); 
+
 		} else {
 			this.direction.set(0,0,0);
 			if (this.moveKeys.forward)  this.direction.z -= 1;
@@ -146,7 +152,7 @@ export class FreeRoamController {
 			// Desktop pointer-lock helpers
 			this.plc!.moveRight(this.velocity.x * dt);
 			this.plc!.moveForward(this.velocity.z * dt);
-			this.plc!.getObject().position.y += (this.velocity.y * dt);
+			this.plc!.object.position.y += (this.velocity.y * dt);
 		}
 	}
 

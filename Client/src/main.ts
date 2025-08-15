@@ -29,9 +29,7 @@ function createPointCloudProcessor(
 		pointCloudGeometry = new THREE.BufferGeometry();
 		const mat = new THREE.PointsMaterial({ vertexColors: true, size: 0.1, sizeAttenuation: false });
 		pointCloud = new THREE.Points(pointCloudGeometry, mat);
-		pointCloud.scale.set(20, 20, 20);
 		pointCloud.rotateX(Math.PI);
-		pointCloud.position.set(0, -10, 13);
 		//pointCloud.frustumCulled = false;
 		scene.add(pointCloud);
 	}
@@ -82,7 +80,7 @@ function createPointCloudProcessor(
 
 		if (expectedChunks > 0 && decodedChunks === expectedChunks) {
 			ensurePointCloud();
-
+			
 			pointCloudGeometry!.setAttribute(
 				'position',
 				new THREE.BufferAttribute(decodedPosView.subarray(0, totalPoints * 3), 3)
@@ -95,7 +93,6 @@ function createPointCloudProcessor(
 			pointCloudGeometry!.setDrawRange(0, totalPoints); // prevents leftover points
 			pointCloudGeometry!.attributes.position.needsUpdate = true;
 			pointCloudGeometry!.attributes.color.needsUpdate    = true;
-
 			// Reset frame state
 			expectedChunks = 0;
 			decodedChunks  = 0;
@@ -190,8 +187,8 @@ async function setupScene() {
 	document.body.appendChild(VRButton.createButton(renderer));
 
 	const camCtrl = new FreeRoamController(scene, renderer, {
-		startPosition: [0, -10, 15],
-		baseSpeed: 10,
+		startPosition: [0.1, 0, 0.45],
+		baseSpeed: 0.4,
 		sprintMultiplier: 2.5,
 		damping: 10
 	});
@@ -208,6 +205,9 @@ async function setupScene() {
 	function animate() {
 		const dt = clock.getDelta();
 		camCtrl.update(dt); // mouse+WASD when not in VR
+
+		//const pos = camCtrl.getPosition(new THREE.Vector3());
+		//console.log(`cam pos: x=${pos.x.toFixed(3)} y=${pos.y.toFixed(3)} z=${pos.z.toFixed(3)}`);
 		renderer.render(scene, camera);
 		renderer.setAnimationLoop(animate); // VR-friendly
 	}
