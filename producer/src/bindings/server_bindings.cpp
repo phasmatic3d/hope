@@ -22,7 +22,7 @@
 #endif
 
 
-//#define USE_TLS
+#define USE_TLS
 #ifdef USE_TLS
     #include <websocketpp/config/asio.hpp>    // TLS‐enabled config
     typedef websocketpp::config::asio_tls asio_config;
@@ -69,7 +69,7 @@ public:
                     asio::ssl::context::no_tlsv1 |
                     asio::ssl::context::single_dh_use
                 );
-                //TODO how to generate keys and use them
+
                 // no client-cert verification
                 ctx->set_verify_mode(asio::ssl::verify_none);
                 ctx->use_certificate_chain_file("./broadcaster_wrapper/cert/server.crt");
@@ -122,13 +122,20 @@ public:
             if (req == "/") req = "/index.html";                // default
 
             std::filesystem::path file = base / req.substr(1);
+            // Small helper to add COOP/COEP/CORP to ALL responses
+            auto add_iso_headers = [&con]() {
+                con->replace_header("Cross-Origin-Opener-Policy",   "same-origin");
+                con->replace_header("Cross-Origin-Embedder-Policy", "require-corp");
+                con->replace_header("Cross-Origin-Resource-Policy", "same-origin"); // optional but recommended
+            };
+
             if (!std::filesystem::exists(file) || std::filesystem::is_directory(file)) {
                 con->set_status(websocketpp::http::status_code::not_found);
-                con->replace_header("Cross-Origin-Opener-Policy",  "same-origin");
-                con->replace_header("Cross-Origin-Embedder-Policy","require-corp");
-                con->replace_header("Cross-Origin-Resource-Policy","same-origin");
+                add_iso_headers();
+                con->replace_header("Content-Type", "text/plain; charset=utf-8");
+                con->set_body("Not Found");
                 return;
-            }
+	        }
 
             // read the file
             std::ifstream in(file, std::ios::binary);
@@ -136,20 +143,22 @@ public:
             buf << in.rdbuf();
             std::string body = buf.str();
 
-            // set some basic headers
+            // Status + required headers for SharedArrayBuffer
             con->set_status(websocketpp::http::status_code::ok);
-            con->replace_header("Cross-Origin-Opener-Policy",   "same-origin");
-            con->replace_header("Cross-Origin-Embedder-Policy", "require-corp");
-            con->replace_header("Cross-Origin-Resource-Policy", "same-origin");
+            add_iso_headers();
 
             // very minimal MIME-type mapping
-            if (file.extension() == ".html") {
-            con->replace_header("Content-Type", "text/html");
-            } else if (file.extension() == ".js") {
-            con->replace_header("Content-Type", "application/javascript");
-            } else if (file.extension() == ".css") {
-            con->replace_header("Content-Type", "text/css");
-            }
+            auto ext = file.extension().string();
+            if      (ext == ".html") con->replace_header("Content-Type", "text/html; charset=utf-8");
+            else if (ext == ".js")   con->replace_header("Content-Type", "application/javascript; charset=utf-8");
+            else if (ext == ".css")  con->replace_header("Content-Type", "text/css; charset=utf-8");
+            else if (ext == ".json") con->replace_header("Content-Type", "application/json; charset=utf-8");
+            else if (ext == ".wasm") con->replace_header("Content-Type", "application/wasm");
+            else if (ext == ".png")  con->replace_header("Content-Type", "image/png");
+            else if (ext == ".jpg" || ext == ".jpeg") con->replace_header("Content-Type", "image/jpeg");
+            else if (ext == ".gif")  con->replace_header("Content-Type", "image/gif");
+            else if (ext == ".svg")  con->replace_header("Content-Type", "image/svg+xml");
+            else if (ext == ".ico")  con->replace_header("Content-Type", "image/x-icon");
             con->set_body(body);
         }
         );

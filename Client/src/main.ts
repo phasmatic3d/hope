@@ -120,7 +120,9 @@ function createPointCloudProcessor(
 		bufferCount: number
 	): void => {
 		const encView = new Uint8Array(sharedBuf);
+		const HALF_BYTES = encView.length >>> 1;
 
+		const isFrameStart = bufferCount > 0 && (chunk.offset % HALF_BYTES === 0);
 		// NONE mode 
 		if (bufferCount === 0) {
 			const { offset, length } = chunk;
@@ -143,7 +145,16 @@ function createPointCloudProcessor(
 			return;
 		}
 
-		// IMPORTANCE / FULL mode: queue chunks, decode sequentially
+		// If a new frame starts while we were still in one, drop the old frame cleanly.
+		if (isFrameStart && expectedChunks > 0 && (decodedChunks < expectedChunks || inFlight || queue.length)) {
+			expectedChunks = 0;
+			decodedChunks  = 0;
+			totalPoints    = 0;
+			currentPointCursor = 0;
+			inFlight = false;
+			queue.length = 0;
+		}
+
 		if (expectedChunks === 0) {
 			expectedChunks = bufferCount;
 			decodedChunks  = 0;
@@ -153,15 +164,16 @@ function createPointCloudProcessor(
 			queue.length = 0;
 		}
 
+
 		queue.push({ offset: chunk.offset, length: chunk.length });
 		startNext();
 	};
 }
 
 async function setupScene() {
-	const POINT_BUDGET = 100_000_000;
+	const POINT_BUDGET = 80_000_000;
 
-	const sharedEncodedBuffer = new SharedArrayBuffer(POINT_BUDGET);
+	const sharedEncodedBuffer = new SharedArrayBuffer(POINT_BUDGET * 2);
 	const sharedEncodedView   = new Uint8Array(sharedEncodedBuffer);
 
 	const decodedPosBuffer = new SharedArrayBuffer(POINT_BUDGET * 3 * 4);
@@ -211,17 +223,30 @@ async function setupScene() {
 		decodedColBuffer
 	});
 
+
+	const HALF_BYTES = sharedEncodedView.byteLength >>> 1; // divide by 2
+	let encodedBase = 0;                                   // 0 or HALF
 	openConnection(
 		(data: ArrayBuffer) => {
 			const dv          = new DataView(data);
-			const bufferCount = dv.getUint8(0);          // number of chunks in this frame (0 = NONE mode)
-			const offset      = dv.getUint32(1, true);   // where to place payload in sharedEncodedBuffer
+			const bufferCount = dv.getUint8(0);        // chunks in frame (0 = NONE mode)
+			const offset      = dv.getUint32(1, true); // frame-relative offset
 
+			if (bufferCount > 0 && offset === 0) {
+			// flip to the other half so current decoding bytes can't be overwritten
+			encodedBase = (encodedBase === 0) ? HALF_BYTES : 0;
+			}
+
+			// Copy payload into the active half at absolute offset
 			const payload = new Uint8Array(data, ENCODED_HEADER);
-			sharedEncodedView.set(payload, offset);
+			const absOffset = encodedBase + offset;
+			sharedEncodedView.set(payload, absOffset);
 
-			// Submit this one chunk; processor queues and serializes decoding
-			processPointCloud(sharedEncodedBuffer, { offset, length: payload.byteLength }, bufferCount);
+			processPointCloud(
+			sharedEncodedBuffer,
+			{ offset: absOffset, length: payload.byteLength },
+			bufferCount
+			);
 		},
 		(err: unknown) => console.log('WebSocket error:', err)
 	);

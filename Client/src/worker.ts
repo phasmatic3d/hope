@@ -5,7 +5,7 @@ importScripts('/dracoCustom/draco_decoder.js');
 import type { DecoderMessage } from './types';
 
 let scratchPtr = 0;
-const MAX_CHUNK_BYTES = 15_500_000;  
+const MAX_CHUNK_BYTES = 85_500_000;  
 
 let Module: any = null;
 const ModuleReady: Promise<void> = (self as any).DracoDecoderModule({
@@ -33,6 +33,8 @@ self.onmessage = async (ev: MessageEvent<any>) => {
 
   // Decode request
 	if (data.type === 'decode') {
+		if (!Module) await ModuleReady;
+
 		const { offset, length, writeIndex } = data;
 		const raw = sharedEncodedView.subarray(offset, offset + length);
 
