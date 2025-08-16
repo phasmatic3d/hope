@@ -3,16 +3,16 @@ import * as THREE from 'three';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
 
 export type FreeRoamOptions = {
-	fov?: number;				// default 75
-	near?: number;				// default 0.1
-	far?: number;				// default 2000
-	baseSpeed?: number;			// m/s (default 10)
-	sprintMultiplier?: number;	// default 2.5
-	damping?: number;			// velocity damping (default 10)
-	touchLookSensitivity?: number; // radians per pixel (default 0.0025)
-	joystickDeadzone?: number;	// 0..1 (default 0.12)
+	fov?: number;				
+	near?: number;				
+	far?: number;				
+	baseSpeed?: number;			
+	sprintMultiplier?: number;	
+	damping?: number;			
+	touchLookSensitivity?: number; 
+	joystickDeadzone?: number;	
 	startPosition?: THREE.Vector3 | [number,number,number];
-	pointerLockUI?: boolean;	// desktop click-to-roam overlay (default true)
+	pointerLockUI?: boolean;	
 };
 
 export class FreeRoamController {
@@ -169,11 +169,11 @@ export class FreeRoamController {
 
 	setPosition(x: number, y: number, z: number) {
 		if (this.isMobile) this.yawObj!.position.set(x,y,z);
-		else this.plc!.getObject().position.set(x,y,z);
+		else this.plc!.object.position.set(x,y,z);
 	}
 	getPosition(out = new THREE.Vector3()) {
 		if (this.isMobile) return out.copy(this.yawObj!.position);
-		return out.copy(this.plc!.getObject().position);
+		return out.copy(this.plc!.object.position);
 	}
 
 	setSpeed(base: number, sprintMult?: number) {
@@ -262,7 +262,7 @@ export class FreeRoamController {
 		const container = document.createElement('div');
 		container.style.cssText = `
 			position:fixed;inset:0;z-index:9999;pointer-events:auto;
-			touch-action:none; /* we fully manage touch */
+			touch-action:none;
 		`;
 
 		const left = document.createElement('div');
@@ -316,9 +316,8 @@ export class FreeRoamController {
 			const t = e.changedTouches[0];
 			this.joyCurr.set(t.clientX, t.clientY);
 			const delta = this.joyCurr.clone().sub(this.joyStart);
-			const r = 50; // joystick radius in px around center (visual is 64 inside 120 base)
+			const r = 50;
 			const clamped = clampVec2Magnitude(delta, r);
-			// Move the stick knob visually
 			stick.style.transform = `translate3d(${28 + clamped.x}px, ${28 + clamped.y}px, 0)`;
 			e.preventDefault();
 		}, { passive:false });
@@ -377,15 +376,12 @@ export class FreeRoamController {
 	}
 
 	private applyTouchLook(dx: number, dy: number) {
-		// Yaw (around world up) and pitch (local X) with clamp to avoid flip.
 		const sens = this.touchLookSensitivity;
 		const yaw = this.yawObj!;
 		const pitch = this.pitchObj!;
 
-		// Rotate yaw by dx
 		yaw.rotation.y -= dx * sens;
 
-		// Rotate pitch by dy, clamp to about +/- 89 deg
 		pitch.rotation.x -= dy * sens;
 		const limit = Math.PI / 2 - 0.01;
 		pitch.rotation.x = Math.max(-limit, Math.min(limit, pitch.rotation.x));

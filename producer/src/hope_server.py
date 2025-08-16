@@ -54,8 +54,6 @@ from gesture_recognition import (
 import torch
 import torch.nn.functional as F
 
-DEBUG = True
-
 def camera_process(
         server: broadcaster.ProducerServer,
         shared_frame_name,
@@ -69,17 +67,20 @@ def camera_process(
         stop_event: mp.Event,
         ready_frame_event: mp.Event,
         ready_cluster_event: mp.Event,
-        ready_roi_event: mp.Event) :
-
-    global DEBUG
+        ready_roi_event: mp.Event,
+        in_roi_pos_quant_bits: int,
+        out_roi_pos_quant_bits: int,
+        in_roi_col_quant_bits: int,
+        out_roi_col_quant_bits: int,
+        encoding_mode,
+        debug) :
 
     # Hyperparameters to move to argparse
     visualization_mode = VisualizationMode.COLOR
-    encoding_mode      = EncodingMode.FULL
 
     thread_executor = ThreadPoolExecutor(max_workers=2)
     
-    if DEBUG:
+    if debug:
         win_name = "RealSense vis"
         cv2.namedWindow(win_name, cv2.WINDOW_AUTOSIZE)
 
@@ -149,16 +150,27 @@ def camera_process(
     # --- SUBSAMPLING LAYERS SETUP ---
     # layer 0 = 60%, layer 1 = 15%, layer 2 = 25%
     sampling_layers = [0.60, 0.15, 0.25]
-    active_layers   = [True,  True,  True]
+    active_layers   = [True,  True,  False] #TODO HARDCODE FOR DEMO, MAYBE CHANGE LAYERS(WE'RE NOT USING LAYERS IN THE FINAL RELEASE ANYWAY)
+
+    # Set hyperparams
+    draco_full_encoding.position_quantization_bits = in_roi_pos_quant_bits
+    draco_full_encoding.color_quantization_bits = in_roi_col_quant_bits
+    draco_full_encoding.speed_encode = 10
+    draco_full_encoding.speed_decode = 10
+
+    draco_roi_encoding.position_quantization_bits = in_roi_pos_quant_bits
+    draco_roi_encoding.color_quantization_bits    = in_roi_col_quant_bits
+    draco_roi_encoding.speed_encode               = 10
+    draco_roi_encoding.speed_decode               = 10
+
+    draco_outside_roi_encoding.position_quantization_bits = out_roi_pos_quant_bits
+    draco_outside_roi_encoding.color_quantization_bits    = out_roi_col_quant_bits
+    draco_outside_roi_encoding.speed_encode               = 10
+    draco_outside_roi_encoding.speed_decode               = 10
+
 
     try:
         while not stop_event.is_set():
-            # Sync hyperparameter changes
-            draco_roi_encoding.position_quantization_bits = draco_full_encoding.position_quantization_bits
-            draco_roi_encoding.color_quantization_bits    = draco_full_encoding.color_quantization_bits
-            draco_roi_encoding.speed_encode               = draco_full_encoding.speed_encode
-            draco_roi_encoding.speed_decode               = draco_full_encoding.speed_decode 
-
 
             frame_id += 1
             frame_count += 1
@@ -268,7 +280,7 @@ def camera_process(
                         prev_cluster = shared_cluster.copy()
                         ready_cluster_event.clear()
 
-                    if DEBUG:
+                    if debug:
                         display[prev_cluster[:, :, 0], 2] = 255
 
                     flat_cluster = prev_cluster.flatten()
@@ -344,9 +356,7 @@ def camera_process(
             
 
             # Logging and display
-            if DEBUG:
-
-
+            if debug:
                 #---- CV DRAW ON SCREEN----
                 now = time.perf_counter()
                 if (frame_count >= 30):
@@ -713,6 +723,14 @@ def launch_processes(server: broadcaster.ProducerServer, args, device : str) -> 
     cmr_depth_width, cmr_depth_height = producer_cli.map_to_camera_res[args.realsense_depth_stream]
     cmr_fps = args.realsense_target_fps
 
+    in_roi_pos_quant_bits = args.in_roi_pos_quant_bits
+    out_roi_pos_quant_bits = args.out_roi_pos_quant_bits
+    in_roi_col_quant_bits = args.in_roi_col_quant_bits
+    out_roi_col_quant_bits = args.out_roi_col_quant_bits
+    encoding_mode = EncodingMode[args.encoding_mode]
+
+    debug = args.debug
+
     stop_event = mp.Event()
     ready_frame_event = mp.Event()
     ready_cluster_event = mp.Event()
@@ -785,7 +803,9 @@ def launch_processes(server: broadcaster.ProducerServer, args, device : str) -> 
         camera_process(server, shm_frame.name, shm_cluster.name, shm_roi.name,
             cmr_clr_width, cmr_clr_height,
             cmr_depth_width, cmr_depth_height, cmr_fps,
-            stop_event, ready_frame_event, ready_cluster_event, ready_roi_event)
+            stop_event, ready_frame_event, ready_cluster_event, ready_roi_event,
+            in_roi_pos_quant_bits, out_roi_pos_quant_bits, in_roi_col_quant_bits, out_roi_col_quant_bits,
+            encoding_mode, debug)
         
         predictor_proc.terminate()
         predictor_proc.join()
