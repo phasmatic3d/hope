@@ -1,6 +1,7 @@
 #include "csv_entry_bindings.hpp"
 
-void bind_csv_entry(nb::module_ &m) {
+void bind_csv_entry(nb::module_ &m) 
+{
     nb::class_<CsvFileEntry> cls(m, "CsvFileEntry");
 
     // Special-case the time_point as milliseconds
@@ -11,7 +12,7 @@ void bind_csv_entry(nb::module_ &m) {
     });
 
     #define NB_BIND_FIELD(T, name, label, ...) \
-    cls.def_prop_ro(#name, [](const CsvFileEntry& e) -> decltype(auto) { return (e.name); });
+    cls.def_prop_ro(#name, [](const CsvFileEntry& e) { return (e.name); });
     CSV_FIELDS_NO_TS(NB_BIND_FIELD)
     #undef NB_BIND_FIELD
 }

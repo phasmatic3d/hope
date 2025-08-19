@@ -158,7 +158,7 @@ endif()
 set(DRACO_BINDING_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/src/draco_wrapper")
 
 nanobind_add_module(draco_bindings
-    src/bindings/draco_bindings.cpp
+    src/bindings/draco/draco_bindings.cpp
 )
 
 if (WIN32)
@@ -193,6 +193,74 @@ if (WIN32)
 	)
 endif()
 
+#####################################################################
+# Header-only interface lib for time_types.hpp
+#####################################################################
+
+add_library(time_types INTERFACE)
+
+target_include_directories(time_types INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/bindings/time_types>
+    $<INSTALL_INTERFACE:include>                         
+)
+
+add_library(hope::time_types ALIAS time_types)
+
+#####################################################################
+# Header-only interface lib for packets
+#####################################################################
+
+add_library(packets INTERFACE)
+
+target_include_directories(packets INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/bindings/packets>
+    $<INSTALL_INTERFACE:include>                         
+)
+
+target_link_libraries(packets INTERFACE hope::time_types)
+
+add_library(hope::packets ALIAS packets)
+
+
+#####################################################################
+# Header-only interface lib for csv_entry.hpp
+#####################################################################
+
+add_library(csv_entry INTERFACE)
+
+target_include_directories(csv_entry INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/bindings/csv_entry>
+    $<INSTALL_INTERFACE:include>                         
+)
+
+target_link_libraries(csv_entry INTERFACE
+	hope::time_types
+)
+
+add_library(hope::csv_entry ALIAS csv_entry)
+
+#####################################################################
+# The producer server core
+#####################################################################
+
+add_library(hope_producer_core
+    src/bindings/server/server.cpp
+)
+target_include_directories(hope_producer_core PUBLIC
+    ${asio_SOURCE_DIR}/asio/include
+    ${websocketpp_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/bindings
+)
+target_link_libraries(hope_producer_core PUBLIC
+    spdlog::spdlog
+    nlohmann_json::nlohmann_json
+    OpenSSL::SSL OpenSSL::Crypto
+    hope::csv_entry hope::packets hope::time_types
+)
+target_compile_definitions(hope_producer_core PUBLIC
+    ASIO_STANDALONE
+    _WEBSOCKETPP_CPP11_TYPE_TRAITS_
+)
 
 #####################################################################
 # Bindings for broadcaster
@@ -200,8 +268,11 @@ endif()
 
 # Add the executable for the broadcaster
 nanobind_add_module(broadcaster
-    src/bindings/server_bindings.cpp
+    src/bindings/module_broadcaster.cpp
+    src/bindings/server/server_bindings.cpp
+    src/bindings/csv_entry/csv_entry_bindings.cpp
 )
+target_link_libraries(broadcaster PRIVATE hope_producer_core)
 
 set(BROADCASTER_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/src/broadcaster_wrapper")
 
@@ -230,6 +301,9 @@ target_link_libraries(broadcaster PRIVATE
 	nlohmann_json::nlohmann_json
 	OpenSSL::SSL
 	OpenSSL::Crypto
+	hope::csv_entry
+	hope::packets 
+	hope::time_types
 )
 
 target_compile_definitions(broadcaster PRIVATE
