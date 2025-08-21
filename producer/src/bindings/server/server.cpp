@@ -173,7 +173,7 @@ void ProducerServer::broadcast(const void* data, std::size_t size)
 
     for (auto hdl: conns)
     {
-        if(write_to_csv) 
+        if(write_to_csv && !use_pings_for_rtt) 
         {
             auto error_code = _send_broadcast_info_packet(hdl, broadcast_round, message_size);
             if(error_code)
@@ -192,7 +192,7 @@ void ProducerServer::broadcast(const void* data, std::size_t size)
         }
 
 
-        if(write_to_csv)
+        if(write_to_csv && !use_pings_for_rtt)
         {
             std::ostringstream ss;
             ss << hdl.lock().get();
@@ -209,6 +209,11 @@ void ProducerServer::broadcast(const void* data, std::size_t size)
             };
         }
 
+    }
+
+    if(!m_connections.empty() && write_to_csv && use_pings_for_rtt)
+    {
+        ping_async(broadcast_round, message_size, connections_size);
     }
 }
 
@@ -550,13 +555,15 @@ void ProducerServer::pong_handler(websocketpp::connection_hdl hdl, const std::st
     METRIC_CSV_RENAMES(APPLY_METRIC_RENAME, entry, metrics)
     CSV_ONLY_ASSIGNMENTS(APPLY_CSV_ONLY, entry, metrics)
 
+    m_logger->debug("Received entry: {} in: {}", entry.create_csv_entry(), __func__);
+
     enqueue_log_entry(entry);
 }
 
 void ProducerServer::message_handler(websocketpp::connection_hdl hdl, websocketpp::server<websocketpp::config::asio>::message_ptr message)
 {
 
-    if(!this->write_to_csv && this->use_pings_for_rtt) 
+    if(!this->write_to_csv || this->use_pings_for_rtt) 
     {
         m_logger->debug("Early return from {}.", __func__);
         return;
