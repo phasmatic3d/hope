@@ -95,9 +95,11 @@ ProducerServer::~ProducerServer()
         // Signal logging thread to exit, then join it
         {
             std::lock_guard<std::mutex> lg(log_mutex);
+            m_logger->debug("Acquired log mutex in: destructor");
             stop_logging = true;
             write_to_csv = false;
         }
+        m_logger->debug("Unlocked log mutex in: desctructor");
         log_cv.notify_all();
         entry_cv.notify_all();
         if (log_thread.joinable()) log_thread.join();
@@ -134,9 +136,11 @@ void ProducerServer::stop()
         // Signal logging thread to exit, then join it
         {
             std::lock_guard<std::mutex> lg(log_mutex);
+            m_logger->debug("Acquired log mutex in: stop");
             stop_logging = true;
             write_to_csv = false;
         }
+        m_logger->debug("Unlocked log mutex in: stop");
         log_cv.notify_all();
         entry_cv.notify_all();
         if (log_thread.joinable()) log_thread.join();
@@ -147,25 +151,27 @@ void ProducerServer::stop()
 //void ProducerServer::broadcast(const nb::bytes& data)
 void ProducerServer::broadcast(const void* data, std::size_t size)
 {
-    std::lock_guard<std::mutex> lock(m_connection_mutex);
     size_t broadcast_round  = 0;
     size_t message_size     = 0;
     size_t connections_size = 0;
     //TODO this assumes the bytes are received by all connections with no errors
     size_t bytes_sent       = 0;
 
-    if (!m_connections.empty())
+    std::vector<websocketpp::connection_hdl> conns;
     {
+        std::lock_guard<std::mutex> lock(m_connection_mutex);
+        if (m_connections.empty()) return;
         broadcast_round  = m_broadcast_counter++;
-        //message_size     = data.size();
-        message_size     = size;
         connections_size = m_connections.size();
+        message_size     = size;
         bytes_sent       = message_size * connections_size;
+
+        conns.assign(m_connections.begin(), m_connections.end());
     }
 
     std::map<MetaKey, PendingMetadata, MetaKeyCompare> map_to_metadata; 
 
-    for (auto hdl: m_connections)
+    for (auto hdl: conns)
     {
         if(write_to_csv) 
         {
@@ -314,6 +320,7 @@ std::optional<CsvFileEntry> ProducerServer::wait_for_entry(const size_t broadcas
 
     m_logger->debug("Waiting for csv file entry in {}", __func__);
     std::unique_lock<std::mutex> lk(log_mutex);
+    m_logger->debug("Acquired log mutex in: wait_for_entry");
     auto pop_if_present = [this](size_t round) -> std::optional<CsvFileEntry> 
     {
         auto it = broadcast_round_to_entry.find(round);
@@ -321,6 +328,7 @@ std::optional<CsvFileEntry> ProducerServer::wait_for_entry(const size_t broadcas
 
         CsvFileEntry value = std::move(it->second);
         broadcast_round_to_entry.erase(it);
+        m_logger->debug("Returning entry for round {}", round);
         return value;
     };
 
@@ -330,21 +338,23 @@ std::optional<CsvFileEntry> ProducerServer::wait_for_entry(const size_t broadcas
         return hit;
     }
 
+    m_logger->debug("Will wait for entry for broadcast round: {}", broadcast_round);
     entry_cv.wait
     (
         lk, [this, broadcast_round] 
         {
-            m_logger->debug("Waiting inside the wait_for_entry function for entry_cv...");
             return broadcast_round_to_entry.count(broadcast_round) != 0 || stop_logging;
         }
     );
 
+    m_logger->debug("Woke up in {}", __func__);
 
     return pop_if_present(broadcast_round);
 }
 
 void ProducerServer::set_current_batch_id(size_t id) 
 {
+    m_logger->debug("Setting batch ID: {}", id);
     m_current_batch_id = id;
 }
 
@@ -489,8 +499,22 @@ void ProducerServer::open_handler(websocketpp::connection_hdl hdl)
 
 void ProducerServer::close_handler(websocketpp::connection_hdl hdl)
 {
-    std::lock_guard<std::mutex> lock(m_connection_mutex);
-    m_connections.erase(hdl);
+    {
+        std::lock_guard<std::mutex> lock(m_connection_mutex);
+        m_connections.erase(hdl);
+    }
+    {
+        std::lock_guard<std::mutex> lg(m_metadata_mutex);
+        for (auto it = m_metadata.begin(); it != m_metadata.end();) 
+        {
+            if (it->first.first.lock().get() == hdl.lock().get()) it = m_metadata.erase(it);
+            else ++it;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lg(ping_mutex);
+        pending_pings.erase(hdl);
+    }
     m_logger->info("Client disconnected");
 }
 
@@ -623,30 +647,47 @@ void ProducerServer::start_logging_thread()
 
     // spawn background thread
     log_thread = std::thread([this]{
+        std::vector<CsvFileEntry> batch;
         std::unique_lock<std::mutex> lk(log_mutex);
-        while (true) 
+        m_logger->debug("Acquired log mutex in start_logging_thread...");
+        for(;;)
         {
-            // wait until there is data or we should stop
+
             log_cv.wait
             (
                 lk, [this]
                 {
-                    m_logger->debug("Waiting inside the start_logging_thread function for log_cv...");
                     return !log_queue.empty() || stop_logging;
                 }
             );
+            m_logger->debug("Woke up from log_cv in start_logging_thread...");
 
-            // flush all entries
             while (!log_queue.empty()) 
             {
-                auto entry = std::move(log_queue.front());
+                batch.emplace_back(std::move(log_queue.front()));
                 log_queue.pop();
-                auto entry_string = entry.create_csv_entry();
-                csv << entry_string << "\n";
             }
-            csv.flush();
-            if (stop_logging) break;
-        } 
+
+            bool stop = stop_logging;
+
+            lk.unlock();
+            m_logger->debug("Unlocked log mutex in start_logging_thread...");
+
+            for (auto &e : batch) 
+            {
+                auto csv_entry = e.create_csv_entry();
+                m_logger->debug("Created CSV entry: {}", csv_entry);
+                csv << csv_entry << '\n';
+            }
+
+            if (!batch.empty()) csv.flush();
+            batch.clear();
+
+            if (stop) break;
+
+            lk.lock();
+
+        };
     });
 }
 
@@ -654,10 +695,12 @@ void ProducerServer::enqueue_log_entry(const CsvFileEntry &entry)
 {
     {
         std::lock_guard<std::mutex> lg(log_mutex);
+        m_logger->debug("Acquired log mutex in: enqueue_log_entry");
         broadcast_round_to_entry[entry.broadcast_round] = entry;
+        entry_cv.notify_all();
         log_queue.push(entry);
     }
-    entry_cv.notify_all();
+    m_logger->debug("Unlocked log mutex in: enqueue_log_entry");
     log_cv.notify_one();
 }
 

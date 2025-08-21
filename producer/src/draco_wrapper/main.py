@@ -498,7 +498,6 @@ def encode_point_cloud(
                     for buf in bufs:
                         any_broadcasted |= server.broadcast_batch(batch, bytes([count]) + buf)
                         entry = server.wait_for_entry(broadcast_round)
-                        entry = None
                         if entry:
                             broadcast_round = broadcast_round + 1
                             pipeline_stats.approximate_rtt_ms += entry.approximate_rtt_ms
