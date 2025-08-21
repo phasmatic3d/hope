@@ -14,8 +14,8 @@ export function openConnection(
     const USE_TLS = true;
 
     // host + port for each mode
-    const HOST = '192.168.1.67';
-    //const HOST = 'localhost';
+    //const HOST = '192.168.1.67';
+    const HOST = 'localhost';
     const PORT = 9003; // e.g. 9003 for TLS, 9002 for plain
 
     // pick the right protocol
@@ -104,8 +104,9 @@ export function openConnection(
         if (typeof event.data === 'string') {
             let meta = JSON.parse(event.data);
             if (meta.type === 'broadcast-info') {
-                currentRound = meta.round;
-                lastSendTimestamp = meta.send_ts_ms;
+                console.log("Received broadcast-info message...");
+                currentRound = meta.broadcast_round;
+                lastSendTimestamp = meta.send_timestamp_ms;
                 console.log(`Setting currentRound: ${currentRound}, setting lastSendTimestamp: ${lastSendTimestamp}`);
                 return;
             }
