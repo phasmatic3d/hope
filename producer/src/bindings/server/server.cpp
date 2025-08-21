@@ -21,6 +21,7 @@ ProducerServer::ProducerServer
     m_logger->info("Initialized port: {}", m_port);
     m_logger->info("Write to CSV: {}", write_to_csv);
     m_logger->info("Use Pings for RTT: {}", use_pings_for_rtt);
+    m_logger->info("Log Level: {}", spdlog::level::to_string_view(log_level));
 
     if(write_to_csv) start_logging_thread();
 
@@ -97,7 +98,7 @@ ProducerServer::~ProducerServer()
             stop_logging = true;
             write_to_csv = false;
         }
-        log_cv.notify_one();
+        log_cv.notify_all();
         entry_cv.notify_all();
         if (log_thread.joinable()) log_thread.join();
     }
@@ -136,10 +137,9 @@ void ProducerServer::stop()
             stop_logging = true;
             write_to_csv = false;
         }
-        log_cv.notify_one();
+        log_cv.notify_all();
         entry_cv.notify_all();
-        if (log_thread.joinable())
-            log_thread.join();
+        if (log_thread.joinable()) log_thread.join();
     }
     m_logger->info("Server stopped");
 }
@@ -188,7 +188,11 @@ void ProducerServer::broadcast(const void* data, std::size_t size)
 
         if(write_to_csv)
         {
-            map_to_metadata[{hdl, broadcast_round}] = PendingMetadata
+            std::ostringstream ss;
+            ss << hdl.lock().get();
+
+            m_logger->debug("Inserting metadata for broadcast round: {} and for connection: {}", broadcast_round, ss.str());
+            m_metadata[{hdl, broadcast_round}] = PendingMetadata
             {
                 hope::Clock::now(),
                 broadcast_round,
@@ -302,18 +306,21 @@ CsvFileEntry ProducerServer::get_entry_for_round(const size_t broadcast_round)
 
 std::optional<CsvFileEntry> ProducerServer::wait_for_entry(const size_t broadcast_round) 
 {
-    if (!write_to_csv || m_connections.empty()) return std::nullopt; 
-
-    std::unique_lock<std::mutex> lk(log_mutex);
-    auto& table = this->broadcast_round_to_entry;
-    auto& stop_logging = this->stop_logging;
-    auto pop_if_present = [&table](size_t round) -> std::optional<CsvFileEntry> 
+    if (!write_to_csv || m_connections.empty()) 
     {
-        auto it = table.find(round);
-        if (it == table.end()) return std::nullopt;
+        m_logger->debug("Early returning from: {}", __func__);
+        return std::nullopt;
+    } 
+
+    m_logger->debug("Waiting for csv file entry in {}", __func__);
+    std::unique_lock<std::mutex> lk(log_mutex);
+    auto pop_if_present = [this](size_t round) -> std::optional<CsvFileEntry> 
+    {
+        auto it = broadcast_round_to_entry.find(round);
+        if (it == broadcast_round_to_entry.end()) return std::nullopt;
 
         CsvFileEntry value = std::move(it->second);
-        table.erase(it);
+        broadcast_round_to_entry.erase(it);
         return value;
     };
 
@@ -325,9 +332,10 @@ std::optional<CsvFileEntry> ProducerServer::wait_for_entry(const size_t broadcas
 
     entry_cv.wait
     (
-        lk, [&table, &stop_logging, broadcast_round] 
+        lk, [this, broadcast_round] 
         {
-            return table.count(broadcast_round) != 0 || stop_logging;
+            m_logger->debug("Waiting inside the wait_for_entry function for entry_cv...");
+            return broadcast_round_to_entry.count(broadcast_round) != 0 || stop_logging;
         }
     );
 
@@ -337,7 +345,6 @@ std::optional<CsvFileEntry> ProducerServer::wait_for_entry(const size_t broadcas
 
 void ProducerServer::set_current_batch_id(size_t id) 
 {
-    std::lock_guard<std::mutex> lg(ping_mutex);
     m_current_batch_id = id;
 }
 
@@ -375,11 +382,15 @@ websocketpp::lib::error_code ProducerServer::_send_broadcast_info_packet(websock
     info.set_message_size(message_size);
     info.set_broadcast_round(broadcast_round);
     info.set_send_timestamp_ms(epoch_ms);
+    
+    auto info_string = info.to_json_dump();
+
+    m_logger->debug("Sending broadcast-info message to client: {}", info_string);
 
     m_server.send
     (
         hdl,
-        info.to_json_dump(),
+        info_string,
         websocketpp::frame::opcode::text,
         ec
     );
@@ -486,10 +497,12 @@ void ProducerServer::close_handler(websocketpp::connection_hdl hdl)
 void ProducerServer::pong_handler(websocketpp::connection_hdl hdl, const std::string& _)
 {
 
-    if(!this->write_to_csv)
+    if(!this->write_to_csv || !this->use_pings_for_rtt)
     {
+        m_logger->debug("Early return from {}.", __func__);
         return;
     }
+    m_logger->debug("Received message in {}", __func__);
 
     PendingPing metadata;
     {
@@ -518,6 +531,14 @@ void ProducerServer::pong_handler(websocketpp::connection_hdl hdl, const std::st
 
 void ProducerServer::message_handler(websocketpp::connection_hdl hdl, websocketpp::server<websocketpp::config::asio>::message_ptr message)
 {
+
+    if(!this->write_to_csv && this->use_pings_for_rtt) 
+    {
+        m_logger->debug("Early return from {}.", __func__);
+        return;
+    }
+
+    m_logger->debug("Received message: {}, in {}", message->get_payload(), __func__);
 
     auto parsed_json = nlohmann::json::parse(message->get_payload());
     if (parsed_json.value("type","") != "ms-and-processing")
@@ -553,6 +574,7 @@ void ProducerServer::message_handler(websocketpp::connection_hdl hdl, websocketp
     }
 
     ClientSuppliedMetrics client_supplied_metrics = ClientSuppliedMetrics::from_json_and_times(parsed_json, client_timestamp, metadata.send_time);
+    m_logger->debug("Received Client supplied metrics:\n{}", client_supplied_metrics.to_string());
 
     CsvFileEntry entry;
 
@@ -607,8 +629,9 @@ void ProducerServer::start_logging_thread()
             // wait until there is data or we should stop
             log_cv.wait
             (
-                lk, [&]
+                lk, [this]
                 {
+                    m_logger->debug("Waiting inside the start_logging_thread function for log_cv...");
                     return !log_queue.empty() || stop_logging;
                 }
             );
@@ -629,10 +652,12 @@ void ProducerServer::start_logging_thread()
 
 void ProducerServer::enqueue_log_entry(const CsvFileEntry &entry)
 {
-    std::lock_guard<std::mutex> lg(log_mutex);
-    broadcast_round_to_entry[entry.broadcast_round] = entry;
+    {
+        std::lock_guard<std::mutex> lg(log_mutex);
+        broadcast_round_to_entry[entry.broadcast_round] = entry;
+        log_queue.push(entry);
+    }
     entry_cv.notify_all();
-    log_queue.push(entry);
     log_cv.notify_one();
 }
 

@@ -98,8 +98,7 @@ private:
     void enqueue_log_entry(const CsvFileEntry &entry);
     void ping_async(std::size_t broadcast_round, std::size_t message_size, std::size_t connections_size);
 
-private:
-    uint16_t     m_port               = 0;
+    uint16_t    m_port               = 0;
     std::size_t m_broadcast_counter  = 0;
     std::size_t m_current_batch_id   = 0;
 

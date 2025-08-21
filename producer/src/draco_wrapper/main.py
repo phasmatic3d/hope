@@ -43,8 +43,19 @@ from .draco_wrapper import (
 
 from broadcaster_wrapper import (
     setup_server,
-    broadcaster
+    broadcaster,
+    log_level,
 )
+
+LOG_LEVEL_MAP = {
+    "trace":    log_level.trace,
+    "debug":    log_level.debug,
+    "info":     log_level.info,
+    "warn":     log_level.warn,
+    "err":      log_level.err,
+    "critical": log_level.critical,
+    "off":      log_level.off,
+}
 
 console = Console()
 
@@ -487,6 +498,7 @@ def encode_point_cloud(
                     for buf in bufs:
                         any_broadcasted |= server.broadcast_batch(batch, bytes([count]) + buf)
                         entry = server.wait_for_entry(broadcast_round)
+                        entry = None
                         if entry:
                             broadcast_round = broadcast_round + 1
                             pipeline_stats.approximate_rtt_ms += entry.approximate_rtt_ms
@@ -742,13 +754,22 @@ def main():
         help="Encoding mode for the encoder.",
     )
 
+    parser.add_argument(
+        "--server-log-level",
+        type=str,
+        choices=["trace", "debug", "info", "warn", "err", "critical", "off"],
+        default="info",
+        help="Logging verbosity for the broadcaster server"
+    )
+
     args = parser.parse_args()
 
     server = setup_server(
         url=args.server_host, 
         port=args.server_port, 
         write_to_csv=bool(args.server_write_to_csv), 
-        use_pings_for_rtt=bool(args.server_use_pings_for_rtt)
+        use_pings_for_rtt=bool(args.server_use_pings_for_rtt),
+        log_level=LOG_LEVEL_MAP[args.server_log_level],
     )
 
     if args.visualization_mode == "color":

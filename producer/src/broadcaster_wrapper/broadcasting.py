@@ -5,12 +5,13 @@ def setup_server(
     url: str,
     write_to_csv: bool,
     use_pings_for_rtt: bool,
+    log_level,
 ) -> broadcaster.ProducerServer:
     print(f"Write to CSV {write_to_csv}")
     print(f"Use Pins for RTT {use_pings_for_rtt}")
     print(f"URL: {url}")
     print(f"Port: {port}")
-    server = broadcaster.ProducerServer(port=port, write_to_csv=write_to_csv, use_pings_for_rtt=use_pings_for_rtt)
+    server = broadcaster.ProducerServer(port=port, write_to_csv=write_to_csv, use_pings_for_rtt=use_pings_for_rtt, log_level=log_level)
     server.set_redirect(url=url)
     return server
 

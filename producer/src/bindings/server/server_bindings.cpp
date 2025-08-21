@@ -2,11 +2,21 @@
 
 void bind_broadcaster(nb::module_ &m) 
 {
+    nb::enum_<spdlog::level::level_enum>(m, "log_level")
+    .value("trace",    spdlog::level::trace)
+    .value("debug",    spdlog::level::debug)
+    .value("info",     spdlog::level::info)
+    .value("warn",     spdlog::level::warn)
+    .value("err",      spdlog::level::err)
+    .value("critical", spdlog::level::critical)
+    .value("off",      spdlog::level::off);
+
     nb::class_<ProducerServer>(m, "ProducerServer")
-        .def(nb::init<uint16_t, bool, bool>(),
+        .def(nb::init<uint16_t, bool, bool, spdlog::level::level_enum>(),
             nb::arg("port"),
             nb::arg("write_to_csv"),
-            nb::arg("use_pings_for_rtt"))
+            nb::arg("use_pings_for_rtt"),
+            nb::arg("log_level") = spdlog::level::info) 
         .def("listen", &ProducerServer::listen,
             nb::call_guard<nb::gil_scoped_release>(),
             "Begin listening on the configured port")

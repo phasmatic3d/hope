@@ -1,5 +1,7 @@
 #include <vector>
 #include <limits>
+#include <sstream>
+
 #include <nlohmann/json.hpp>
 
 #include "time_types.hpp"
@@ -45,6 +47,27 @@ inline void assign_from_json<std::vector<double>>(std::vector<double>& dst, cons
     }
 }
 
+inline std::string to_string_helper(const std::vector<double>& v) 
+{
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t i = 0; i < v.size(); ++i) 
+    {
+        if (i) oss << ",";
+        oss << v[i];
+    }
+    oss << "]";
+    return oss.str();
+}
+
+template <typename T>
+inline std::string to_string_helper(const T& v) 
+{
+    std::ostringstream oss;
+    oss << v;
+    return oss.str();
+}
+
 
 struct ClientSuppliedMetrics
 {
@@ -74,5 +97,24 @@ struct ClientSuppliedMetrics
         #undef PARSE
 
         return metrics;
+    }
+
+    std::string to_string() const 
+    {
+        std::ostringstream oss;
+        oss << "ClientSuppliedMetrics{";
+
+        // expand over all fields
+        #define PRINT(T, name, key, def) \
+            oss << #name << "=" << ::to_string_helper(name) << ", ";
+        CLIENT_SUPPLIED_METRICS(PRINT)
+        #undef PRINT
+
+        std::string s = oss.str();
+        if (s.size() >= 2 && s[s.size() - 2] == ',')
+            s.erase(s.end() - 2, s.end()); // strip last comma+space
+        oss << "}";
+
+        return oss.str();
     }
 };
