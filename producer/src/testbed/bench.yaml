@@ -18,6 +18,7 @@ experiments:
   - name: single_file_default
     inputs:
       - "./data/FULL_exp_6.ply"
+
   - name: folder_glob_fast
     inputs:
       - "./data/*.ply"
@@ -26,3 +27,11 @@ experiments:
       speed_encode: 10
       qpos: 11
       qcol: 8
+
+  - name: grid_search
+    inputs:
+      - "./data/*.ply"
+    grid:
+      qpos: [8, 10, 12]
+      qcol: [6, 8]
+      speed_encode: [5, 10]
