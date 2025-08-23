@@ -1,11 +1,17 @@
 import time
+import open3d as o3d
 import numpy as np
+
 from . import draco_bindings as dcb
+
 from stats.stats import (
     CompressionStats,
 )
 
 from enum import Enum, auto
+
+from pathlib import Path
+
 
 # Modes for processing
 class EncodingMode(Enum):
@@ -54,6 +60,18 @@ class DracoWrapper:
             f"Spd:{self.speed_encode}/10 "
             f"ROI:{self.roi_width}x{self.roi_height}"
         )
+
+    @staticmethod
+    def load_ply_points_colors(path: Path) -> tuple[np.ndarray, np.ndarray]:
+        pcd = o3d.io.read_point_cloud(str(path))
+        pts = np.asarray(pcd.points, dtype=np.float32)
+        cols = np.asarray(pcd.colors, dtype=np.float32)
+
+        if cols.size > 0:
+            cols = (cols * 255.0).clip(0, 255).astype(np.uint8)
+        else:
+            cols = np.zeros((pts.shape[0], 3), dtype=np.uint8)
+        return pts, cols
 
     def encode(
         self,

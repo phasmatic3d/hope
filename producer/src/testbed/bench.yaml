@@ -1,0 +1,28 @@
+version: 1
+
+defaults:
+  repeats: 3
+  warmup: false
+  drop_first: false
+  draco:
+    qpos: 11
+    qcol: 8
+    speed_encode: 10
+    speed_decode: 10
+
+output:
+  per_experiment_csv: "results/{name}.csv"
+  combined_csv: "results/all_experiments.csv"
+
+experiments:
+  - name: single_file_default
+    inputs:
+      - "./data/FULL_exp_6.ply"
+  - name: folder_glob_fast
+    inputs:
+      - "./data/*.ply"
+    repeats: 5
+    draco:
+      speed_encode: 10
+      qpos: 11
+      qcol: 8
