@@ -1,6 +1,8 @@
 import argparse
+import glob
 import csv
 import os
+
 from pathlib import Path
 from typing import List
 
@@ -9,20 +11,36 @@ from .file_bencher import FileBencher, Metrics
 
 
 def _expand_inputs(patterns: List[str | Path]) -> List[Path]:
-
     files: List[Path] = []
 
     for pat in patterns:
-        pat_str = str(pat)
+        pat_str = os.path.expanduser(str(pat))
         p = Path(pat_str)
+
+        # If it's a glob pattern (supports absolute/relative and **)
         if any(ch in pat_str for ch in "*?[]"):
-            files.extend(Path().glob(pat_str))
+            files.extend(Path(m) for m in glob.glob(pat_str, recursive=True))
+
+        # Directory: take .ply files directly inside (adjust to rglob if you want recursion)
         elif p.is_dir():
             files.extend(p.glob("*.ply"))
+
+        # Otherwise it's a single path
         else:
             files.append(p)
 
-    return [f for f in files if f.exists() and f.suffix.lower() == ".ply"]
+    # Keep only existing .ply files (case-insensitive) and dedupe while preserving order
+    seen = set()
+    out: List[Path] = []
+    for f in files:
+        try:
+            f = f.resolve()
+        except Exception:
+            pass
+        if f.exists() and f.suffix.lower() == ".ply" and f not in seen:
+            seen.add(f)
+            out.append(f)
+    return out
 
 
 def run(

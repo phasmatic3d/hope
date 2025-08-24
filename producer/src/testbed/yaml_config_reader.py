@@ -1,7 +1,10 @@
+import csv
 import itertools
 
 from pathlib import Path
 from typing import Dict, List, Union, Iterable
+
+from .file_bencher import Metrics
 
 class YamlReader:
     def __init__(self):
@@ -43,5 +46,29 @@ class YamlReader:
         keys = list(grid.keys())
         for vals in itertools.product(*(grid[k] for k in keys)):
             yield dict(zip(keys, vals))
+
+    @staticmethod
+    def ensure_parent(path: Path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def rows_to_csv(rows: List[Metrics], extra_cols: Dict[str, Union[str, int, float]], csv_path: Path):
+
+        if not rows:
+            return
+
+        YamlReader.ensure_parent(csv_path)
+        # base fieldnames from Metrics
+        base = list(rows[0].as_row().keys())
+        extra = list(extra_cols.keys())
+        fieldnames = base + [c for c in extra if c not in base]
+        with csv_path.open("w", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=fieldnames)
+            w.writeheader()
+            for m in rows:
+                row = m.as_row()
+                row.update(extra_cols)
+                w.writerow(row)
+
 
 
