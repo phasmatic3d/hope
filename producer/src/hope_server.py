@@ -8,6 +8,9 @@ import pandas as pd
 import numpy as np
 import producer_cli as producer_cli
 
+import mediapipe as mediap
+from mediapipe.framework.formats import landmark_pb2
+
 from pathlib import Path
 from typing import Tuple
 from broadcaster_wrapper.broadcasting import *
@@ -344,6 +347,33 @@ def camera_process(
                 if(encoding_mode == EncodingMode.IMPORTANCE):
                     # ---GESTURE RECOGNITION---
                     gesture_recognizer.recognize(display, frame_id)
+
+                    if DEBUG and False:
+                        def ensure_landmark_list(data):
+                            if isinstance(data, landmark_pb2.NormalizedLandmarkList):
+                                return data
+                            elif isinstance(data, list):
+                                # Rebuild
+                                return landmark_pb2.NormalizedLandmarkList(
+                                    landmark=[
+                                        landmark_pb2.NormalizedLandmark(x=lm.x, y=lm.y, z=lm.z) for lm in data
+                                    ]
+                                )
+                            else:
+                                raise TypeError("Unexpected landmark data type")
+
+                        mp_drawing = mediap.solutions.drawing_utils
+                        mp_hands = mediap.solutions.hands
+                        with gesture_recognizer.lock:
+                            if gesture_recognizer.cb_result is not None:
+                                for hand_landmark in gesture_recognizer.cb_result:
+                                    hand_landmark = ensure_landmark_list(hand_landmark)
+                                    mp_drawing.draw_landmarks(
+                                        image=display,
+                                        landmark_list=hand_landmark,
+                                        connections=mp_hands.HAND_CONNECTIONS,
+                                        landmark_drawing_spec=mp_drawing.DrawingSpec(color=(0,255,0), thickness=2, circle_radius=2),
+                                        connection_drawing_spec=mp_drawing.DrawingSpec(color=(255,0,0), thickness=2))
 
                     for bounding_box_normalized in gesture_recognizer.latest_bounding_boxes:
                         if bounding_box_normalized:
@@ -785,6 +815,8 @@ def camera_process(
                     active_layers[1] = not active_layers[1]
                 elif key == ord('3'):
                     active_layers[2] = not active_layers[2]
+                elif key == ord('s'):
+                    cv2.imwrite(f'./{frame_id}_out.png', cv2.cvtColor(display, cv2.COLOR_RGB2BGR))
                 elif key == ord('c'): # Logging button
                     if simulation:
                         # kick off the full simulation sweep
