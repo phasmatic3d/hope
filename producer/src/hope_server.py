@@ -3,7 +3,7 @@ from pyexpat import model
 import time
 import os
 import struct
-
+import open3d as o3d
 import pandas as pd
 
 import numpy as np
@@ -30,9 +30,11 @@ from broadcaster_wrapper import (
     broadcaster
 )
 
+import concurrent.futures
 
 from concurrent.futures import (
     ThreadPoolExecutor,
+    ProcessPoolExecutor
 )
 
 from rich.live import Live
@@ -72,13 +74,17 @@ def camera_process(
         out_roi_pos_quant_bits: int,
         in_roi_col_quant_bits: int,
         out_roi_col_quant_bits: int,
-        encoding_mode,
-        debug) :
+        point_cloud_budget : int,
+        min_depth_meter : float,
+        max_depth_meter : float,
+        encoding_mode : EncodingMode,
+        debug : bool) :
 
     # Hyperparameters to move to argparse
-    visualization_mode = VisualizationMode.COLOR
+    visualization_mode = VisualizationMode.DEPTH
 
     thread_executor = ThreadPoolExecutor(max_workers=2)
+    #thread_executor = ProcessPoolExecutor(max_workers=2)
     
     if debug:
         win_name = "RealSense vis"
@@ -108,23 +114,18 @@ def camera_process(
         box_size=0.02, 
         delay_frames=10)
     
-    min_dist = 0.1
-    max_dist = 1.3
+    min_dist = min_depth_meter
+    max_dist = max_depth_meter
     depth_thresh = rs.threshold_filter(min_dist, max_dist)
 
     align_to = rs.stream.color
     align = rs.align(align_to)
     rpc = rs.pointcloud()
 
-    
-    frame_id = 0
-    
-
-    
     prev_time = time.perf_counter()
     frame_count = 0
+    frame_id = 0
     fps = 0.0
-
 
     # Settings
     draco_full_encoding = DracoWrapper()
@@ -145,7 +146,6 @@ def camera_process(
     ready_frame_event.clear()
     prev_cluster = shared_cluster.copy()
     roi = None
-
 
     # --- SUBSAMPLING LAYERS SETUP ---
     # layer 0 = 60%, layer 1 = 15%, layer 2 = 25%
@@ -168,24 +168,45 @@ def camera_process(
     draco_outside_roi_encoding.speed_encode               = 10
     draco_outside_roi_encoding.speed_decode               = 10
 
+    # Generate point cloud
+    # Create a point-cloud processor object. This handles generating 3D point data from depth frames.
+    rpc = rs.pointcloud()
+    spatial_filter = rs.spatial_filter()
+    temporal_filter = rs.temporal_filter()
+
+    # Configure spatial filter (edge-preserving smoothing)
+    spatial_filter.set_option(rs.option.filter_magnitude, 2)  # Number of iterations (2-5 is typical)
+    spatial_filter.set_option(rs.option.filter_smooth_alpha, 0.5)  # Smoothing intensity (0.25-1.0)
+    spatial_filter.set_option(rs.option.filter_smooth_delta, 20.0)  # Edge threshold (10-50, higher preserves more edges)
+    spatial_filter.set_option(rs.option.holes_fill, 0)  # 0=off, 1-5 for hole filling (optional)
+
+    # Configure temporal filter (time-based smoothing)
+    temporal_filter.set_option(rs.option.filter_smooth_alpha, 0.1)  # Low alpha for responsiveness (0.0-1.0)
+    temporal_filter.set_option(rs.option.filter_smooth_delta, 100)  # Persistence for valid pixels (20-100 frames)
+    temporal_filter.set_option(rs.option.holes_fill, 1)  # Minimal persistence for hole filling
+
+    depth_height, depth_width = None, None
 
     try:
         while not stop_event.is_set():
-
-            frame_id += 1
+            ms_now = time.perf_counter()
             frame_count += 1
+            frame_id += 1
             frames = pipeline.wait_for_frames()
-
             frames = align.process(frames)
 
             depth_frame = frames.get_depth_frame()  
             color_frame = frames.get_color_frame()    
                         
-            depth_height, depth_width = depth_frame.get_height(), depth_frame.get_width()
+            if depth_height is None: 
+                depth_height, depth_width = depth_frame.get_height(), depth_frame.get_width()
 
             # Apply the depth-threshold filter to drop pixels too near or too far
             if(encoding_mode != EncodingMode.NONE):
                 depth_frame = depth_thresh.process(depth_frame)
+                
+            #depth_frame = spatial_filter.process(depth_frame)
+            #depth_frame = temporal_filter.process(depth_frame)
 
             # Prepare image for display
             # Extract raw data buffers from the RealSense frames into NumPy arrays:
@@ -193,12 +214,27 @@ def camera_process(
             #  - depth_frame.get_data() gives you an H×W array of 16-bit depth values.
             color_img = np.asanyarray(color_frame.get_data())        
             depth_img = np.asanyarray(depth_frame.get_data())
+            
+            if(encoding_mode == EncodingMode.IMPORTANCE):
+                # ---GESTURE RECOGNITION---
+                gesture_recognizer.recognize(color_img, frame_id)
 
-            display = color_img
+                for bounding_box_normalized in gesture_recognizer.latest_bounding_boxes:
+                    if bounding_box_normalized:
+                        roi: np.array = bounding_box_normalized.to_pixel(color_img.shape[1], color_img.shape[0], True)
+                        shared_roi[:] = roi
+                        ready_roi_event.set()
 
-            # Generate point cloud
-            # Create a point-cloud processor object. This handles generating 3D point data from depth frames.
-            rpc = rs.pointcloud()
+                shared_frame[:] = color_img
+                ready_frame_event.set()
+
+                if ready_cluster_event.is_set():
+                    prev_cluster = shared_cluster.copy()
+                    ready_cluster_event.clear()
+
+                if debug:
+                    color_img[prev_cluster[:, :, 0], 2] = 255
+
             # Associate the upcoming depth-to-3D mapping with the given color frame.
             # This ensures each 3D point will be textured with the correct RGB value.
             rpc.map_to(color_frame)
@@ -213,7 +249,7 @@ def camera_process(
             vertex_buffer  = points.get_vertices()
             # [u0, v0,  u1, v1,  u2, v2, …]
             texture_buffer = points.get_texture_coordinates()
-
+            
             # View the raw vertex buffer as a (num_points × 3) float32 array: each row is one 3D point (x, y, z)
             vertices = np.frombuffer(vertex_buffer,  dtype=np.float32).reshape(num_points, 3)
             # View the raw texture buffer as a (num_points × 2) float32 array: each row is one UV pair (u, v)
@@ -225,13 +261,20 @@ def camera_process(
             # then cast to int so we can index into the 2D image array
             column_coordinates = (texcoords[:, 0] * (depth_width - 1)).astype(np.int32)
             # Similarly, scale v by (height-1) to get a row index, then cast to int
-            row_coordinates    = (texcoords[:, 1] * (depth_height - 1)).astype(np.int32) # 3 ms
+            row_coordinates = (texcoords[:, 1] * (depth_height - 1)).astype(np.int32)
 
             pixel_indices = row_coordinates * depth_width + column_coordinates
 
             # Flatten the H×W×3 BGR image into a (H*W)×3 array so each row is one pixel’s BGR triplet
             flat_color_pixels = color_img.reshape(-1, 3)
             colors = flat_color_pixels[pixel_indices]  # shape: (N, 3) in [R, G, B] order
+            
+            #pcd = o3d.geometry.PointCloud()
+            #pcd.points = o3d.utility.Vector3dVector(vertices)
+            #pcd.colors = o3d.utility.Vector3dVector(colors.reshape(-1, 3))
+            #cl, _ = pcd.remove_radius_outlier(nb_points=10, radius=1/64.)
+            #vertices = np.asarray(cl.points, dtype=np.float32)
+            #colors = np.asarray(cl.colors, dtype=np.uint8)
 
             if (encoding_mode == EncodingMode.NONE):   
                 raw_points = vertices    # shape: (N,3) float32
@@ -243,7 +286,6 @@ def camera_process(
                     payload = raw_points.tobytes() + raw_cols.tobytes()
                     packet = header + payload
                     server.broadcast(packet)
-
             else:
                 # find valid points
                 depth_flat = depth_img.ravel()
@@ -256,47 +298,55 @@ def camera_process(
                 )
                 
                 # --- SUBSAMPLING ---
-                effective_ratio = sum(r for r, on in zip(sampling_layers, active_layers) if on)
+                #effective_ratio = sum(r for r, on in zip(sampling_layers, active_layers) if on)
 
                 # roll one random array and reject ~ (1‑effective_ratio) of valid points
-                rnd = np.random.rand(valid.shape[0])
-                subsample_mask = rnd < effective_ratio
+                #rnd = np.random.rand(valid.shape[0])
+                #subsample_mask = rnd < effective_ratio
+
                 if(encoding_mode == EncodingMode.IMPORTANCE):
-                    # ---GESTURE RECOGNITION---
-                    gesture_recognizer.recognize(display, frame_id)
-
-                    for bounding_box_normalized in gesture_recognizer.latest_bounding_boxes:
-                        if bounding_box_normalized:
-                            roi: np.array = bounding_box_normalized.to_pixel(display.shape[1], display.shape[0], True)
-                            shared_roi[:] = roi
-                            ready_roi_event.set()
-
-                    shared_frame[:] = display
-                    ready_frame_event.set()
-
-                    #TODO: we need to find some work todo here in order to hide latency between processes
-
-                    if ready_cluster_event.is_set():
-                        prev_cluster = shared_cluster.copy()
-                        ready_cluster_event.clear()
-
-                    if debug:
-                        display[prev_cluster[:, :, 0], 2] = 255
-
                     flat_cluster = prev_cluster.flatten()
 
                     in_roi = valid & flat_cluster
-                    out_roi = valid & ~in_roi & subsample_mask
-                    points_in_roi = vertices[in_roi]; colors_in_roi = colors[in_roi]
-                    points_out_roi = vertices[out_roi]; colors_out_roi = colors[out_roi]
-                
+                    out_roi = valid & ~in_roi# & subsample_mask
+
+                    in_roi_indices = np.nonzero(in_roi)[0]
+                    out_roi_indices = np.nonzero(out_roi)[0]
+
+                    points_in_roi = vertices[in_roi_indices]
+                    colors_in_roi = colors[in_roi_indices]
+                    points_out_roi = vertices[out_roi_indices]
+                    colors_out_roi = colors[out_roi_indices]
+
+                    def subsample_points(points, colors, target_size):
+                        n = points.shape[0]
+                        if n == 0:
+                            return points, colors
+                        if n <= target_size:
+                            return points, colors
+
+                        choice_indices = np.random.choice(n, target_size, replace=False)
+                        return points[choice_indices], colors[choice_indices]
+
+                    if points_in_roi.size > 0:
+                        remaining_budget = point_cloud_budget - points_in_roi.shape[0]
+                        if remaining_budget > 0 and points_out_roi.size > 0:
+                            points_out_roi, colors_out_roi = subsample_points(points_out_roi, colors_out_roi, remaining_budget)
+                        elif points_in_roi.shape[0] > point_cloud_budget:
+                            points_in_roi, colors_in_roi = subsample_points(points_in_roi, colors_in_roi, point_cloud_budget)
+                            points_out_roi = np.empty((0, 3), dtype=np.float32)
+                            colors_out_roi = np.empty((0, 3), dtype=np.uint8)
+                    else:
+                        if points_out_roi.size > 0:
+                            points_out_roi, colors_out_roi = subsample_points(points_out_roi, colors_out_roi, point_cloud_budget)
+
                     # MULTIPROCESSING IMPORTANCE
-                    futures: dict[str, concurrent.futures.Future] = {}
-                
+                    futures_dict: dict[str, concurrent.futures.Future] = {}
+
                     buffer_roi = None
                     buffer_out = None
                     if points_in_roi.size:
-                        futures["roi"] = thread_executor.submit(
+                        futures_dict["roi"] = thread_executor.submit(
                             draco_roi_encoding.encode,
                             points_in_roi,
                             colors_in_roi,
@@ -306,7 +356,7 @@ def camera_process(
                         buffer_roi = b""
                     
                     if points_out_roi.size:
-                        futures["out_roi"] = thread_executor.submit(
+                        futures_dict["out_roi"] = thread_executor.submit(
                             draco_outside_roi_encoding.encode,
                             points_out_roi,
                             colors_out_roi,
@@ -314,12 +364,14 @@ def camera_process(
                         )
                     else:
                         buffer_out = b""
+                    
+                    concurrent.futures.wait(futures_dict.values())
 
-                    for label, future in futures.items():
+                    for label, future in futures_dict.items():
                         if label == "roi":
                             buffer_roi = future.result()  
                         if label == "out_roi":
-                            buffer_out = future.result() 
+                            buffer_out = future.result()
 
                     # Broadcast
                     buffers = []
@@ -328,21 +380,20 @@ def camera_process(
                     if buffer_out:
                         buffers.append(buffer_out)
 
+                    #print(f"realsense prepare:{(time.perf_counter() - ms_now) * 1000}ms points:{points_in_roi.shape[0] + points_out_roi.shape[0]}")
+                    
                     count = len(buffers)
-                    offset  = 0   
+                    offset  = 0
                     for buffer in buffers:
                         header = count.to_bytes(1, byteorder='little') + offset.to_bytes(4, byteorder='little')
                         packet = header + buffer
                         server.broadcast(packet)
                         offset += len(buffer)
 
-
-
                 else: # ENCODE THE FULL FRAME
                     # Masking
                     points_full = vertices[valid]
                     colors_full = colors[valid]
-
 
                     # Encode entire valid cloud
                     offset  = 0 
@@ -351,10 +402,8 @@ def camera_process(
                         header = bytes([1]) + offset.to_bytes(4, byteorder='little')
                         packet = header + buffer_full
                         server.broadcast(packet) 
-                       
-                        
-            
 
+            print(f"loop time:{(time.perf_counter() - ms_now) * 1000}ms")
             # Logging and display
             if debug:
                 #---- CV DRAW ON SCREEN----
@@ -365,14 +414,14 @@ def camera_process(
                     frame_count = 0
 
                 # draw FPS
-                cv2.putText(display, f"FPS: {fps}", (cmr_clr_width -200,cmr_clr_height -30),
+                cv2.putText(color_img, f"FPS: {fps}", (cmr_clr_width -200,cmr_clr_height -30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
 
                 # initial text coordinates
                 x, y0, dy = 10, 20, 20
 
                 cv2.putText(
-                    display,
+                    color_img,
                     f"Mode: {encoding_mode.name}",
                     (x, y0),
                     cv2.FONT_HERSHEY_SIMPLEX,
@@ -392,7 +441,7 @@ def camera_process(
 
                     for i, txt in enumerate(settings_full):
                         cv2.putText(
-                            display,
+                            color_img,
                             txt,
                             (x, y0 + (i+1) * dy),
                             cv2.FONT_HERSHEY_SIMPLEX,
@@ -408,7 +457,7 @@ def camera_process(
                     )
                     layers_y = y0 + (len(settings_full) + 2) * dy
                     cv2.putText(
-                        display,
+                        color_img,
                         layer_str,
                         (x, layers_y),
                         cv2.FONT_HERSHEY_SIMPLEX,
@@ -427,7 +476,7 @@ def camera_process(
                     ]
                     for i, txt in enumerate(group1):
                         cv2.putText(
-                            display,
+                            color_img,
                             txt,
                             (x, y0 + (i+1) * dy),
                             cv2.FONT_HERSHEY_SIMPLEX,
@@ -445,7 +494,7 @@ def camera_process(
                     start2_y = y0 + (len(group1) + 2) * dy
                     for j, txt in enumerate(group2):
                         cv2.putText(
-                            display,
+                            color_img,
                             txt,
                             (x, start2_y + j * dy),
                             cv2.FONT_HERSHEY_SIMPLEX,
@@ -460,7 +509,7 @@ def camera_process(
                     )
                     layers_y = start2_y + len(group2) * dy + dy
                     cv2.putText(
-                        display,
+                        color_img,
                         layer_str,
                         (x, layers_y),
                         cv2.FONT_HERSHEY_SIMPLEX,
@@ -470,15 +519,15 @@ def camera_process(
                     )
 
                 if roi is not None:
-                    cv2.rectangle(display, (roi[0], roi[1]), (roi[2], roi[3]), (0,255,0), 2)
+                    cv2.rectangle(color_img, (roi[0], roi[1]), (roi[2], roi[3]), (0,255,0), 2)
             
 
                 if visualization_mode is VisualizationMode.DEPTH:
                     depth_8u = cv2.convertScaleAbs(depth_img, alpha=255.0 / depth_img.max())
                     depth_colormap = cv2.applyColorMap(depth_8u, cv2.COLORMAP_JET)
-                    display = depth_colormap
+                    color_img = depth_colormap
 
-                cv2.imshow(win_name, cv2.cvtColor(display, cv2.COLOR_RGB2BGR))
+                cv2.imshow(win_name, cv2.cvtColor(color_img, cv2.COLOR_RGB2BGR))
 
                 key = cv2.waitKey(1) # this takes 20 ms
 
@@ -805,6 +854,9 @@ def launch_processes(server: broadcaster.ProducerServer, args, device : str) -> 
             cmr_depth_width, cmr_depth_height, cmr_fps,
             stop_event, ready_frame_event, ready_cluster_event, ready_roi_event,
             in_roi_pos_quant_bits, out_roi_pos_quant_bits, in_roi_col_quant_bits, out_roi_col_quant_bits,
+            args.point_cloud_budget,
+            args.min_depth_meter,
+            args.max_depth_meter,
             encoding_mode, debug)
         
         predictor_proc.terminate()

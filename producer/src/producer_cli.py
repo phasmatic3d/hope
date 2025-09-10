@@ -63,17 +63,20 @@ map_to_camera_res = {
 }
 
 producer_cli = argparse.ArgumentParser(description="HOPE producer")
-producer_cli.add_argument("--sam2_checkpoint", type=str, default="small", choices=["tiny", "small", "base_plus", "large"])
-producer_cli.add_argument("--sam2_image_size", type=int, default=512, choices=[1024, 512, 256, 128])
+producer_cli.add_argument("--sam2_checkpoint", type=str, default="large", choices=["tiny", "small", "base_plus", "large"])
+producer_cli.add_argument("--sam2_image_size", type=int, default=1024, choices=[1024, 512, 256, 128])
 producer_cli.add_argument("--yolo_size", type=str, default="large", choices=["small, medium, large"])
-producer_cli.add_argument("--realsense_clr_stream", type=str, default="clr_high_res", choices=["clr_high_res", "clr_mid_res", "clr_low_res"])
-producer_cli.add_argument("--realsense_depth_stream", type=str, default="dpth_high_res", choices=["dpth_high_res", "dpth_mid_res", "dpth_low_res"])
+producer_cli.add_argument("--realsense_clr_stream", type=str, default="clr_mid_res", choices=["clr_high_res", "clr_mid_res", "clr_low_res"])
+producer_cli.add_argument("--realsense_depth_stream", type=str, default="dpth_mid_res", choices=["dpth_high_res", "dpth_mid_res", "dpth_low_res"])
 producer_cli.add_argument("--realsense_target_fps", type=int, default=30, choices=[90, 30, 15, 6])
 producer_cli.add_argument("--cluster_predictor", type=str, default="sam2", choices=["yolo", "sam2",])
-producer_cli.add_argument("--in_roi_pos_quant_bits", type=int, default=14, choices=[11,12,13,14,15])
-producer_cli.add_argument("--out_roi_pos_quant_bits", type=int, default=10, choices=[8,9,10,11])
-producer_cli.add_argument("--in_roi_col_quant_bits", type=int, default=8, choices=[7,8])
-producer_cli.add_argument("--out_roi_col_quant_bits", type=int, default=6, choices=[6,7])
+producer_cli.add_argument("--in_roi_pos_quant_bits", type=int, default=10)
+producer_cli.add_argument("--out_roi_pos_quant_bits", type=int, default=9)
+producer_cli.add_argument("--in_roi_col_quant_bits", type=int, default=8,)
+producer_cli.add_argument("--out_roi_col_quant_bits", type=int, default=6)
+producer_cli.add_argument("--point_cloud_budget", type=int, default=150000)
+producer_cli.add_argument("--min_depth_meter", type=float, default=0.1)
+producer_cli.add_argument("--max_depth_meter", type=float, default=0.8)
 
 producer_cli.add_argument(
     "--encoding_mode",
@@ -83,13 +86,17 @@ producer_cli.add_argument(
     help="Encoding mode: NONE, FULL, or IMPORTANCE"
 )
 
-producer_cli.add_argument("--debug", type=bool, default=False, choices=[True,False])
+producer_cli.add_argument("--debug", type=bool, default=False)
 
+#openssl genrsa -out server.key 2048
+#openssl req -new -key server.key -out server.csr
+#openssl x509 -req -days 365 -in server.csr -signkey server.key -out server.crt
+#npm run build and copy folder
 # Server Arts
 producer_cli.add_argument(
     "--server_host",        
     type=str, 
-    default="ws://localhost",
+    default="wss://192.168.1.219",
     help="Broadcast server host"
 )
 
