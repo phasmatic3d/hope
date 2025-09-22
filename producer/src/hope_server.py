@@ -112,7 +112,7 @@ def camera_process(
         focal_length_x= color_intrinsics.fx,
         focal_length_y=color_intrinsics.fy,
         box_size=0.02, 
-        delay_frames=10)
+        delay_frames=5)
     
     min_dist = min_depth_meter
     max_dist = max_depth_meter
@@ -190,6 +190,7 @@ def camera_process(
     try:
         while not stop_event.is_set():
             ms_now = time.perf_counter()
+            #ms_now = time.perf_counter()
             frame_count += 1
             frame_id += 1
             frames = pipeline.wait_for_frames()
@@ -197,7 +198,10 @@ def camera_process(
 
             depth_frame = frames.get_depth_frame()  
             color_frame = frames.get_color_frame()    
-                        
+            
+            if not depth_frame or not color_frame:
+                continue
+
             if depth_height is None: 
                 depth_height, depth_width = depth_frame.get_height(), depth_frame.get_width()
 
@@ -292,11 +296,12 @@ def camera_process(
                 # Build a (H*W,) boolean mask where True means:
                 #  1) the depth sensor saw something (depth_flat > 0),
                 #  2) the reconstructed Z coordinate is a finite number,
-                valid = (
-                    (depth_flat > 0)                         # non-zero depth reading
-                    & np.isfinite(vertices[:, 2])      # Z isn’t NaN or ±Inf
-                )
-                
+                #valid = (
+                #    (depth_flat > 0)                         # non-zero depth reading
+                #    & np.isfinite(vertices[:, 2])      # Z isn’t NaN or ±Inf
+                #)
+                valid = depth_flat > 0
+
                 # --- SUBSAMPLING ---
                 #effective_ratio = sum(r for r, on in zip(sampling_layers, active_layers) if on)
 

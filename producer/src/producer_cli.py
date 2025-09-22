@@ -71,12 +71,12 @@ producer_cli.add_argument("--realsense_depth_stream", type=str, default="dpth_mi
 producer_cli.add_argument("--realsense_target_fps", type=int, default=30, choices=[90, 30, 15, 6])
 producer_cli.add_argument("--cluster_predictor", type=str, default="sam2", choices=["yolo", "sam2",])
 producer_cli.add_argument("--in_roi_pos_quant_bits", type=int, default=10)
-producer_cli.add_argument("--out_roi_pos_quant_bits", type=int, default=9)
+producer_cli.add_argument("--out_roi_pos_quant_bits", type=int, default=8)
 producer_cli.add_argument("--in_roi_col_quant_bits", type=int, default=8,)
 producer_cli.add_argument("--out_roi_col_quant_bits", type=int, default=6)
-producer_cli.add_argument("--point_cloud_budget", type=int, default=150000)
-producer_cli.add_argument("--min_depth_meter", type=float, default=0.1)
-producer_cli.add_argument("--max_depth_meter", type=float, default=0.8)
+producer_cli.add_argument("--point_cloud_budget", type=int, default=100000)
+producer_cli.add_argument("--min_depth_meter", type=float, default=0.01)
+producer_cli.add_argument("--max_depth_meter", type=float, default=1.)
 
 producer_cli.add_argument(
     "--encoding_mode",
