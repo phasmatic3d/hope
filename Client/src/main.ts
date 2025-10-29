@@ -168,15 +168,15 @@ function createPointCloudProcessor(
 }
 
 async function setupScene() {
-	const POINT_BUDGET = 80_000_000;
+	const POINT_BUDGET = 100_000;
+	const ENC_BPP = 16; 
 
-	const sharedEncodedBuffer = new SharedArrayBuffer(POINT_BUDGET * 2);
+	const sharedEncodedBuffer = new SharedArrayBuffer(POINT_BUDGET * ENC_BPP * 2);
 	const sharedEncodedView   = new Uint8Array(sharedEncodedBuffer);
 
 	const decodedPosBuffer = new SharedArrayBuffer(POINT_BUDGET * 3 * 4);
-	const decodedColBuffer = new SharedArrayBuffer(POINT_BUDGET * 3 * 1);
-
 	const decodedPosView = new Float32Array(decodedPosBuffer);
+	const decodedColBuffer = new SharedArrayBuffer(POINT_BUDGET * 3 * 1);
 	const decodedColView = new Uint8Array(decodedColBuffer);
 
 	const scene    = new THREE.Scene();
