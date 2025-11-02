@@ -1,4 +1,5 @@
 export type DecoderMessage = {
-	type: 'decoded',
-	numPoints: number,
+        type: 'decoded',
+        numPoints: number,
+        frameId: number,
 }

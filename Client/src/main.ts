@@ -21,8 +21,10 @@ function createPointCloudProcessor(
 	let decodedChunks  = 0;	
 	let totalPoints    = 0;		
 	let currentPointCursor = 0;	// next write start (in points)
-	let inFlight = false;		// true while a chunk is being decoded
-	const queue: { offset: number; length: number }[] = [];
+	let inFlight = false;		// true while a chunk for the active frame is being decoded
+	let inFlightFrameId = 0;	// frame tied to the worker's current decode
+	let currentFrameId = 0;	// frame tracker
+	const queue: { offset: number; length: number; frameId: number }[] = [];
 
 	function ensurePointCloud() {
 		if (pointCloudGeometry) return;
@@ -30,7 +32,6 @@ function createPointCloudProcessor(
 		const mat = new THREE.PointsMaterial({ vertexColors: true, size: 0.1, sizeAttenuation: false });
 		pointCloud = new THREE.Points(pointCloudGeometry, mat);
 		pointCloud.rotateX(Math.PI);
-		//pointCloud.frustumCulled = false;
 		scene.add(pointCloud);
 	}
 
@@ -40,11 +41,14 @@ function createPointCloudProcessor(
 		const next = queue.shift()!;
 		const writeIndex = currentPointCursor; // in points
 		inFlight = true;
+		inFlightFrameId = next.frameId;
+
 		worker.postMessage({
 			type: 'decode',
 			offset: next.offset,
 			length: next.length,
-			writeIndex
+			writeIndex,
+			frameId: next.frameId
 		});
 	}
 
@@ -61,17 +65,29 @@ function createPointCloudProcessor(
 			totalPoints    = 0;
 			currentPointCursor = 0;
 			inFlight = false;
+			inFlightFrameId = 0;
 			queue.length = 0;
 			return;
 		}
 
 		if (msg.type !== 'decoded') return;
 
+		// Drop stale frame responses before touching active state.
+		if (msg.frameId !== currentFrameId) {
+			if (msg.frameId === inFlightFrameId) {
+				inFlight = false;
+				inFlightFrameId = 0;
+			}
+			startNext();
+			return;
+		}
+
 		// advance cursors
 		decodedChunks += 1;
 		totalPoints   += msg.numPoints;
 		currentPointCursor += msg.numPoints;
 		inFlight = false;
+		inFlightFrameId = 0;
 
 		if (decodedChunks < expectedChunks) {
 			startNext();
@@ -99,6 +115,7 @@ function createPointCloudProcessor(
 			totalPoints    = 0;
 			currentPointCursor = 0;
 			inFlight = false;
+			inFlightFrameId = 0;
 			queue.length = 0;
 		}
 	};
@@ -120,6 +137,10 @@ function createPointCloudProcessor(
 		const HALF_BYTES = encView.length >>> 1;
 
 		const isFrameStart = bufferCount > 0 && (chunk.offset % HALF_BYTES === 0);
+		if (isFrameStart) {
+			// Bump frame id whenever a new frame starts.
+			currentFrameId += 1;
+		}
 		// NONE mode 
 		if (bufferCount === 0) {
 			const { offset, length } = chunk;
@@ -149,6 +170,7 @@ function createPointCloudProcessor(
 			totalPoints    = 0;
 			currentPointCursor = 0;
 			inFlight = false;
+			inFlightFrameId = 0;
 			queue.length = 0;
 		}
 
@@ -158,11 +180,12 @@ function createPointCloudProcessor(
 			totalPoints    = 0;
 			currentPointCursor = 0;
 			inFlight = false;
+			inFlightFrameId = 0;
 			queue.length = 0;
 		}
 
 
-		queue.push({ offset: chunk.offset, length: chunk.length });
+		queue.push({ offset: chunk.offset, length: chunk.length, frameId: currentFrameId });
 		startNext();
 	};
 }
@@ -233,7 +256,7 @@ async function setupScene() {
 			const offset      = dv.getUint32(1, true); // frame-relative offset
 
 			if (bufferCount > 0 && offset === 0) {
-			// flip to the other half so current decoding bytes can't be overwritten
+			// flip to the other half
 			encodedBase = (encodedBase === 0) ? HALF_BYTES : 0;
 			}
 
