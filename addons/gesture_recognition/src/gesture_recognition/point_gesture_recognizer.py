@@ -2,6 +2,8 @@ import math
 import enum
 import numpy as np
 import mediapipe as mp
+import copy
+import threading
 
 from dataclasses import dataclass
 
@@ -126,6 +128,7 @@ class PointingGestureRecognizer:
         focal_length_y: float,
         box_size: float=0.05,
         delay_frames: int=15,
+        debug: bool=False
     ):
         assert(focal_length_x > 0 and focal_length_y > 0)
         assert(image_width > 0 and image_height > 0)
@@ -151,6 +154,9 @@ class PointingGestureRecognizer:
         self.focal_distance_y = focal_length_y
         self.box_size = box_size
         self.query_area = None
+        self.cb_result = None
+        self.lock = threading.Lock()
+        self.debug = debug
 
     def recognize(self, np_image: np.array, frame_timestamp_ms: int):
         for box in self.latest_bounding_boxes:
@@ -159,6 +165,10 @@ class PointingGestureRecognizer:
         self.landmarker.detect_async(image=Image(image_format=ImageFormat.SRGB, data=np_image), timestamp_ms=frame_timestamp_ms)
 
     def on_landmarks_v2(self, result: HandLandmarkerResult, image: Image, timestamp_ms: int) -> None:
+        if self.debug and result.hand_landmarks:
+            with self.lock:
+                self.cb_result = copy.deepcopy(result.hand_landmarks)
+
         if not result.hand_landmarks:
             # no hand → reset
             for i in range(self.options.num_hands):
