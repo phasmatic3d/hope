@@ -5,6 +5,7 @@ import os
 import struct
 import open3d as o3d
 import pandas as pd
+import mediapipe as mediap
 
 import numpy as np
 import producer_cli as producer_cli
@@ -12,6 +13,7 @@ import producer_cli as producer_cli
 from pathlib import Path
 from typing import Tuple
 from broadcaster_wrapper.broadcasting import *
+from mediapipe.framework.formats import landmark_pb2
 
 import pyrealsense2 as rs
 import cv2
@@ -81,7 +83,7 @@ def camera_process(
         debug : bool) :
 
     # Hyperparameters to move to argparse
-    visualization_mode = VisualizationMode.DEPTH
+    visualization_mode = VisualizationMode.COLOR
 
     thread_executor = ThreadPoolExecutor(max_workers=2)
     #thread_executor = ProcessPoolExecutor(max_workers=2)
@@ -89,6 +91,8 @@ def camera_process(
     if debug:
         win_name = "RealSense vis"
         cv2.namedWindow(win_name, cv2.WINDOW_AUTOSIZE)
+
+    show_debug_text = False
 
     pipeline = rs.pipeline()
     cfg = rs.config()
@@ -112,7 +116,8 @@ def camera_process(
         focal_length_x= color_intrinsics.fx,
         focal_length_y=color_intrinsics.fy,
         box_size=0.02, 
-        delay_frames=5)
+        delay_frames=5,
+        debug=debug)
     
     min_dist = min_depth_meter
     max_dist = max_depth_meter
@@ -216,9 +221,14 @@ def camera_process(
             # Extract raw data buffers from the RealSense frames into NumPy arrays:
             #  - color_frame.get_data() gives you an H×W×3 array of RGB pixels (uint8).
             #  - depth_frame.get_data() gives you an H×W array of 16-bit depth values.
-            color_img = np.asanyarray(color_frame.get_data())        
+            color_img = np.asanyarray(color_frame.get_data())   
             depth_img = np.asanyarray(depth_frame.get_data())
             
+            color_img_display = None
+
+            if debug:
+                color_img_display = color_img.copy()
+
             if(encoding_mode == EncodingMode.IMPORTANCE):
                 # ---GESTURE RECOGNITION---
                 gesture_recognizer.recognize(color_img, frame_id)
@@ -237,7 +247,35 @@ def camera_process(
                     ready_cluster_event.clear()
 
                 if debug:
-                    color_img[prev_cluster[:, :, 0], 2] = 255
+                    color_img_display[prev_cluster[:, :, 0], 2] = 255
+
+                    def ensure_landmark_list(data):
+                        if isinstance(data, landmark_pb2.NormalizedLandmarkList):
+                            return data
+                        elif isinstance(data, list):
+                            # Rebuild
+                            return landmark_pb2.NormalizedLandmarkList(
+                                landmark=[
+                                    landmark_pb2.NormalizedLandmark(x=lm.x, y=lm.y, z=lm.z) for lm in data
+                                ]
+                            )
+                        else:
+                            raise TypeError("Unexpected landmark data type")
+
+                    mp_drawing = mediap.solutions.drawing_utils
+                    mp_hands = mediap.solutions.hands
+                    with gesture_recognizer.lock:
+                        if gesture_recognizer.cb_result is not None:
+                            for hand_landmark in gesture_recognizer.cb_result:
+                                hand_landmark = ensure_landmark_list(hand_landmark)
+                                mp_drawing.draw_landmarks(
+                                    image=color_img_display,
+                                    landmark_list=hand_landmark,
+                                    connections=mp_hands.HAND_CONNECTIONS,
+                                    landmark_drawing_spec=mp_drawing.DrawingSpec(color=(0,255,0), thickness=2, circle_radius=2),
+                                    connection_drawing_spec=mp_drawing.DrawingSpec(color=(255,0,0), thickness=2))
+                                
+                        gesture_recognizer.cb_result = None
 
             # Associate the upcoming depth-to-3D mapping with the given color frame.
             # This ensures each 3D point will be textured with the correct RGB value.
@@ -408,7 +446,7 @@ def camera_process(
                         packet = header + buffer_full
                         server.broadcast(packet) 
 
-            print(f"loop time:{(time.perf_counter() - ms_now) * 1000}ms")
+            #print(f"loop time:{(time.perf_counter() - ms_now) * 1000}ms")
             # Logging and display
             if debug:
                 #---- CV DRAW ON SCREEN----
@@ -418,24 +456,25 @@ def camera_process(
                     prev_time = now
                     frame_count = 0
 
-                # draw FPS
-                cv2.putText(color_img, f"FPS: {fps}", (cmr_clr_width -200,cmr_clr_height -30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
+                if show_debug_text:
+                    # draw FPS
+                    cv2.putText(color_img_display, f"FPS: {fps}", (cmr_clr_width -200,cmr_clr_height -30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
 
-                # initial text coordinates
-                x, y0, dy = 10, 20, 20
+                    # initial text coordinates
+                    x, y0, dy = 10, 20, 20
 
-                cv2.putText(
-                    color_img,
-                    f"Mode: {encoding_mode.name}",
-                    (x, y0),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (255, 255, 255),
-                    2
-                )
+                    cv2.putText(
+                        color_img_display,
+                        f"Mode: {encoding_mode.name}",
+                        (x, y0),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 255),
+                        2
+                    )
 
-                if encoding_mode == EncodingMode.FULL:
+                if show_debug_text and encoding_mode == EncodingMode.FULL:
                     # FULL: show only the full-encode settings
                     settings_full = [
                         f"PosQuant bits: {draco_full_encoding.position_quantization_bits} / 20",
@@ -446,7 +485,7 @@ def camera_process(
 
                     for i, txt in enumerate(settings_full):
                         cv2.putText(
-                            color_img,
+                            color_img_display,
                             txt,
                             (x, y0 + (i+1) * dy),
                             cv2.FONT_HERSHEY_SIMPLEX,
@@ -462,7 +501,7 @@ def camera_process(
                     )
                     layers_y = y0 + (len(settings_full) + 2) * dy
                     cv2.putText(
-                        color_img,
+                        color_img_display,
                         layer_str,
                         (x, layers_y),
                         cv2.FONT_HERSHEY_SIMPLEX,
@@ -471,7 +510,7 @@ def camera_process(
                         2
                     )
 
-                elif encoding_mode == EncodingMode.IMPORTANCE:
+                elif show_debug_text and encoding_mode == EncodingMode.IMPORTANCE:
                     # IMPORTANCE: show both in-ROI and out-ROI settings
                     group1 = [
                         f"PosQuant bits (in-ROI):  {draco_roi_encoding.position_quantization_bits} / 20",
@@ -481,7 +520,7 @@ def camera_process(
                     ]
                     for i, txt in enumerate(group1):
                         cv2.putText(
-                            color_img,
+                            color_img_display,
                             txt,
                             (x, y0 + (i+1) * dy),
                             cv2.FONT_HERSHEY_SIMPLEX,
@@ -499,7 +538,7 @@ def camera_process(
                     start2_y = y0 + (len(group1) + 2) * dy
                     for j, txt in enumerate(group2):
                         cv2.putText(
-                            color_img,
+                            color_img_display,
                             txt,
                             (x, start2_y + j * dy),
                             cv2.FONT_HERSHEY_SIMPLEX,
@@ -514,7 +553,7 @@ def camera_process(
                     )
                     layers_y = start2_y + len(group2) * dy + dy
                     cv2.putText(
-                        color_img,
+                        color_img_display,
                         layer_str,
                         (x, layers_y),
                         cv2.FONT_HERSHEY_SIMPLEX,
@@ -524,15 +563,16 @@ def camera_process(
                     )
 
                 if roi is not None:
-                    cv2.rectangle(color_img, (roi[0], roi[1]), (roi[2], roi[3]), (0,255,0), 2)
-            
+                    cv2.rectangle(color_img_display, (roi[0], roi[1]), (roi[2], roi[3]), (0,255,0), 2)
+                    roi = None
 
                 if visualization_mode is VisualizationMode.DEPTH:
                     depth_8u = cv2.convertScaleAbs(depth_img, alpha=255.0 / depth_img.max())
                     depth_colormap = cv2.applyColorMap(depth_8u, cv2.COLORMAP_JET)
-                    color_img = depth_colormap
+                    color_img_display = depth_colormap
 
-                cv2.imshow(win_name, cv2.cvtColor(color_img, cv2.COLOR_RGB2BGR))
+                
+                cv2.imshow(win_name, cv2.cvtColor(cv2.resize(color_img_display, (1280, 720)), cv2.COLOR_RGB2BGR))
 
                 key = cv2.waitKey(1) # this takes 20 ms
 
