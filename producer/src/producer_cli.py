@@ -68,6 +68,25 @@ producer_cli.add_argument("--realsense_depth_stream", type=str, default="dpth_hi
 producer_cli.add_argument("--realsense_target_fps", type=int, default=30, choices=[90, 30, 15, 6])
 producer_cli.add_argument("--cluster_predictor", type=str, default="sam2", choices=["yolo", "sam2",])
 
+producer_cli.add_argument(
+    "--target_frame_rate",
+    type=float,
+    default=30.0,
+    help="Desired frame rate for budgeting points (frames per second).",
+)
+producer_cli.add_argument(
+    "--max_bandwidth_mbps",
+    type=float,
+    default=40.0,
+    help="Bandwidth budget in MB/s used to derive the per-frame point budget.",
+)
+producer_cli.add_argument(
+    "--record_frames",
+    type=int,
+    default=200,
+    help="Number of frames to capture after pressing R for point cloud export."
+)
+
 # Server Arts
 producer_cli.add_argument(
     "--server_host",        
@@ -84,16 +103,16 @@ producer_cli.add_argument(
 )
 
 producer_cli.add_argument(
-        "--server_write_to_csv",        
-        type=bool, 
+        "--server_write_to_csv",
+        type=bool,
         choices=[False, True],
         default=True,
         help="Write latency values to csv"
     )
 
 producer_cli.add_argument(
-        "--server_use_pings_for_rtt",        
-        type=bool, 
+        "--server_use_pings_for_rtt",
+        type=bool,
         choices=[False, True],
         default=False,
         help="Calculate RTT using pings instead of timestamps."
@@ -104,6 +123,74 @@ producer_cli.add_argument(
     action="store_true",
     default=False,
     help="When true, pressing ‘c’ will run a full 90-frame hyperparam simulation. Otherwise it writes a last 30-frame csv pe press"
+)
+
+producer_cli.add_argument(
+    "--compress_PC_set_FULL",
+    type=int,
+    default=None,
+    help="Run FULL compression on a saved PC set and exit afterward."
+)
+
+producer_cli.add_argument(
+    "--subsample_frames",
+    action='store_true',
+
+    default=False,
+    help="Toggle subsampling while recording NONE frames or compressing existing NONE sets.",
+)
+
+producer_cli.add_argument(
+    "--disable_background_removal",
+    action='store_true',
+    default=True,
+    help="Skip background removal while recording NONE frames or compressing existing NONE sets.",
+)
+
+producer_cli.add_argument(
+    "--compress_PC_set_IMPORTANCE",
+    type=str,
+    default=None,
+    help="Comma-separated PC set IDs to compress in IMPORTANCE mode."
+)
+
+producer_cli.add_argument(
+    "--importance_query_point",
+    type=str,
+    default="400,200",
+    help="Pixel coordinates 'x,y' used to seed the SAM ROI when running IMPORTANCE offline."
+)
+producer_cli.add_argument(
+    "--importance_box_fraction",
+    type=float,
+    default=0.05,
+    help="Normalized box size around the query point for the SAM prompt (fraction of frame width/height)."
+)
+
+
+producer_cli.add_argument(
+    "--importance_in_roi_pos_bits",
+    type=int,
+    default=12,
+    help="Position quantization bits for ROI geometry during IMPORTANCE offline compression.",
+)
+producer_cli.add_argument(
+    "--importance_out_roi_pos_bits",
+    type=int,
+    default=11,
+    help="Position quantization bits for out-of-ROI geometry during IMPORTANCE offline compression.",
+)
+producer_cli.add_argument(
+    "--importance_in_roi_color_bits",
+    type=int,
+    default=8,
+    help="Color quantization bits for ROI samples during IMPORTANCE offline compression.",
+)
+producer_cli.add_argument(
+    "--importance_out_roi_color_bits",
+    type=int,
+    default=6,
+    help="Color quantization bits for out-of-ROI samples during IMPORTANCE offline compression.",
 )
 
 def getRequest(outputPath : Path, url : str) -> None:

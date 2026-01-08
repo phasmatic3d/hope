@@ -6,6 +6,7 @@ gesture_recognizer.task
 checkpoints/
 .vscode/
 draco/
+exported_PCs/
 
 __pycache__/
 

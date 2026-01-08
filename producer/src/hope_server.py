@@ -2,7 +2,6 @@ from enum import Enum, auto
 from pyexpat import model
 import time
 import os
-import struct
 
 import pandas as pd
 
@@ -29,6 +28,13 @@ from draco_wrapper.draco_wrapper import (
 
 from utils import (
     write_pointcloud_ply
+)
+
+from recording import (
+    RecordingManager,
+    compute_effective_subsample_ratio,
+    compute_importance_subsample_ratio,
+    BYTES_PER_POINT,
 )
 
 
@@ -76,6 +82,9 @@ import torch.nn.functional as F
 
 DEBUG = True
 
+MIN_DEPTH_M = 0.1
+MAX_DEPTH_M = 1.3
+
 def camera_process(
         server: broadcaster.ProducerServer,
         shared_frame_name,
@@ -86,11 +95,15 @@ def camera_process(
         cmr_depth_width: int,
         cmr_depth_height: int,
         cmr_fps: int,
+        bandwidth_mbps: float,
+        target_frame_rate: float,
+        subsample_frames: bool,
         stop_event: mp.Event,
         ready_frame_event: mp.Event,
         ready_cluster_event: mp.Event,
         ready_roi_event: mp.Event,
-        simulation: bool) :
+        simulation: bool,
+        record_frame_count: int) :
     
     def apply_combo_settings(combo): # Helper function for setting a combination for simulations
         if encoding_mode == EncodingMode.FULL:
@@ -107,7 +120,6 @@ def camera_process(
             draco_outside_roi_encoding.color_quantization_bits    = combo["col_bits_out"]
             draco_outside_roi_encoding.speed_encode               = combo["encoding_speed_out"]
             draco_outside_roi_encoding.speed_decode               = combo["decoding_speed_out"]
-            active_layers[:] = combo["layers"]
     
     global DEBUG
 
@@ -126,10 +138,24 @@ def camera_process(
     quality_simulation_buffer   = deque(maxlen=30)
 
     thread_executor = ThreadPoolExecutor(max_workers=2)
+
+    recording_manager = RecordingManager(
+        export_root=Path(__file__).resolve().parent.parent / "exported_PCs",
+        frame_target=record_frame_count,
+    )
     
     if DEBUG:
         win_name = "RealSense vis"
         cv2.namedWindow(win_name, cv2.WINDOW_AUTOSIZE)
+
+        cursor_position = [0, 0]
+
+        def handle_mouse(event, x, y, flags, param):
+            if event == cv2.EVENT_MOUSEMOVE:
+                cursor_position[0] = x
+                cursor_position[1] = y
+
+        cv2.setMouseCallback(win_name, handle_mouse)
 
     pipeline = rs.pipeline()
     cfg = rs.config()
@@ -155,8 +181,8 @@ def camera_process(
         box_size=0.02, 
         delay_frames=10)
     
-    min_dist = 0.1
-    max_dist = 1.3
+    min_dist = MIN_DEPTH_M
+    max_dist = MAX_DEPTH_M
     depth_thresh = rs.threshold_filter(min_dist, max_dist)
 
     align_to = rs.stream.color
@@ -205,13 +231,9 @@ def camera_process(
     roi = None
 
 
-    # --- SUBSAMPLING LAYERS SETUP ---
-    # layer 0 = 60%, layer 1 = 15%, layer 2 = 25%
-    sampling_layers = [0.60, 0.15, 0.25]
-    active_layers   = [True,  True,  True]
-
     broadcast_round = 0 # Keep track of broadcasting round to query cpp csv for logging
     batch = 0
+    effective_ratio = 1.0
     
     try:
         while not stop_event.is_set():
@@ -219,11 +241,12 @@ def camera_process(
             draco_roi_encoding.position_quantization_bits = draco_full_encoding.position_quantization_bits
             draco_roi_encoding.color_quantization_bits    = draco_full_encoding.color_quantization_bits
             draco_roi_encoding.speed_encode               = draco_full_encoding.speed_encode
-            draco_roi_encoding.speed_decode               = draco_full_encoding.speed_decode 
+            draco_roi_encoding.speed_decode               = draco_full_encoding.speed_decode
 
 
             frame_id += 1
             frame_count += 1
+            frame_capture_start = time.perf_counter() 
             frames = pipeline.wait_for_frames()
 
             pipeline_stats.frame_preparation_ms = time.perf_counter()
@@ -247,8 +270,10 @@ def camera_process(
             # Extract raw data buffers from the RealSense frames into NumPy arrays:
             #  - color_frame.get_data() gives you an H×W×3 array of RGB pixels (uint8).
             #  - depth_frame.get_data() gives you an H×W array of 16-bit depth values.
-            color_img = np.asanyarray(color_frame.get_data())        
+            color_img = np.asanyarray(color_frame.get_data())
             depth_img = np.asanyarray(depth_frame.get_data())
+
+            depth_flat = depth_img.ravel()
 
             display = color_img
 
@@ -300,21 +325,54 @@ def camera_process(
             colors = flat_color_pixels[pixel_indices]  # shape: (N, 3) in [R, G, B] order
             pipeline_stats.color_lookup_ms = ((time.perf_counter() - pipeline_stats.color_lookup_ms) * 1000)
 
-            if (encoding_mode == EncodingMode.NONE):
+            valid_points_mask = (
+                (depth_flat > 0)
+                & np.isfinite(vertices[:, 2])
+            )
+
+            valid = valid_points_mask
+
+            subsampling_time_start = time.perf_counter()
+            effective_ratio = 1.0
+            subsample_mask = np.ones(valid.shape[0], dtype=bool)
+
+            if encoding_mode == EncodingMode.NONE:
+                valid_points_count = int(np.count_nonzero(valid))
+                
+                if subsample_frames:
+                    effective_ratio = compute_effective_subsample_ratio(
+                        valid_points_count,
+                        bandwidth_mbps,
+                        target_frame_rate,
+                        bytes_per_point=BYTES_PER_POINT,
+                    )
+
+
+                    subsample_mask = np.random.rand(valid.shape[0]) < effective_ratio
+                    print(f"[NONE] Effective subsample ratio applied: {effective_ratio:.4f}")
+
+                pipeline_stats.subsampling_ms = (time.perf_counter() - subsampling_time_start ) * 1000
+
+           
                 pipeline_stats.data_preparation_ms = (time.perf_counter() - pipeline_stats.data_preparation_ms) * 1000 #prep end
 
-       
-                raw_points = vertices    # shape: (N,3) float32
-                raw_cols = colors     # shape: (N,3) uint8
-
-
+                valid_mask = valid & subsample_mask
+                if recording_manager.is_active:
+                    recording_manager.capture_frame(
+                        vertices,
+                        colors,
+                        color_img,
+                        depth_img,
+                        valid_mask,
+                        capture_time_ms=(time.perf_counter() - frame_capture_start) * 1000,
+                        record_native_color=True,
+                    )
+                raw_points = vertices[valid_mask]
+                raw_cols = colors[valid_mask]
 
                 if(raw_points.size > 0):
-                    offset = 0
-                    header = bytes([0]) + offset.to_bytes(4, byteorder='little')
-                    payload = raw_points.tobytes() + raw_cols.tobytes()
-                    packet = header + payload
-                    server.broadcast(packet)
+                    payload = bytes([0]) + raw_points.tobytes() + raw_cols.tobytes()
+                    server.broadcast(payload)
 
                 entry = server.wait_for_entry(broadcast_round)
                 if entry:
@@ -324,30 +382,31 @@ def camera_process(
             else:
 
                 build_valid_points_start_time = time.perf_counter()
-                # find valid points
-                depth_flat = depth_img.ravel()
-                # Build a (H*W,) boolean mask where True means:
-                #  1) the depth sensor saw something (depth_flat > 0),
-                #  2) the reconstructed Z coordinate is a finite number,
-                valid = (
-                    (depth_flat > 0)                         # non-zero depth reading
-                    & np.isfinite(vertices[:, 2])      # Z isn’t NaN or ±Inf
-                )
-
                 pipeline_stats.build_valid_points_ms = (time.perf_counter() - build_valid_points_start_time) * 1000
-                
-                # --- SUBSAMPLING ---
-                subsampling_time_start = time.perf_counter()
-                effective_ratio = sum(r for r, on in zip(sampling_layers, active_layers) if on)
 
-                # roll one random array and reject ~ (1‑effective_ratio) of valid points
-                rnd = np.random.rand(valid.shape[0])
-                subsample_mask = rnd < effective_ratio
+                if encoding_mode == EncodingMode.FULL:
+                    valid_points_count = int(np.count_nonzero(valid))
+                    effective_ratio = compute_effective_subsample_ratio(
+                        valid_points_count,
+                        bandwidth_mbps,
+                        target_frame_rate,
+                        bytes_per_point=BYTES_PER_POINT,
+                    )
+                    subsample_mask = np.random.rand(valid.shape[0]) < effective_ratio
+                    print(f"[FULL] Effective subsample ratio applied: {effective_ratio:.4f}")
 
-                # Add the subsampling mask to the valid points
-                #valid &= subsample_mask # TODO: Maybe do not subsample the entire point cloud (maybe this has use in IMPORTANCE mode)
-                pipeline_stats.subsampling_ms = (time.perf_counter() - subsampling_time_start ) * 1000
-                
+                if encoding_mode != EncodingMode.IMPORTANCE:
+                    valid &= subsample_mask
+                    if recording_manager.is_active:
+                        recording_manager.capture_frame(
+                            vertices,
+                            colors,
+                            color_img,
+                            depth_img,
+                            valid,
+                            capture_time_ms=(time.perf_counter() - frame_capture_start) * 1000,
+                        )
+
                 if(encoding_mode == EncodingMode.IMPORTANCE):
                     # ---GESTURE RECOGNITION---
                     gesture_recognizer.recognize(display, frame_id)
@@ -400,10 +459,43 @@ def camera_process(
                     flat_cluster = prev_cluster.flatten()
 
                     compression_full_stats.masking_ms = time.perf_counter()
+                    non_roi_candidates = valid & ~flat_cluster
+                    roi_count = int(np.count_nonzero(valid & flat_cluster))
+                    candidate_count = int(np.count_nonzero(non_roi_candidates))
+
+                    effective_ratio = compute_importance_subsample_ratio(
+                        roi_count,
+                        candidate_count,
+                        bandwidth_mbps,
+                        target_frame_rate,
+                        draco_roi_encoding.position_quantization_bits,
+                        draco_roi_encoding.color_quantization_bits,
+                        draco_outside_roi_encoding.position_quantization_bits,
+                        draco_outside_roi_encoding.color_quantization_bits,
+                    )
+
+                    subsample_mask = np.zeros_like(valid, dtype=bool)
+                    if candidate_count:
+                        candidate_indices = np.flatnonzero(non_roi_candidates)
+                        sampled = np.random.rand(candidate_count) < effective_ratio
+                        subsample_mask[candidate_indices] = sampled
+
+                    print(f"[IMPORTANCE] Effective subsample ratio applied: {effective_ratio:.4f}")
+
                     in_roi = valid & flat_cluster
-                    out_roi = valid & ~in_roi & subsample_mask
+                    out_roi = non_roi_candidates & subsample_mask
                     points_in_roi = vertices[in_roi]; colors_in_roi = colors[in_roi]
                     points_out_roi = vertices[out_roi]; colors_out_roi = colors[out_roi]
+                    if recording_manager.is_active:
+                        # Save ROI frames with only out-of-ROI subsampled.
+                        recording_manager.capture_frame(
+                            vertices,
+                            colors,
+                            color_img,
+                            depth_img,
+                            in_roi | out_roi,
+                            capture_time_ms=(time.perf_counter() - frame_capture_start) * 1000,
+                        )
                     compression_full_stats.masking_ms = (time.perf_counter() - compression_full_stats.masking_ms ) * 1000
 
                     pipeline_stats.data_preparation_ms = (time.perf_counter() - pipeline_stats.data_preparation_ms) * 1000 #prep end
@@ -446,20 +538,15 @@ def camera_process(
                     if buffer_out:
                         buffers.append(buffer_out)
                     count = len(buffers)
-                    offset  = 0   
 
                     any_broadcasted = False
                     for buffer in buffers:
-                        header = count.to_bytes(1, byteorder='little') + offset.to_bytes(4, byteorder='little')
-                        packet = header + buffer
-
-                        any_broadcasted |= server.broadcast_batch(batch, packet)
+                        any_broadcasted |= server.broadcast_batch(batch, bytes([count]) + buffer)
                         entry = server.wait_for_entry(broadcast_round)
                         if entry:
                             broadcast_round += 1
                             pipeline_stats.approximate_rtt_ms += entry.approximate_rtt_ms
 
-                        offset += len(buffer)
                     if any_broadcasted:
                         batch += 1
 
@@ -474,12 +561,9 @@ def camera_process(
 
                     # Encode entire valid cloud
                     pipeline_stats.data_preparation_ms = (time.perf_counter() - pipeline_stats.data_preparation_ms) * 1000 #prep end
-                    offset  = 0 
                     if(points_full.any()):
                         buffer_full = draco_full_encoding.encode(points_full, colors_full)
-                        header = bytes([1]) + offset.to_bytes(4, byteorder='little')
-                        packet = header + buffer_full
-                        server.broadcast(packet) 
+                        server.broadcast(bytes([1]) + buffer_full) # prefix with single byte to understand that we are sending one buffer
                     
                     entry = server.wait_for_entry(broadcast_round)
                     if entry:
@@ -645,6 +729,17 @@ def camera_process(
                 cv2.putText(display, f"FPS: {fps}", (cmr_clr_width -200,cmr_clr_height -30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
 
+                if recording_manager.is_active:
+                    cv2.putText(
+                        display,
+                        "Recording...",
+                        (cmr_clr_width - 200, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 0, 255),
+                        2,
+                    )
+
                 # initial text coordinates
                 x, y0, dy = 10, 20, 20
 
@@ -678,16 +773,14 @@ def camera_process(
                             2
                         )
 
-                    # draw sampling layers just below those
-                    layer_str = "   ".join(
-                        f"L{i}{' ON' if active_layers[i] else ' OFF'}({int(sampling_layers[i]*100)}%)"
-                        for i in range(len(sampling_layers))
+                    budget_txt = (
+                        f"Subsample ratio: {effective_ratio*100:.1f}% @ {target_frame_rate:.1f} fps"
+                        f" / {bandwidth_mbps:.1f} MB/s"
                     )
-                    layers_y = y0 + (len(settings_full) + 2) * dy
                     cv2.putText(
                         display,
-                        layer_str,
-                        (x, layers_y),
+                        budget_txt,
+                        (x, y0 + (len(settings_full) + 2) * dy),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.6,
                         (255, 255, 255),
@@ -731,15 +824,14 @@ def camera_process(
                             2
                         )
 
-                    layer_str = "   ".join(
-                        f"L{i}{' ON' if active_layers[i] else ' OFF'}({int(sampling_layers[i]*100)}%)"
-                        for i in range(len(sampling_layers))
+                    budget_txt = (
+                        f"Subsample ratio: {effective_ratio*100:.1f}% @ {target_frame_rate:.1f} fps"
+                        f" / {bandwidth_mbps:.1f} MB/s"
                     )
-                    layers_y = start2_y + len(group2) * dy + dy
                     cv2.putText(
                         display,
-                        layer_str,
-                        (x, layers_y),
+                        budget_txt,
+                        (x, start2_y + len(group2) * dy + dy),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.6,
                         (255, 255, 255),
@@ -754,6 +846,20 @@ def camera_process(
                     depth_8u = cv2.convertScaleAbs(depth_img, alpha=255.0 / depth_img.max())
                     depth_colormap = cv2.applyColorMap(depth_8u, cv2.COLORMAP_JET)
                     display = depth_colormap
+
+                if DEBUG:
+                    # Show the cursor location in the preview for quick spatial feedback.
+                    cursor_text = f"Cursor point : ({cursor_position[0]}, {cursor_position[1]})"
+                    cursor_anchor = (10, display.shape[0] - 10)
+                    cv2.putText(
+                        display,
+                        cursor_text,
+                        cursor_anchor,
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 255),
+                        2,
+                    )
 
                 cv2.imshow(win_name, cv2.cvtColor(display, cv2.COLOR_RGB2BGR))
 
@@ -820,13 +926,9 @@ def camera_process(
                     # save full point cloud PLY
                     points.export_to_ply("snapshot.ply", color_frame)
                     print("Saved full point cloud to snapshot.ply")
-                # LAYERS TOGGLE
-                elif key == ord('1'):
-                    active_layers[0] = not active_layers[0]
-                elif key == ord('2'):
-                    active_layers[1] = not active_layers[1]
-                elif key == ord('3'):
-                    active_layers[2] = not active_layers[2]
+                elif key == ord('r'):
+                    target_dir = recording_manager.start_recording()
+                    print(f"Recording {recording_manager.frame_target} frames into {target_dir.name}")
                 elif key == ord('s'):
                     cv2.imwrite(f'./{frame_id}_out.png', cv2.cvtColor(display, cv2.COLOR_RGB2BGR))
                 elif key == ord('c'): # Logging button
@@ -851,7 +953,7 @@ def camera_process(
                                 draco_full_encoding.speed_decode,
                                 draco_full_encoding.position_quantization_bits,
                                 draco_full_encoding.color_quantization_bits,
-                                active_layers,
+                                None,
                                 # IMPORTANCE mode “in” params
                                 draco_roi_encoding.speed_encode,
                                 draco_roi_encoding.speed_decode,
@@ -875,7 +977,7 @@ def camera_process(
                             draco_full_encoding.speed_decode,
                             draco_full_encoding.position_quantization_bits,
                             draco_full_encoding.color_quantization_bits,
-                            active_layers,
+                            None,
                             # IMPORTANCE mode “in” params
                             draco_roi_encoding.speed_encode,
                             draco_roi_encoding.speed_decode,
@@ -1129,12 +1231,12 @@ def launch_processes(server: broadcaster.ProducerServer, args, device : str) -> 
         names = ["glasses", "shirt", "hat", "shorts"]
         predictor.set_classes(names, predictor.get_text_pe(names))
 
-        predictor_proc = mp.Process(target=thread_worker_yoloe, 
+        predictor_proc = mp.Process(target=thread_worker_yoloe,
             args=(predictor, device, shm_frame.name, shm_cluster.name, shm_roi.name, (cmr_clr_height, cmr_clr_width), stop_event, ready_frame_event, ready_cluster_event, ready_roi_event, predictor_event))
     else:
         print('Failed to parse predictor')
         return
-    
+
     try:
         predictor_proc.start()
         #main_thread_worker_yolo(predictor, frame_queue, result_queue, stop_event)
@@ -1145,9 +1247,10 @@ def launch_processes(server: broadcaster.ProducerServer, args, device : str) -> 
         camera_process(server, shm_frame.name, shm_cluster.name, shm_roi.name,
             cmr_clr_width, cmr_clr_height,
             cmr_depth_width, cmr_depth_height, cmr_fps,
+            args.max_bandwidth_mbps, args.target_frame_rate, args.subsample_frames,
             stop_event, ready_frame_event, ready_cluster_event, ready_roi_event,
-            simulation)
-        
+            simulation, args.record_frames)
+
         predictor_proc.terminate()
         predictor_proc.join()
     except KeyboardInterrupt:
@@ -1156,7 +1259,7 @@ def launch_processes(server: broadcaster.ProducerServer, args, device : str) -> 
 
         if predictor_proc.is_alive():
             predictor_proc.terminate()
-        
+
         predictor_proc.join()
 
     shm_cluster.close()
