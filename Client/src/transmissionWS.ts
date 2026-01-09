@@ -12,7 +12,7 @@ export function openConnection(
     const USE_TLS = true;
 
     // host + port for each mode
-    const HOST = '192.168.1.67';
+    const HOST = '192.168.1.152';
     //const HOST = 'localhost';
     const PORT = 9003; // e.g. 9003 for TLS, 9002 for plain
 
@@ -33,7 +33,7 @@ export function openConnection(
 
      // Event handler for when a message is received
     socket.addEventListener('message', (event) => {
-    //console.warn("Receive Message")
+        //console.log("Received Message")
       if (event.data instanceof ArrayBuffer) {
         response(event.data);
       } else {

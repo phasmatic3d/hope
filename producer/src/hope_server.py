@@ -6,6 +6,7 @@ import struct
 import open3d as o3d
 import pandas as pd
 import mediapipe as mediap
+import websocket_server
 
 import numpy as np
 import producer_cli as producer_cli
@@ -13,7 +14,9 @@ import producer_cli as producer_cli
 from pathlib import Path
 from typing import Tuple
 from broadcaster_wrapper.broadcasting import *
-from mediapipe.framework.formats import landmark_pb2
+#from mediapipe.framework.formats import landmark_pb2
+
+from cuda_quantizer import CudaQuantizer
 
 import pyrealsense2 as rs
 import cv2
@@ -59,7 +62,7 @@ import torch
 import torch.nn.functional as F
 
 def camera_process(
-        server: broadcaster.ProducerServer,
+        server,
         shared_frame_name,
         shared_cluster_name,
         shared_roi_name,
@@ -84,7 +87,7 @@ def camera_process(
 
     # Hyperparameters to move to argparse
     visualization_mode = VisualizationMode.COLOR
-
+    quantizer = CudaQuantizer()
     thread_executor = ThreadPoolExecutor(max_workers=2)
     #thread_executor = ProcessPoolExecutor(max_workers=2)
     
@@ -145,7 +148,7 @@ def camera_process(
     sroi = shared_memory.SharedMemory(name=shared_roi_name)
 
     shared_frame = np.ndarray((cmr_clr_height, cmr_clr_width, 3), dtype=np.uint8, buffer=sf.buf)
-    shared_cluster = np.ndarray((cmr_clr_height, cmr_clr_width, 1), dtype=np.bool, buffer=sc.buf)
+    shared_cluster = np.ndarray((cmr_clr_height, cmr_clr_width, 1), dtype=np.bool_, buffer=sc.buf)
     shared_roi = np.ndarray((4,), dtype=np.int32, buffer=sroi.buf)
 
     ready_frame_event.clear()
@@ -246,7 +249,7 @@ def camera_process(
                     prev_cluster = shared_cluster.copy()
                     ready_cluster_event.clear()
 
-                if debug:
+                if False and debug:
                     color_img_display[prev_cluster[:, :, 0], 2] = 255
 
                     def ensure_landmark_list(data):
@@ -390,26 +393,28 @@ def camera_process(
                     buffer_out = None
                     if points_in_roi.size:
                         futures_dict["roi"] = thread_executor.submit(
-                            draco_roi_encoding.encode,
+                            quantizer.encode,
+                            #draco_roi_encoding.encode,
                             points_in_roi,
                             colors_in_roi,
-                            False
+                            #False
                         )
                     else:
                         buffer_roi = b""
                     
                     if points_out_roi.size:
                         futures_dict["out_roi"] = thread_executor.submit(
-                            draco_outside_roi_encoding.encode,
+                            quantizer.encode,
+                            #draco_outside_roi_encoding.encode,
                             points_out_roi,
                             colors_out_roi,
-                            False
+                            #False
                         )
                     else:
                         buffer_out = b""
                     
                     concurrent.futures.wait(futures_dict.values())
-
+                    
                     for label, future in futures_dict.items():
                         if label == "roi":
                             buffer_roi = future.result()  
@@ -426,9 +431,15 @@ def camera_process(
                     #print(f"realsense prepare:{(time.perf_counter() - ms_now) * 1000}ms points:{points_in_roi.shape[0] + points_out_roi.shape[0]}")
                     
                     count = len(buffers)
+                    frame_id_byte = frame_count % 255
                     offset  = 0
                     for buffer in buffers:
-                        header = count.to_bytes(1, byteorder='little') + offset.to_bytes(4, byteorder='little')
+                        #header = count.to_bytes(1, byteorder='little') + offset.to_bytes(4, byteorder='little')
+                        header = (
+                            count.to_bytes(1, byteorder='little') + 
+                            frame_id_byte.to_bytes(1, byteorder='little') + 
+                            offset.to_bytes(4, byteorder='little')
+                        )
                         packet = header + buffer
                         server.broadcast(packet)
                         offset += len(buffer)
@@ -680,7 +691,7 @@ def thread_worker_sam2(
         sroi = shared_memory.SharedMemory(name=shared_roi_name)
 
         shared_frame = np.ndarray((frame_shape[0], frame_shape[1], 3), dtype=np.uint8, buffer=sf.buf)
-        shared_binary_mask = np.ndarray((frame_shape[0], frame_shape[1], 1), dtype=np.bool, buffer=sc.buf)
+        shared_binary_mask = np.ndarray((frame_shape[0], frame_shape[1], 1), dtype=np.bool_, buffer=sc.buf)
         shared_roi = np.ndarray((1, 4), dtype=np.int32, buffer=sroi.buf)
 
         predictor_ready.clear()
@@ -712,12 +723,12 @@ def thread_worker_sam2(
                     labels = np.array([1, 1, 1, 1, 1], dtype=np.int32)
                     roi_init = True
                     _, _, out_mask_logits = predictor.add_new_prompt(frame_idx=ann_frame_idx, obj_id=ann_obj_id, points=roi_center, labels=labels)
-                    shared_binary_mask[:] = (out_mask_logits[0] > 0.0).permute(1, 2, 0).cpu().numpy().astype(np.bool)
+                    shared_binary_mask[:] = (out_mask_logits[0] > 0.0).permute(1, 2, 0).cpu().numpy().astype(np.bool_)
                     ready_roi_event.clear()
                 else :
                     if roi_init:
                         _, out_mask_logits = predictor.track(local_frame)
-                        shared_binary_mask[:] = (out_mask_logits[0] > 0.0).permute(1, 2, 0).cpu().numpy().astype(np.bool)
+                        shared_binary_mask[:] = (out_mask_logits[0] > 0.0).permute(1, 2, 0).cpu().numpy().astype(np.bool_)
 
                 ready_frame_event.clear()
                 ready_cluster_event.set()
@@ -746,7 +757,7 @@ def thread_worker_yoloe(
         sroi = shared_memory.SharedMemory(name=shared_roi_name)
 
         shared_frame = np.ndarray((frame_shape[0], frame_shape[1], 3), dtype=np.uint8, buffer=sf.buf)
-        shared_binary_mask = np.ndarray((frame_shape[0], frame_shape[1], 1), dtype=np.bool, buffer=sc.buf)
+        shared_binary_mask = np.ndarray((frame_shape[0], frame_shape[1], 1), dtype=np.bool_, buffer=sc.buf)
         shared_roi = np.ndarray((1, 4), dtype=np.int32, buffer=sroi.buf)
         
         predictor_ready.clear()
@@ -791,7 +802,7 @@ def thread_worker_yoloe(
 
                         binary_mask = binary_mask.type(torch.uint8)
                         out_mask = F.interpolate(binary_mask[None, None, :, :], size=(result.masks.orig_shape[0], result.masks.orig_shape[1]), mode='nearest')
-                        shared_binary_mask[:] = out_mask.squeeze(0).permute(1, 2, 0).cpu().numpy().astype(np.bool)
+                        shared_binary_mask[:] = out_mask.squeeze(0).permute(1, 2, 0).cpu().numpy().astype(np.bool_)
                 else:
                     shared_binary_mask[:] = False
 
@@ -807,12 +818,12 @@ def thread_worker_yoloe(
 
                         binary_mask = binary_mask.type(torch.uint8)
                         out_mask = F.interpolate(binary_mask[None, None, :, :], size=(result.masks.orig_shape[0], result.masks.orig_shape[1]), mode='nearest')
-                        shared_binary_mask[:] = out_mask.squeeze(0).permute(1, 2, 0).cpu().numpy().astype(np.bool)
+                        shared_binary_mask[:] = out_mask.squeeze(0).permute(1, 2, 0).cpu().numpy().astype(np.bool_)
                 
                 ready_frame_event.clear()
                 ready_cluster_event.set()
 
-def launch_processes(server: broadcaster.ProducerServer, args, device : str) -> None:
+def launch_processes(server, args, device : str) -> None:
     cmr_clr_width, cmr_clr_height = producer_cli.map_to_camera_res[args.realsense_clr_stream]
     cmr_depth_width, cmr_depth_height = producer_cli.map_to_camera_res[args.realsense_depth_stream]
     cmr_fps = args.realsense_target_fps
@@ -831,12 +842,12 @@ def launch_processes(server: broadcaster.ProducerServer, args, device : str) -> 
     ready_roi_event = mp.Event()
     predictor_event = mp.Event()
 
-    shm_cluster = shared_memory.SharedMemory(create=True, size=cmr_clr_width * cmr_clr_height * np.dtype(np.bool).itemsize)
+    shm_cluster = shared_memory.SharedMemory(create=True, size=cmr_clr_width * cmr_clr_height * np.dtype(np.bool_).itemsize)
     shm_frame = shared_memory.SharedMemory(create=True, size=cmr_clr_width * cmr_clr_height * 3 * np.dtype(np.uint8).itemsize)
     shm_roi = shared_memory.SharedMemory(create=True, size= 4 * np.dtype(np.int32).itemsize)
 
     shared_frame = np.ndarray((cmr_clr_height, cmr_clr_width, 3), dtype=np.uint8, buffer=shm_frame.buf)
-    shared_cluster = np.ndarray((cmr_clr_height, cmr_clr_width, 1), dtype=np.bool, buffer=shm_cluster.buf)
+    shared_cluster = np.ndarray((cmr_clr_height, cmr_clr_width, 1), dtype=np.bool_, buffer=shm_cluster.buf)
     shared_roi = np.ndarray((4,), dtype=np.int32, buffer=shm_roi.buf)
 
     shared_frame[:] = 0

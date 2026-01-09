@@ -6,6 +6,7 @@ import argparse
 import pyrealsense2 as rs
 import producer_cli as producer_cli
 import torch.multiprocessing as mp
+import websocket_server
 
 from pathlib import Path
 import threading
@@ -18,14 +19,37 @@ def main():
 
     args = producer_cli.producer_cli.parse_args()
 
-    server = setup_server(
-        args.server_port,
-        args.server_host,
-    )
-    server.listen()
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
+    if True:
+        server = websocket_server.SecureWebSocketServer(
+            host=args.server_host,
+            port=args.server_port,
+            cert_folder=producer_cli.CERTIFICAT_PATH,
+            cert_file="server.crt",
+            key_file="server.key"
+        )
+        
+        server.start()
+        
+        web_server = websocket_server.SecureHTTPThreadedServer(
+            host=args.server_host,
+            port=args.server_port + 1,
+            cert_folder=producer_cli.CERTIFICAT_PATH,
+            cert_file="server.crt",
+            key_file="server.key",
+            directory="./client_dist" 
+        )
+        web_server.start()
+    else:
+        server = setup_server(
+            args.server_port,
+            f'wss://{args.server_host}',
+        )
+        
+        server.listen()
+        thread = threading.Thread(target=server.run, daemon=True)
+        thread.start()
 
+    
     hope_server.launch_processes(server, args, DEVICE)
         
 def realsense_config() :

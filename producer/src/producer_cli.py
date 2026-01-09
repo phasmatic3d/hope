@@ -13,7 +13,7 @@ from draco_wrapper.draco_wrapper import (
 WORKING_DIR = os.getcwd()
 CONFIG_PATH = os.path.join(WORKING_DIR, "configs")
 CHECKPOINT_PATH = os.path.join(WORKING_DIR, "checkpoints")
-
+CERTIFICAT_PATH = os.path.join(WORKING_DIR, "cert")
 SAM2p1_BASE_URL="https://dl.fbaipublicfiles.com/segment_anything_2/092824"
 SAM2_BASE_URL="https://dl.fbaipublicfiles.com/segment_anything_2/072824"
 
@@ -86,7 +86,7 @@ producer_cli.add_argument(
     help="Encoding mode: NONE, FULL, or IMPORTANCE"
 )
 
-producer_cli.add_argument("--debug", type=bool, default=False)
+producer_cli.add_argument("--debug", type=bool, default=True)
 
 #openssl genrsa -out server.key 2048
 #openssl req -new -key server.key -out server.csr
@@ -96,17 +96,16 @@ producer_cli.add_argument("--debug", type=bool, default=False)
 producer_cli.add_argument(
     "--server_host",        
     type=str, 
-    default="wss://192.168.1.219",
+    default="192.168.1.152",
     help="Broadcast server host"
 )
 
 producer_cli.add_argument(
     "--server_port",        
     type=int, 
-    default=9002,
+    default=9003,
     help="Broadcast server port"
 )
-
 
 def getRequest(outputPath : Path, url : str) -> None:
     req = requests.get(url, stream=True, allow_redirects=True, timeout=10)

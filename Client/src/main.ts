@@ -2,11 +2,13 @@
 import * as THREE from 'three';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import { openConnection } from './transmissionWS';
+//import { openConnection } from './transmissionWebRTC';
 import { DecoderMessage } from './types';
 import { FreeRoamController } from './FreeRoamController';
 
+
 const worker = new Worker(new URL('./worker.ts', import.meta.url), { });
-const ENCODED_HEADER = 5; // Header bytes
+const ENCODED_HEADER = 6; // Header bytes
 
 function createPointCloudProcessor(
 	scene: THREE.Scene,
@@ -15,7 +17,7 @@ function createPointCloudProcessor(
 ) {
 	let pointCloudGeometry: THREE.BufferGeometry | null = null;
 	let pointCloud: THREE.Points | null = null;
-
+	let latestFrameId = -1;
 	// Frame state (importance/full mode)
 	let expectedChunks = 0;	
 	let decodedChunks  = 0;	
@@ -131,9 +133,31 @@ function createPointCloudProcessor(
 	return (
 		sharedBuf: SharedArrayBuffer,
 		chunk: { offset: number; length: number },
-		bufferCount: number
+		bufferCount: number,
+		packetFrameId: number
 	): void => {
 		const encView = new Uint8Array(sharedBuf);
+
+		if (packetFrameId !== latestFrameId) {
+            // If we were working on an old frame, drop it immediately
+            if (queue.length > 0 || inFlight) {
+                // console.warn(`Frame skip: ${latestFrameId} -> ${packetFrameId}`);
+                queue.length = 0; // Clear the backlog
+                // Reset counters
+                expectedChunks = 0;
+                decodedChunks  = 0;
+                totalPoints    = 0;
+                currentPointCursor = 0;
+                inFlight = false;
+                inFlightFrameId = 0;
+            }
+            latestFrameId = packetFrameId;
+        }
+
+		if (queue.length > 5) {
+             return; // Drop packet to catch up
+        }
+
 		const HALF_BYTES = encView.length >>> 1;
 
 		const isFrameStart = bufferCount > 0 && (chunk.offset % HALF_BYTES === 0);
@@ -251,27 +275,32 @@ async function setupScene() {
 	let encodedBase = 0;                                   // 0 or HALF
 	openConnection(
 		(data: ArrayBuffer) => {
-			const dv          = new DataView(data);
-			const bufferCount = dv.getUint8(0);        // chunks in frame (0 = NONE mode)
-			const offset      = dv.getUint32(1, true); // frame-relative offset
+			const dv = new DataView(data);
+            
+            const bufferCount = dv.getUint8(0);        // Byte 0
+            const frameId     = dv.getUint8(1);        // Byte 1 (NEW)
+            const offset      = dv.getUint32(2, true); // Bytes 2-5 (Shifted)
 
-			if (bufferCount > 0 && offset === 0) {
-			// flip to the other half
-			encodedBase = (encodedBase === 0) ? HALF_BYTES : 0;
-			}
+            // Optional: Log Latency
+            //const latency = (Date.now()/1000.0 - serverTime) * 1000;
+            // console.log(`Lat: ${latency.toFixed(1)}ms`);
 
-			// Copy payload into the active half at absolute offset
-			const payload = new Uint8Array(data, ENCODED_HEADER);
-			const absOffset = encodedBase + offset;
-			sharedEncodedView.set(payload, absOffset);
+            if (bufferCount > 0 && offset === 0) {
+                encodedBase = (encodedBase === 0) ? HALF_BYTES : 0;
+            }
 
-			processPointCloud(
-			sharedEncodedBuffer,
-			{ offset: absOffset, length: payload.byteLength },
-			bufferCount
-			);
-		},
-		(err: unknown) => console.log('WebSocket error:', err)
+            const payload = new Uint8Array(data, ENCODED_HEADER);
+            const absOffset = encodedBase + offset;
+            sharedEncodedView.set(payload, absOffset);
+
+            processPointCloud(
+                sharedEncodedBuffer,
+                { offset: absOffset, length: payload.byteLength },
+                bufferCount,
+                frameId
+            );
+        },
+        (err: unknown) => console.log('socket error:', err)
 	);
 }
 

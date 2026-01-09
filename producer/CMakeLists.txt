@@ -2,8 +2,10 @@ cmake_minimum_required(VERSION 3.10)
 # Tell CMake to let option() respect any pre-set CACHE or normal variables.
 cmake_policy(SET CMP0077 NEW)
 
+
 # Set the project name and version
 project(hope_producer VERSION 1.0)
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
