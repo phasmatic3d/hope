@@ -22,7 +22,8 @@ from draco_wrapper.draco_wrapper import (
 )
 
 import numpy as np
-
+import urllib.request
+    
 def main():
     if False:
         points = np.random.rand(150000, 3).astype(np.float32)
@@ -47,35 +48,29 @@ def main():
 
     args = producer_cli.producer_cli.parse_args()
 
-    if True:
-        server = websocket_server.SecureWebSocketServer(
-            host=args.server_host,
-            port=args.server_port,
-            cert_folder=producer_cli.CERTIFICAT_PATH,
-            cert_file="server.crt",
-            key_file="server.key"
-        )
-        
-        server.start()
-        
-        web_server = websocket_server.SecureHTTPThreadedServer(
-            host=args.server_host,
-            port=args.server_port + 1,
-            cert_folder=producer_cli.CERTIFICAT_PATH,
-            cert_file="server.crt",
-            key_file="server.key",
-            directory="./../../Client/dist" 
-        )
-        web_server.start()
-    else:
-        server = setup_server(
-            args.server_port,
-            f'wss://{args.server_host}',
-        )
-        
-        server.listen()
-        thread = threading.Thread(target=server.run, daemon=True)
-        thread.start()
+    with urllib.request.urlopen('https://ident.me') as response:
+        public_ip = response.read().decode('utf8')
+
+    server = websocket_server.SecureWebSocketServer(
+        host='195.251.252.45',
+        port=9003,
+        cert_folder=producer_cli.CERTIFICAT_PATH,
+        cert_file="server.crt",
+        key_file="server.key"
+    )
+    
+    server.start()
+    
+    web_server = websocket_server.SecureHTTPThreadedServer(
+        host='195.251.252.45',
+        port=9003 + 1,
+        cert_folder=producer_cli.CERTIFICAT_PATH,
+        cert_file="server.crt",
+        key_file="server.key",
+        directory="./../../Client/dist" 
+    )
+    web_server.start()
+
 
     hope_server.launch_processes(server, args, DEVICE)
         
@@ -120,3 +115,4 @@ if __name__ == "__main__":
     print("Is CUDA available:", torch.cuda.is_available())
     #realsense_config()
     main()
+    

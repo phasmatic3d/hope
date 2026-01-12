@@ -88,7 +88,7 @@ def camera_process(
     # Hyperparameters to move to argparse
     visualization_mode = VisualizationMode.COLOR
     quantizer = CudaQuantizer()
-    thread_executor = ThreadPoolExecutor(max_workers=2)
+    thread_executor = ThreadPoolExecutor(max_workers=3)
     #thread_executor = ProcessPoolExecutor(max_workers=2)
     use_draco = False
     
@@ -396,9 +396,10 @@ def camera_process(
                     #print(f'Sending high:{in_roi_indices.size} - mid:{mid_roi_indices.size} - low:{out_roi_indices.size} - Total:{in_roi_indices.size + mid_roi_indices.size + out_roi_indices.size}')
                     
                     for indices_i, bits_per_point, bits_per_color in [
-                        (in_roi_indices, (11, 11, 10), (8, 8, 8)),
-                        (mid_roi_indices, (6, 6, 4), (8, 8, 8)),
-                        (out_roi_indices, (3, 3, 2), (8, 8, 8)),]:
+                        (in_roi_indices, (8, 8, 8), (8, 8, 8)),
+                        (mid_roi_indices, (8, 8, 8), (5, 6, 5)),
+                        (out_roi_indices, (8, 8, 8), (3, 3, 2)),]:
+                        
                         if indices_i.size == 0:
                             continue
                         
@@ -669,8 +670,18 @@ def thread_worker_sam2(
         predictor_ready.set()
         
         def updateMask(arr) :
-            mask1 = (arr[0] > 0.0).permute(1, 2, 0).cpu().numpy()
-            mask2 = torch.logical_and(arr[0] < 0.0, arr[0] > -5.0).permute(1, 2, 0).cpu().numpy()
+            if False:
+                mask1 = (arr[0] > 0.0).permute(1, 2, 0).cpu().numpy()
+                mask2 = torch.logical_and(arr[0] < 0.0, arr[0] > -5.0).permute(1, 2, 0).cpu().numpy()
+            else:
+                logits = arr[0]
+                mask1_t = (logits > 0.0)
+                pooled_windows = F.max_pool2d(mask1_t.float(), kernel_size=16, stride=16, ceil_mode=True)
+                expanded_mask_t = F.interpolate(pooled_windows.unsqueeze(0), size=logits.shape[-2:], mode='nearest').squeeze(0)
+                mask2_t = (expanded_mask_t > 0.5) & (~mask1_t)
+                mask1 = mask1_t.permute(1, 2, 0).cpu().numpy()
+                mask2 = mask2_t.permute(1, 2, 0).cpu().numpy()
+                
             shared_binary_mask[:] = 0
             shared_binary_mask[mask1] = 1
             shared_binary_mask[mask2] = 2

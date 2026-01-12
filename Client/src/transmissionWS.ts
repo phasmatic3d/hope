@@ -3,7 +3,7 @@
 import { time } from "three/tsl";
 //import { socketHandlerResponse } from "./types";
 
-export function openConnection(
+export async function openConnection(
     response : (data: ArrayBuffer) => void,
     reject: (msg: string) => void
 ) {
@@ -12,9 +12,9 @@ export function openConnection(
     const USE_TLS = true;
 
     // host + port for each mode
-    const HOST = '192.168.1.152';
+    const HOST = '195.251.252.45';
     //const HOST = 'localhost';
-    const PORT = 9003; // e.g. 9003 for TLS, 9002 for plain
+    const PORT = 9003;
 
     // pick the right protocol
     const protocol = USE_TLS ? 'wss' : 'ws';

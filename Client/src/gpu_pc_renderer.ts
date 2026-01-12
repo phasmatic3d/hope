@@ -1,26 +1,27 @@
 import * as THREE from 'three';
 
 // Data Packet Config
-const HEADER_SIZE = 52; // 6 floats (24) + 6 ints (24) + 1 int (4)
+const HEADER_SIZE = 52; 
 
-// Shader for decompressing points on the GPU
 const pointCloudShader = {
     uniforms: {
         uMin: { value: new THREE.Vector3() },
         uScale: { value: new THREE.Vector3() },
-        uBitsPos: { value: new THREE.Vector3(10, 10, 10) }, // x, y, z bits
-        uBitsCol: { value: new THREE.Vector3(5, 6, 5) },    // r, g, b bits
-        uPointSize: { value: 1.0 },
+        uBitsPos: { value: new THREE.Vector3(10, 10, 10) }, 
+        uBitsCol: { value: new THREE.Vector3(5, 6, 5) },    
     },
     vertexShader: `
-        in uint packedPos;
+        // Attributes (Planar)
+        in uint xData;
+        in uint yData;
+        in uint zData;
+        
         in uint packedColor;
 
         uniform vec3 uMin;
         uniform vec3 uScale;
         uniform vec3 uBitsPos;
         uniform vec3 uBitsCol;
-        uniform float uPointSize;
 
         out vec3 vColor;
 
@@ -29,23 +30,18 @@ const pointCloudShader = {
             uint by = uint(uBitsPos.y);
             uint bz = uint(uBitsPos.z);
 
-            // Create masks: (1 << n) - 1
-            uint maskX = (1u << bx) - 1u;
-            uint maskY = (1u << by) - 1u;
-            uint maskZ = (1u << bz) - 1u;
+            uint max_x = (1u << bx) - 1u;
+            uint max_y = (1u << by) - 1u;
+            uint max_z = (1u << bz) - 1u;
 
-            // Extract integer coords
-            uint qx = packedPos & maskX;
-            uint qy = (packedPos >> bx) & maskY;
-            uint qz = (packedPos >> (bx + by)) & maskZ;
-
-            // Normalize to 0.0 - 1.0
-            vec3 norm = vec3(float(qx)/float(maskX), float(qy)/float(maskY), float(qz)/float(maskZ));
-
-            // De-quantize: pos = norm / scale + min
+            vec3 norm = vec3(
+                float(xData) / float(max_x),
+                float(yData) / float(max_y),
+                float(zData) / float(max_z)
+            );
+            
             vec3 pos = (norm / uScale) + uMin;
 
-            // --- 2. Dynamic Bit Unpacking (Color) ---
             uint br = uint(uBitsCol.x);
             uint bg = uint(uBitsCol.y);
             uint bb = uint(uBitsCol.z);
@@ -54,16 +50,17 @@ const pointCloudShader = {
             uint maskG = (1u << bg) - 1u;
             uint maskB = (1u << bb) - 1u;
 
-            // Note: Colors are often packed R | G | B or B | G | R depending on endianness.
-            // Assuming standard little-endian packing order (R lowest bits)
             float r = float((packedColor) & maskR) / float(maskR);
             float g = float((packedColor >> br) & maskG) / float(maskG);
             float b = float((packedColor >> (br + bg)) & maskB) / float(maskB);
 
             vColor = vec3(r, g, b);
 
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
-            gl_PointSize = uPointSize;
+            vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+            gl_Position = projectionMatrix * mvPosition;
+
+            float safeDist = max(-mvPosition.z, 0.001);
+            gl_PointSize = clamp(3.0 / safeDist, 1.0, 50.0);
         }
     `,
     fragmentShader: `
@@ -77,61 +74,62 @@ const pointCloudShader = {
 };
 
 export function createGPUPointCloud(scene: THREE.Scene) {
-    const MAX_CHUNKS = 5; // Support ROI + Mid + Out + potential fragmentation
+    const MAX_CHUNKS = 3; 
     const meshPool: THREE.Points[] = [];
 
-    // Factory to create meshes
     function createMesh() {
         const geo = new THREE.BufferGeometry();
-        
         const material = new THREE.ShaderMaterial({
             uniforms: THREE.UniformsUtils.clone(pointCloudShader.uniforms),
             vertexShader: pointCloudShader.vertexShader,
             fragmentShader: pointCloudShader.fragmentShader,
-            glslVersion: THREE.GLSL3
+            glslVersion: THREE.GLSL3 
         });
 
         const mesh = new THREE.Points(geo, material);
         mesh.frustumCulled = false;
         mesh.visible = false;
-        // Adjust for RealSense coordinate system if needed (often inverted Y or Z)
         mesh.rotateX(Math.PI); 
         scene.add(mesh);
         return mesh;
     }
 
-    // Init Pool
     for (let i = 0; i < MAX_CHUNKS; i++) {
         meshPool.push(createMesh());
     }
 
-    let currentFrameId = -1;
-    let chunkCursor = 0;
-
-    return (
-        sharedBuf: SharedArrayBuffer,
-        chunk: { offset: number; length: number },
-        numChunks: number,
-        frameId: number
-    ) => {
-        const tStart = performance.now();
-
-        // New frame logic
-        if (frameId !== currentFrameId) {
-            for (let m of meshPool) m.visible = false;
-            currentFrameId = frameId;
-            chunkCursor = 0;
+    // Helper to pick correct TypedArray buffer based on bytes-per-component
+    function getBufferAttribute(sharedBuf: SharedArrayBuffer, offset: number, count: number, stride: number) {
+        if (stride === 4) {
+            const arr = new Uint32Array(sharedBuf, offset, count);
+            const attr = new THREE.Uint32BufferAttribute(arr, 1);
+            attr.gpuType = THREE.IntType; 
+            return attr;
+        } else if (stride === 2) {
+            const arr = new Uint16Array(sharedBuf, offset, count);
+            const attr = new THREE.Uint16BufferAttribute(arr, 1);
+            attr.gpuType = THREE.IntType;
+            return attr;
+        } else {
+            const arr = new Uint8Array(sharedBuf, offset, count);
+            const attr = new THREE.Uint8BufferAttribute(arr, 1);
+            attr.gpuType = THREE.IntType;
+            return attr;
         }
+    }
 
-        if (chunkCursor >= MAX_CHUNKS) return;
+    function getAxisStride(bits: number) {
+        if (bits > 16) return 4;
+        if (bits > 8) return 2;
+        return 1;
+    }
 
-        const mesh = meshPool[chunkCursor];
-        const geo = mesh.geometry;
+    function updateMeshFromChunk(mesh: THREE.Points, sharedBuf: SharedArrayBuffer, offset: number) {
+        const dv = new DataView(sharedBuf, offset, HEADER_SIZE);
         const mat = mesh.material as THREE.ShaderMaterial;
+        const geo = mesh.geometry;
 
-        // 1. Read Header (52 Bytes)
-        const dv = new DataView(sharedBuf, chunk.offset, HEADER_SIZE);
-
+        // 1. Read Header
         const minX = dv.getFloat32(0, true);
         const minY = dv.getFloat32(4, true);
         const minZ = dv.getFloat32(8, true);
@@ -149,87 +147,82 @@ export function createGPUPointCloud(scene: THREE.Scene) {
 
         const numPoints = dv.getInt32(48, true);
 
-        // 2. Identify Material Layer (A, B, C)
-        const totalBitsPos = bx + by + bz;
-        const totalBitsCol = br + bg + bb;
-
-        // --- Material A: High Quality (ROI) ---
-        if (totalBitsPos > 16) {
-             // Expecting 32-bit coordinates (Uint32)
-             // High visual fidelity
-             mat.uniforms.uPointSize.value = 4.0;
-        } 
-        // --- Material B: Mid Quality (Silhouette) ---
-        else if (totalBitsPos > 8) {
-             // Expecting 16-bit coordinates (Uint16)
-             mat.uniforms.uPointSize.value = 3.0;
-        }
-        // --- Material C: Low Quality (Background) ---
-        else {
-             // Expecting 8-bit coordinates (Uint8)
-             mat.uniforms.uPointSize.value = 2.0;
-        }
-
-        // 3. Update Uniforms
         mat.uniforms.uMin.value.set(minX, minY, minZ);
         mat.uniforms.uScale.value.set(scaleX, scaleY, scaleZ);
         mat.uniforms.uBitsPos.value.set(bx, by, bz);
         mat.uniforms.uBitsCol.value.set(br, bg, bb);
 
-        // 4. Bind Attributes Dynamically
-        const stridePos = Math.ceil(totalBitsPos / 8);
-        const strideCol = Math.ceil(totalBitsCol / 8);
+        // 2. Calculate Strides and Offsets
+        const sx = getAxisStride(bx);
+        const sy = getAxisStride(by);
+        const sz = getAxisStride(bz);
         
-        // Position Attribute
-        const posByteOffset = chunk.offset + HEADER_SIZE;
-        let posAttr: THREE.BufferAttribute;
+        // Color stride logic matches Python
+        const rawColBytes = Math.ceil((br + bg + bb) / 8);
+        const scol = (rawColBytes === 3) ? 4 : rawColBytes;
 
-        if (stridePos > 2) {
-            // 32-bit Int
-            const buf = new Uint32Array(sharedBuf, posByteOffset, numPoints);
-            posAttr = new THREE.Uint32BufferAttribute(buf, 1);
-        } else if (stridePos > 1) {
-            // 16-bit Int
-            const buf = new Uint16Array(sharedBuf, posByteOffset, numPoints);
-            posAttr = new THREE.Uint16BufferAttribute(buf, 1);
-        } else {
-            // 8-bit Int
-            const buf = new Uint8Array(sharedBuf, posByteOffset, numPoints);
-            posAttr = new THREE.Uint8BufferAttribute(buf, 1);
-        }
-        // Critical for shader to read 'uint' not 'float'
-        posAttr.gpuType = THREE.IntType; 
-        geo.setAttribute('packedPos', posAttr);
+        // Offsets
+        let currentOffset = offset + HEADER_SIZE;
 
-        const rawPosSize = numPoints * stridePos;
-        // The server adds padding to ensure the Position block ends on a 4-byte boundary
-        const paddedPosSize = (rawPosSize + 3) & ~3; 
-        
-        const colByteOffset = posByteOffset + paddedPosSize;
-        let colAttr: THREE.BufferAttribute;
-        const serverStrideCol = (strideCol > 2) ? 4 : strideCol;
+        // X Plane
+        geo.setAttribute('xData', getBufferAttribute(sharedBuf, currentOffset, numPoints, sx));
+        currentOffset += (sx * numPoints);
+        currentOffset += (4 - (currentOffset % 4)) % 4; // Skip padding
 
-        if (serverStrideCol > 2) {
-             const buf = new Uint32Array(sharedBuf, colByteOffset, numPoints);
-             colAttr = new THREE.Uint32BufferAttribute(buf, 1);
-        } else if (serverStrideCol > 1) {
-             const buf = new Uint16Array(sharedBuf, colByteOffset, numPoints);
-             colAttr = new THREE.Uint16BufferAttribute(buf, 1);
-        } else {
-             const buf = new Uint8Array(sharedBuf, colByteOffset, numPoints);
-             colAttr = new THREE.Uint8BufferAttribute(buf, 1);
-        }
-        
-        colAttr.gpuType = THREE.IntType;
-        geo.setAttribute('packedColor', colAttr);
+        // Y Plane
+        geo.setAttribute('yData', getBufferAttribute(sharedBuf, currentOffset, numPoints, sy));
+        currentOffset += (sy * numPoints);
+        currentOffset += (4 - (currentOffset % 4)) % 4; // Skip padding
 
-        // 5. Draw
+        // Z Plane
+        geo.setAttribute('zData', getBufferAttribute(sharedBuf, currentOffset, numPoints, sz));
+        currentOffset += (sz * numPoints);
+        currentOffset += (4 - (currentOffset % 4)) % 4; // Skip padding
+
+        // Color Plane
+        geo.setAttribute('packedColor', getBufferAttribute(sharedBuf, currentOffset, numPoints, scol));
+
+        // 3. Draw
         geo.setDrawRange(0, numPoints);
-        geo.attributes.packedPos.needsUpdate = true;
+        // Mark all as needing update
+        geo.attributes.xData.needsUpdate = true;
+        geo.attributes.yData.needsUpdate = true;
+        geo.attributes.zData.needsUpdate = true;
         geo.attributes.packedColor.needsUpdate = true;
-        
-        mesh.visible = true;
-        chunkCursor++;
+    }
+
+    let pendingFrameId = -1;
+    let accumulatedChunks: {offset: number, length: number}[] = [];
+
+    return (
+        sharedBuf: SharedArrayBuffer,
+        chunk: { offset: number; length: number },
+        numChunks: number,
+        frameId: number
+    ) => {
+        const tStart = performance.now();
+
+        if (frameId !== pendingFrameId) {
+            pendingFrameId = frameId;
+            accumulatedChunks = [];
+        }
+
+        accumulatedChunks.push(chunk);
+
+        if (accumulatedChunks.length === numChunks) {
+            for (let m of meshPool) m.visible = false;
+
+            for (let i = 0; i < accumulatedChunks.length; i++) {
+                if (i >= MAX_CHUNKS) break;
+                
+                const ch = accumulatedChunks[i];
+                const mesh = meshPool[i];
+                
+                updateMeshFromChunk(mesh, sharedBuf, ch.offset);
+                mesh.visible = true;
+            }
+            accumulatedChunks = [];
+        }
         return performance.now() - tStart;
     }
 }

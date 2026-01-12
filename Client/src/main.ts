@@ -19,9 +19,8 @@ async function setupScene_gpu() {
 
     const scene = new THREE.Scene();
     
-    // Optional: Add simple grid/light for context
-    //const grid = new THREE.GridHelper(10, 10);
-    //scene.add(grid);
+    const grid = new THREE.GridHelper(10, 10);
+    scene.add(grid);
 
     const renderer = new THREE.WebGLRenderer();
     renderer.setSize(window.innerWidth, window.innerHeight);

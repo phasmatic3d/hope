@@ -96,7 +96,7 @@ producer_cli.add_argument("--debug", type=bool, default=True)
 producer_cli.add_argument(
     "--server_host",        
     type=str, 
-    default="192.168.1.152",
+    default="195.251.252.45",
     help="Broadcast server host"
 )
 
