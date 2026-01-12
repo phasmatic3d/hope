@@ -250,8 +250,8 @@ class PointingGestureRecognizer:
             DipToTip = tip_v - dip_v
             #DipToTipDist = np.linalg.norm(DipToTip)
             #DipToTip = DipToTip / DipToTipDist
-            bboxMin = bboxMin + DipToTip * 0.7
-            bboxMax = bboxMax + DipToTip * 0.7
+            bboxMin = bboxMin + DipToTip * 0.8
+            bboxMax = bboxMax + DipToTip * 0.8
             bboxMin = np.clip(bboxMin, 0.0, 1.0)
             bboxMax = np.clip(bboxMax, 0.0, 1.0)
             bounding_box_norm = NormalizedBoundingBox(bboxMin[0], bboxMin[1], bboxMax[0], bboxMax[1])

@@ -1,7 +1,7 @@
 // @ts-nocheck
 
 import { time } from "three/tsl";
-import { socketHandlerResponse } from "./types";
+//import { socketHandlerResponse } from "./types";
 
 export function openConnection(
     response : (data: ArrayBuffer) => void,

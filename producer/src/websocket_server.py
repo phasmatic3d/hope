@@ -4,13 +4,13 @@ import threading
 import websockets
 from websockets.server import serve
 from websockets import WebSocketServerProtocol
-from typing import Set
+from typing import Set, Dict
 from pathlib import Path
 import http.server
 import socketserver
 import functools
 
-from aiortc import RTCPeerConnection, RTCSessionDescription
+from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, RTCConfiguration, RTCIceServer
 import json
 
 class SecureWebSocketServer:
@@ -156,16 +156,6 @@ class SecureWebSocketServer:
     def is_running(self) -> bool:
         """Check if the server thread is running"""
         return self.thread.is_alive()
-
-from pathlib import Path
-from websockets.server import serve
-from websockets import WebSocketServerProtocol
-from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, RTCConfiguration, RTCIceServer
-import asyncio
-import ssl
-import threading
-import json
-from typing import Set, Dict
 
 class SecureWebRTCServer:
     def __init__(self, host: str, port: int, cert_folder: str, cert_file: str, key_file: str):
@@ -435,7 +425,7 @@ class SecureHTTPThreadedServer:
         try:
             with socketserver.TCPServer((self.host, self.port), COOPCOEPHandler) as httpd:
                 httpd.socket = ssl_context.wrap_socket(httpd.socket, server_side=True)
-                print(f"HTTPS Server serving '{self.directory}' at https://{self.host}:{self.port}")
+                print(f"HTTPS Clienting serving '{self.directory}' at https://{self.host}:{self.port}")
                 httpd.serve_forever()
         except OSError as e:
             print(f"HTTP Port {self.port} likely in use. Error: {e}")

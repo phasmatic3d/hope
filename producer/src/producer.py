@@ -12,7 +12,35 @@ from pathlib import Path
 import threading
 # Set up the server
 
+from cuda_quantizer import CudaQuantizer
+from draco_wrapper import draco_bindings as dcb # temporary, for logging quality sims
+
+from draco_wrapper.draco_wrapper import (
+    DracoWrapper,
+    EncodingMode,
+    VisualizationMode
+)
+
+import numpy as np
+
 def main():
+    if False:
+        points = np.random.rand(150000, 3).astype(np.float32)
+        colors = (np.random.rand(150000, 3) * 255).astype(np.int8)
+        
+        quantizer = CudaQuantizer()
+        draco_roi_encoding = DracoWrapper()
+        
+        draco_roi_encoding.position_quantization_bits = 10
+        draco_roi_encoding.color_quantization_bits    = 8
+        draco_roi_encoding.speed_encode               = 10
+        draco_roi_encoding.speed_decode               = 10
+        
+        draco_res = draco_roi_encoding.encode(points, colors, False)
+        cuda_res = quantizer.encode(points, colors, (10, 10, 10), (8, 8, 8))
+        
+        print(f'draco:{len(draco_res) / 1024} - cuda:{len(cuda_res) / 1024}')
+        
     DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     
     print(f"Using device: {DEVICE}")
@@ -36,7 +64,7 @@ def main():
             cert_folder=producer_cli.CERTIFICAT_PATH,
             cert_file="server.crt",
             key_file="server.key",
-            directory="./client_dist" 
+            directory="./../../Client/dist" 
         )
         web_server.start()
     else:
@@ -49,7 +77,6 @@ def main():
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
 
-    
     hope_server.launch_processes(server, args, DEVICE)
         
 def realsense_config() :

@@ -14,7 +14,7 @@ import producer_cli as producer_cli
 from pathlib import Path
 from typing import Tuple
 from broadcaster_wrapper.broadcasting import *
-#from mediapipe.framework.formats import landmark_pb2
+from mediapipe.framework.formats import landmark_pb2
 
 from cuda_quantizer import CudaQuantizer
 
@@ -90,6 +90,7 @@ def camera_process(
     quantizer = CudaQuantizer()
     thread_executor = ThreadPoolExecutor(max_workers=2)
     #thread_executor = ProcessPoolExecutor(max_workers=2)
+    use_draco = False
     
     if debug:
         win_name = "RealSense vis"
@@ -148,7 +149,7 @@ def camera_process(
     sroi = shared_memory.SharedMemory(name=shared_roi_name)
 
     shared_frame = np.ndarray((cmr_clr_height, cmr_clr_width, 3), dtype=np.uint8, buffer=sf.buf)
-    shared_cluster = np.ndarray((cmr_clr_height, cmr_clr_width, 1), dtype=np.bool_, buffer=sc.buf)
+    shared_cluster = np.ndarray((cmr_clr_height, cmr_clr_width, 1), dtype=np.uint8, buffer=sc.buf)
     shared_roi = np.ndarray((4,), dtype=np.int32, buffer=sroi.buf)
 
     ready_frame_event.clear()
@@ -198,7 +199,6 @@ def camera_process(
     try:
         while not stop_event.is_set():
             ms_now = time.perf_counter()
-            #ms_now = time.perf_counter()
             frame_count += 1
             frame_id += 1
             frames = pipeline.wait_for_frames()
@@ -249,9 +249,11 @@ def camera_process(
                     prev_cluster = shared_cluster.copy()
                     ready_cluster_event.clear()
 
-                if False and debug:
-                    color_img_display[prev_cluster[:, :, 0], 2] = 255
-
+                if debug:
+                    color_img_display[prev_cluster[:, :, 0] == 1, 2] = 255
+                    color_img_display[prev_cluster[:, :, 0] == 2, 1] = 255
+                    
+                if debug:
                     def ensure_landmark_list(data):
                         if isinstance(data, landmark_pb2.NormalizedLandmarkList):
                             return data
@@ -314,13 +316,6 @@ def camera_process(
             flat_color_pixels = color_img.reshape(-1, 3)
             colors = flat_color_pixels[pixel_indices]  # shape: (N, 3) in [R, G, B] order
             
-            #pcd = o3d.geometry.PointCloud()
-            #pcd.points = o3d.utility.Vector3dVector(vertices)
-            #pcd.colors = o3d.utility.Vector3dVector(colors.reshape(-1, 3))
-            #cl, _ = pcd.remove_radius_outlier(nb_points=10, radius=1/64.)
-            #vertices = np.asarray(cl.points, dtype=np.float32)
-            #colors = np.asarray(cl.colors, dtype=np.uint8)
-
             if (encoding_mode == EncodingMode.NONE):   
                 raw_points = vertices    # shape: (N,3) float32
                 raw_cols = colors     # shape: (N,3) uint8
@@ -334,116 +329,96 @@ def camera_process(
             else:
                 # find valid points
                 depth_flat = depth_img.ravel()
-                # Build a (H*W,) boolean mask where True means:
-                #  1) the depth sensor saw something (depth_flat > 0),
-                #  2) the reconstructed Z coordinate is a finite number,
-                #valid = (
-                #    (depth_flat > 0)                         # non-zero depth reading
-                #    & np.isfinite(vertices[:, 2])      # Z isn’t NaN or ±Inf
-                #)
                 valid = depth_flat > 0
 
-                # --- SUBSAMPLING ---
-                #effective_ratio = sum(r for r, on in zip(sampling_layers, active_layers) if on)
-
-                # roll one random array and reject ~ (1‑effective_ratio) of valid points
-                #rnd = np.random.rand(valid.shape[0])
-                #subsample_mask = rnd < effective_ratio
-
                 if(encoding_mode == EncodingMode.IMPORTANCE):
+                    enc_ms = time.perf_counter()
                     flat_cluster = prev_cluster.flatten()
 
-                    in_roi = valid & flat_cluster
-                    out_roi = valid & ~in_roi# & subsample_mask
+                    out_roi = valid & (flat_cluster == 0)
+                    in_roi = valid & (flat_cluster == 1)
+                    middle_roi = valid & (flat_cluster == 2)
 
                     in_roi_indices = np.nonzero(in_roi)[0]
                     out_roi_indices = np.nonzero(out_roi)[0]
+                    mid_roi_indices = np.nonzero(middle_roi)[0]
 
-                    points_in_roi = vertices[in_roi_indices]
-                    colors_in_roi = colors[in_roi_indices]
-                    points_out_roi = vertices[out_roi_indices]
-                    colors_out_roi = colors[out_roi_indices]
-
-                    def subsample_points(points, colors, target_size):
-                        n = points.shape[0]
+                    def subsample_points(arr, target_size):
+                        n = arr.shape[0]
                         if n == 0:
-                            return points, colors
+                            return arr
                         if n <= target_size:
-                            return points, colors
+                            return arr
 
                         choice_indices = np.random.choice(n, target_size, replace=False)
-                        return points[choice_indices], colors[choice_indices]
+                        return arr[choice_indices]
+                    
+                    current_budget = point_cloud_budget
 
-                    if points_in_roi.size > 0:
-                        remaining_budget = point_cloud_budget - points_in_roi.shape[0]
-                        if remaining_budget > 0 and points_out_roi.size > 0:
-                            points_out_roi, colors_out_roi = subsample_points(points_out_roi, colors_out_roi, remaining_budget)
-                        elif points_in_roi.shape[0] > point_cloud_budget:
-                            points_in_roi, colors_in_roi = subsample_points(points_in_roi, colors_in_roi, point_cloud_budget)
-                            points_out_roi = np.empty((0, 3), dtype=np.float32)
-                            colors_out_roi = np.empty((0, 3), dtype=np.uint8)
+                    if in_roi_indices.size > current_budget:
+                        in_roi_indices = subsample_points(in_roi_indices, current_budget)
+                        mid_roi_indices = np.empty((0,), dtype=np.int32)
+                        out_roi_indices = np.empty((0,), dtype=np.int32)
+                        current_budget = 0
                     else:
-                        if points_out_roi.size > 0:
-                            points_out_roi, colors_out_roi = subsample_points(points_out_roi, colors_out_roi, point_cloud_budget)
+                        current_budget -= in_roi_indices.size
 
-                    # MULTIPROCESSING IMPORTANCE
-                    futures_dict: dict[str, concurrent.futures.Future] = {}
+                    if current_budget > 0 and mid_roi_indices.size > 0:
+                        if mid_roi_indices.size > current_budget:
+                            mid_roi_indices = subsample_points(mid_roi_indices, current_budget)
+                            out_roi_indices = np.empty((0,), dtype=np.int32)
+                            current_budget = 0
+                        else:
+                            current_budget -= mid_roi_indices.size
+                    elif current_budget == 0:
+                        mid_roi_indices = np.empty((0,), dtype=np.int32)
+                        
+                    if current_budget > 0 and out_roi_indices.size > 0:
+                        if out_roi_indices.size > current_budget:
+                            out_roi_indices = subsample_points(out_roi_indices, current_budget)
+                    elif current_budget == 0:
+                        out_roi_indices = np.empty((0,), dtype=np.int32)
 
-                    buffer_roi = None
-                    buffer_out = None
-                    if points_in_roi.size:
-                        futures_dict["roi"] = thread_executor.submit(
-                            quantizer.encode,
-                            #draco_roi_encoding.encode,
-                            points_in_roi,
-                            colors_in_roi,
-                            #False
-                        )
-                    else:
-                        buffer_roi = b""
+                    total_points = in_roi_indices.size + mid_roi_indices.size + out_roi_indices.size
+                    if total_points > point_cloud_budget:
+                        print(f"Logic Error: Overflow detected {total_points}/{point_cloud_budget}")
+                        continue
                     
-                    if points_out_roi.size:
-                        futures_dict["out_roi"] = thread_executor.submit(
-                            quantizer.encode,
-                            #draco_outside_roi_encoding.encode,
-                            points_out_roi,
-                            colors_out_roi,
-                            #False
-                        )
-                    else:
-                        buffer_out = b""
+                    def encode_and_broadcast(points, colors, bits_per_point, bits_per_color, header) :
+                        buffer = quantizer.encode(points, colors, bits_per_point, bits_per_color)
+                        server.broadcast(header + buffer)
                     
-                    concurrent.futures.wait(futures_dict.values())
-                    
-                    for label, future in futures_dict.items():
-                        if label == "roi":
-                            buffer_roi = future.result()  
-                        if label == "out_roi":
-                            buffer_out = future.result()
-
-                    # Broadcast
-                    buffers = []
-                    if buffer_roi:
-                        buffers.append(buffer_roi)
-                    if buffer_out:
-                        buffers.append(buffer_out)
-
-                    #print(f"realsense prepare:{(time.perf_counter() - ms_now) * 1000}ms points:{points_in_roi.shape[0] + points_out_roi.shape[0]}")
-                    
-                    count = len(buffers)
+                    num_chunks = (in_roi_indices.size > 0) + (mid_roi_indices.size > 0) + (out_roi_indices.size > 0)
+                    futures_list: list[concurrent.futures.Future] = []
+                    byte_offset = 0
                     frame_id_byte = frame_count % 255
-                    offset  = 0
-                    for buffer in buffers:
-                        #header = count.to_bytes(1, byteorder='little') + offset.to_bytes(4, byteorder='little')
-                        header = (
-                            count.to_bytes(1, byteorder='little') + 
-                            frame_id_byte.to_bytes(1, byteorder='little') + 
-                            offset.to_bytes(4, byteorder='little')
-                        )
-                        packet = header + buffer
-                        server.broadcast(packet)
-                        offset += len(buffer)
+                    
+                    #print(f'Sending high:{in_roi_indices.size} - mid:{mid_roi_indices.size} - low:{out_roi_indices.size} - Total:{in_roi_indices.size + mid_roi_indices.size + out_roi_indices.size}')
+                    
+                    for indices_i, bits_per_point, bits_per_color in [
+                        (in_roi_indices, (11, 11, 10), (8, 8, 8)),
+                        (mid_roi_indices, (6, 6, 4), (8, 8, 8)),
+                        (out_roi_indices, (3, 3, 2), (8, 8, 8)),]:
+                        if indices_i.size == 0:
+                            continue
+                        
+                        points_i = vertices[indices_i]
+                        colors_i = colors[indices_i]
 
+                        buffer_size = quantizer.estimate_buffer_size(points_i, colors_i, bits_per_point, bits_per_color)
+                        
+                        header = (
+                                num_chunks.to_bytes(1, 'little') + 
+                                frame_id_byte.to_bytes(1, 'little') + 
+                                byte_offset.to_bytes(4, 'little'))
+
+                        futures_list += [thread_executor.submit(encode_and_broadcast,
+                                                                    points_i, colors_i, bits_per_point, bits_per_color, header),]
+                        
+                        byte_offset += buffer_size
+                    
+                    concurrent.futures.wait(futures_list)
+                    #print(f'encoding done in: {(time.perf_counter() - enc_ms) * 1000}')
                 else: # ENCODE THE FULL FRAME
                     # Masking
                     points_full = vertices[valid]
@@ -457,21 +432,13 @@ def camera_process(
                         packet = header + buffer_full
                         server.broadcast(packet) 
 
-            #print(f"loop time:{(time.perf_counter() - ms_now) * 1000}ms")
             # Logging and display
             if debug:
-                #---- CV DRAW ON SCREEN----
-                now = time.perf_counter()
-                if (frame_count >= 30):
-                    fps = frame_count // (now - prev_time)
-                    prev_time = now
-                    frame_count = 0
-
-                if show_debug_text:
-                    # draw FPS
-                    cv2.putText(color_img_display, f"FPS: {fps}", (cmr_clr_width -200,cmr_clr_height -30),
+                frame_s = (time.perf_counter() - ms_now)
+                cv2.putText(color_img_display, f"{int(1 / frame_s)}fps/{frame_s * 1000:.2f}ms", (cmr_clr_width -200,cmr_clr_height -30),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
-
+                
+                if show_debug_text:
                     # initial text coordinates
                     x, y0, dy = 10, 20, 20
 
@@ -691,7 +658,7 @@ def thread_worker_sam2(
         sroi = shared_memory.SharedMemory(name=shared_roi_name)
 
         shared_frame = np.ndarray((frame_shape[0], frame_shape[1], 3), dtype=np.uint8, buffer=sf.buf)
-        shared_binary_mask = np.ndarray((frame_shape[0], frame_shape[1], 1), dtype=np.bool_, buffer=sc.buf)
+        shared_binary_mask = np.ndarray((frame_shape[0], frame_shape[1], 1), dtype=np.uint8, buffer=sc.buf)
         shared_roi = np.ndarray((1, 4), dtype=np.int32, buffer=sroi.buf)
 
         predictor_ready.clear()
@@ -700,11 +667,18 @@ def thread_worker_sam2(
         roi_init = False
         shared_frame[:] = 0
         predictor_ready.set()
+        
+        def updateMask(arr) :
+            mask1 = (arr[0] > 0.0).permute(1, 2, 0).cpu().numpy()
+            mask2 = torch.logical_and(arr[0] < 0.0, arr[0] > -5.0).permute(1, 2, 0).cpu().numpy()
+            shared_binary_mask[:] = 0
+            shared_binary_mask[mask1] = 1
+            shared_binary_mask[mask2] = 2
 
         while not stop_event.is_set():
             if ready_frame_event.is_set():
                 local_frame[:] = shared_frame
-                shared_binary_mask[:] = False
+                shared_binary_mask[:] = 0
 
                 if ready_roi_event.is_set():
                     roi_local = shared_roi.copy()
@@ -722,13 +696,19 @@ def thread_worker_sam2(
                     ann_obj_id = (1,)
                     labels = np.array([1, 1, 1, 1, 1], dtype=np.int32)
                     roi_init = True
-                    _, _, out_mask_logits = predictor.add_new_prompt(frame_idx=ann_frame_idx, obj_id=ann_obj_id, points=roi_center, labels=labels)
-                    shared_binary_mask[:] = (out_mask_logits[0] > 0.0).permute(1, 2, 0).cpu().numpy().astype(np.bool_)
+                    
+                    _, _, out_mask_logits = predictor.add_new_prompt(
+                        frame_idx=ann_frame_idx,
+                        obj_id=ann_obj_id,
+                        points=roi_center,
+                        labels=labels)
+
+                    updateMask(out_mask_logits)
                     ready_roi_event.clear()
                 else :
                     if roi_init:
                         _, out_mask_logits = predictor.track(local_frame)
-                        shared_binary_mask[:] = (out_mask_logits[0] > 0.0).permute(1, 2, 0).cpu().numpy().astype(np.bool_)
+                        updateMask(out_mask_logits)
 
                 ready_frame_event.clear()
                 ready_cluster_event.set()
@@ -757,7 +737,7 @@ def thread_worker_yoloe(
         sroi = shared_memory.SharedMemory(name=shared_roi_name)
 
         shared_frame = np.ndarray((frame_shape[0], frame_shape[1], 3), dtype=np.uint8, buffer=sf.buf)
-        shared_binary_mask = np.ndarray((frame_shape[0], frame_shape[1], 1), dtype=np.bool_, buffer=sc.buf)
+        shared_cluster_map = np.ndarray((frame_shape[0], frame_shape[1], 1), dtype=np.uint8, buffer=sc.buf)
         shared_roi = np.ndarray((1, 4), dtype=np.int32, buffer=sroi.buf)
         
         predictor_ready.clear()
@@ -769,7 +749,7 @@ def thread_worker_yoloe(
         result = model.predict(shared_frame, conf=0.1, verbose=False) #warmup
         binary_mask = torch.zeros(size=(384, 640), dtype=torch.bool, device=model.device)  #this wont work in the future...
         predictor_ready.set()
-
+   
         while not stop_event.is_set():
             if ready_frame_event.is_set():
                 local_frame[:] = shared_frame
@@ -794,7 +774,7 @@ def thread_worker_yoloe(
                     ready_roi_event.clear()
 
                 if not roi_init:
-                    shared_binary_mask[:] = False
+                    shared_cluster_map[:] = 0
                     if result.masks is not None:
                         binary_mask[:] = False
                         for mask in result.masks.data:
@@ -802,9 +782,9 @@ def thread_worker_yoloe(
 
                         binary_mask = binary_mask.type(torch.uint8)
                         out_mask = F.interpolate(binary_mask[None, None, :, :], size=(result.masks.orig_shape[0], result.masks.orig_shape[1]), mode='nearest')
-                        shared_binary_mask[:] = out_mask.squeeze(0).permute(1, 2, 0).cpu().numpy().astype(np.bool_)
+                        shared_cluster_map[out_mask > 0] =  1
                 else:
-                    shared_binary_mask[:] = False
+                    shared_cluster_map[:] = 0
 
                     if result.masks is not None :
                         binary_mask[:] = False
@@ -818,7 +798,7 @@ def thread_worker_yoloe(
 
                         binary_mask = binary_mask.type(torch.uint8)
                         out_mask = F.interpolate(binary_mask[None, None, :, :], size=(result.masks.orig_shape[0], result.masks.orig_shape[1]), mode='nearest')
-                        shared_binary_mask[:] = out_mask.squeeze(0).permute(1, 2, 0).cpu().numpy().astype(np.bool_)
+                        shared_cluster_map[out_mask > 0] =  1
                 
                 ready_frame_event.clear()
                 ready_cluster_event.set()
@@ -842,12 +822,12 @@ def launch_processes(server, args, device : str) -> None:
     ready_roi_event = mp.Event()
     predictor_event = mp.Event()
 
-    shm_cluster = shared_memory.SharedMemory(create=True, size=cmr_clr_width * cmr_clr_height * np.dtype(np.bool_).itemsize)
+    shm_cluster = shared_memory.SharedMemory(create=True, size=cmr_clr_width * cmr_clr_height * np.dtype(np.uint8).itemsize)
     shm_frame = shared_memory.SharedMemory(create=True, size=cmr_clr_width * cmr_clr_height * 3 * np.dtype(np.uint8).itemsize)
     shm_roi = shared_memory.SharedMemory(create=True, size= 4 * np.dtype(np.int32).itemsize)
 
     shared_frame = np.ndarray((cmr_clr_height, cmr_clr_width, 3), dtype=np.uint8, buffer=shm_frame.buf)
-    shared_cluster = np.ndarray((cmr_clr_height, cmr_clr_width, 1), dtype=np.bool_, buffer=shm_cluster.buf)
+    shared_cluster = np.ndarray((cmr_clr_height, cmr_clr_width, 1), dtype=np.uint8, buffer=shm_cluster.buf)
     shared_roi = np.ndarray((4,), dtype=np.int32, buffer=shm_roi.buf)
 
     shared_frame[:] = 0
@@ -889,7 +869,7 @@ def launch_processes(server, args, device : str) -> None:
         else:
             predictor = YOLOE("yoloe-11s-seg.pt", verbose=False)
 
-        names = ["glasses", "shirt", "hat", "shorts"]
+        names = ["human"]
         predictor.set_classes(names, predictor.get_text_pe(names))
 
         predictor_proc = mp.Process(target=thread_worker_yoloe, 

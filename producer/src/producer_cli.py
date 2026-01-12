@@ -71,10 +71,10 @@ producer_cli.add_argument("--realsense_depth_stream", type=str, default="dpth_mi
 producer_cli.add_argument("--realsense_target_fps", type=int, default=30, choices=[90, 30, 15, 6])
 producer_cli.add_argument("--cluster_predictor", type=str, default="sam2", choices=["yolo", "sam2",])
 producer_cli.add_argument("--in_roi_pos_quant_bits", type=int, default=10)
-producer_cli.add_argument("--out_roi_pos_quant_bits", type=int, default=8)
+producer_cli.add_argument("--out_roi_pos_quant_bits", type=int, default=10)
 producer_cli.add_argument("--in_roi_col_quant_bits", type=int, default=8,)
-producer_cli.add_argument("--out_roi_col_quant_bits", type=int, default=6)
-producer_cli.add_argument("--point_cloud_budget", type=int, default=100000)
+producer_cli.add_argument("--out_roi_col_quant_bits", type=int, default=8)
+producer_cli.add_argument("--point_cloud_budget", type=int, default=150000)
 producer_cli.add_argument("--min_depth_meter", type=float, default=0.01)
 producer_cli.add_argument("--max_depth_meter", type=float, default=1.)
 
@@ -129,3 +129,15 @@ def getRequest(outputPath : Path, url : str) -> None:
     with tqdm.wrapattr(req.raw, "read", total=fileSize, desc=desc) as r_raw:
         with open(outputFile, "wb") as f:
             shutil.copyfileobj(r_raw, f)
+            
+def exportDefaultConfig(path: Path):
+    import yaml
+    
+    data = {
+        'point_budget' : 100000,
+        'num_clusters' : 2,
+        'cluster_header_byte_sz' : 6,
+    }
+    
+    with open(path / 'config.yaml', 'w') as file:
+        yaml.dump(data, file)
