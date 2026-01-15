@@ -1,8 +1,0 @@
-pyproject.toml
-src/gesture_recognition/__init__.py
-src/gesture_recognition/point_gesture_recognizer.py
-src/gesture_recognition.egg-info/PKG-INFO
-src/gesture_recognition.egg-info/SOURCES.txt
-src/gesture_recognition.egg-info/dependency_links.txt
-src/gesture_recognition.egg-info/requires.txt
-src/gesture_recognition.egg-info/top_level.txt

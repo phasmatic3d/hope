@@ -2,11 +2,13 @@ export function openConnection(
     response: (data: ArrayBuffer) => void,
     reject: (msg: string) => void
 ) {
-    console.warn("🚀 Initializing WebRTC Connection...");
+    
 
     const SIGNALING_PORT = 9003; 
-    const HOST = '192.168.1.152';
+    const HOST = window.location.hostname;//'192.168.1.152';
     const signalingUrl = `wss://${HOST}:${SIGNALING_PORT}`;
+
+    console.warn(`🚀 Initializing WebRTC Connection... ${signalingUrl}`);
 
     let ws: WebSocket | null = null;
     let pc: RTCPeerConnection | null = null;
@@ -31,9 +33,9 @@ export function openConnection(
             });
 
             // Create data channel BEFORE creating offer
-            dc = pc.createDataChannel("pointcloud", { 
-                ordered: false, 
-                maxRetransmits: 0 
+            dc = pc.createDataChannel("pointcloud", {
+                ordered: false,
+                maxRetransmits: 0
             });
 
             dc.binaryType = "arraybuffer";

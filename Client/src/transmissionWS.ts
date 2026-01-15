@@ -12,7 +12,7 @@ export async function openConnection(
     const USE_TLS = true;
 
     // host + port for each mode
-    const HOST = '195.251.252.45';
+    const HOST = window.location.hostname;//'192.168.1.152';
     //const HOST = 'localhost';
     const PORT = 9003;
 
