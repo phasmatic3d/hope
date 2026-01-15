@@ -185,9 +185,12 @@ def camera_process(
 
             v_buf = points.get_vertices()
             t_buf = points.get_texture_coordinates()
-
+            
             d_vertices = cp.frombuffer(v_buf, dtype=np.float32).reshape(num_points, 3)
             d_texcoords = cp.frombuffer(t_buf, dtype=np.float32).reshape(num_points, 2)
+            
+            #t = time.perf_counter()
+            
             d_depth_img = cp.asarray(depth_img) 
             
             d_pixel_indices = (
@@ -218,9 +221,7 @@ def camera_process(
             futures_list: list[concurrent.futures.Future] = []
             byte_offset = 0
             frame_id_byte = frame_count % 255
-            
-            #t = time.perf_counter()
-
+        
             with stream_in:
                 if budget_in > 0:
                     d_in_idx = d_valid_idx[d_in_mask]
@@ -274,7 +275,7 @@ def camera_process(
 
                 #buffer_size = quantizer.estimate_buffer_size(mode, points_i.shape[0])
                 #print(f'mode: {mode} - size: {size} buffer: {len(buffer) / 1024}')
-                buffer_bytes = buffer_view.tobytes()
+                buffer_bytes = buffer_view.tobytes() if stream != cp.cuda.Stream.null else buffer_view
                 
                 header = (
                         num_chunks.to_bytes(1, 'little') + 
