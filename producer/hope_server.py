@@ -101,6 +101,41 @@ def camera_process(
     roi = None
     d_prev_cluster = cp.zeros_like(d_shared_cluster)
     
+    stream_in = cp.cuda.Stream(non_blocking=True)
+    stream_med = cp.cuda.Stream(non_blocking=True)
+    stream_out = cp.cuda.Stream(non_blocking=True)
+    
+    def gpu_subsample(d_indices, budget):
+        if d_indices.size <= budget: return d_indices
+        return cp.random.choice(d_indices, budget, replace=False)
+    
+    def fast_subsample(d_indices, budget):
+        n = d_indices.size
+        if n <= budget:
+            return d_indices
+
+        idx_to_keep = cp.linspace(0, n - 1, num=budget, dtype=cp.int32)
+        return d_indices[idx_to_keep]
+
+    def allocate_budgets(n_in, n_mid, n_out, total_budget):
+        if n_in >= total_budget:
+            return total_budget, 0, 0
+        
+        remaining = total_budget - n_in
+        if n_mid >= remaining:
+            return n_in, remaining, 0
+        
+        remaining -= n_mid
+        return n_in, n_mid, min(n_out, remaining)
+    
+    pinned_mem_high = cp.cuda.alloc_pinned_memory(point_cloud_budget * 15)
+    pinned_mem_med  = cp.cuda.alloc_pinned_memory(point_cloud_budget * 15)
+    pinned_mem_low  = cp.cuda.alloc_pinned_memory(point_cloud_budget * 15)
+
+    pinned_np_high = np.frombuffer(pinned_mem_high, dtype=np.uint8)
+    pinned_np_med = np.frombuffer(pinned_mem_med, dtype=np.uint8)
+    pinned_np_low = np.frombuffer(pinned_mem_low, dtype=np.uint8)
+    
     try:
         while not stop_event.is_set():
             ms_now = time.perf_counter()
@@ -121,6 +156,7 @@ def camera_process(
             depth_img = np.asanyarray(depth_frame.get_data())
             
             color_img_display = None
+            
             if debug:
                 color_img_display = color_img.copy()
 
@@ -154,90 +190,103 @@ def camera_process(
             d_texcoords = cp.frombuffer(t_buf, dtype=np.float32).reshape(num_points, 2)
             d_depth_img = cp.asarray(depth_img) 
             
-            d_cols = (d_texcoords[:, 0] * (cmr_clr_width - 1)).astype(cp.int32)
-            d_rows = (d_texcoords[:, 1] * (cmr_clr_height - 1)).astype(cp.int32)
-            d_pixel_indices = d_rows * cmr_clr_width + d_cols
+            d_pixel_indices = (
+                (d_texcoords[:, 1] * (cmr_clr_height - 1)).astype(cp.int32) * cmr_clr_width +
+                (d_texcoords[:, 0] * (cmr_clr_width - 1)).astype(cp.int32))
 
             d_flat_colors = d_shared_frame.reshape(-1, 3)
             d_colors = d_flat_colors[d_pixel_indices] 
 
             d_depth_flat = d_depth_img.ravel()
-            d_valid = d_depth_flat > 0
+            d_valid_idx = cp.flatnonzero(d_depth_flat > 0)
+            #d_prev_cluster_flat = d_prev_cluster.ravel()
+
+            d_cluster_values = d_prev_cluster.ravel()[d_valid_idx]
+            d_in_mask = (d_cluster_values == 1)
+            d_mid_mask = (d_cluster_values == 2)
+            d_out_mask = (d_cluster_values == 0)
+
+            n_in = cp.count_nonzero(d_in_mask)
+            n_mid = cp.count_nonzero(d_mid_mask)
+            n_out = cp.count_nonzero(d_out_mask)
+
+            budget_in, budget_mid, budget_out = allocate_budgets(
+                int(n_in), int(n_mid), int(n_out), point_cloud_budget)
             
-            d_flat_cluster = d_prev_cluster.ravel()
-            
-            d_out_roi = d_valid & (d_flat_cluster == 0)
-            d_in_roi  = d_valid & (d_flat_cluster == 1)
-            d_mid_roi = d_valid & (d_flat_cluster == 2)
-
-            d_in_idx  = cp.flatnonzero(d_in_roi)
-            d_mid_idx = cp.flatnonzero(d_mid_roi)
-            d_out_idx = cp.flatnonzero(d_out_roi)
-        
-            def gpu_subsample(d_indices, budget):
-                size = d_indices.size
-                if size <= budget: return d_indices
-                cp.random.shuffle(d_indices)
-                return d_indices[:budget]
-
-            current_budget = point_cloud_budget
-
-            if d_in_idx.size > current_budget:
-                d_in_idx = gpu_subsample(d_in_idx, current_budget)
-                d_mid_idx = cp.empty((0,), dtype=cp.int32)
-                d_out_idx = cp.empty((0,), dtype=cp.int32)
-                current_budget = 0
-            else:
-                current_budget -= d_in_idx.size
-
-            if current_budget > 0 and d_mid_idx.size > 0:
-                if d_mid_idx.size > current_budget:
-                    d_mid_idx = gpu_subsample(d_mid_idx, current_budget)
-                    d_out_idx = cp.empty((0,), dtype=cp.int32)
-                    current_budget = 0
-                else:
-                    current_budget -= d_mid_idx.size
-            elif current_budget == 0:
-                d_mid_idx = cp.empty((0,), dtype=cp.int32)
-
-            if current_budget > 0 and d_out_idx.size > 0:
-                if d_out_idx.size > current_budget:
-                    d_out_idx = gpu_subsample(d_out_idx, current_budget)
-            elif current_budget == 0:
-                d_out_idx = cp.empty((0,), dtype=cp.int32)
-                
-            def encode_and_broadcast(mode, points, colors, header) :
-                buffer = quantizer.encode(mode, points, colors)
-                server.broadcast(header + buffer)
-            
-            #print(f'{d_in_idx.size} - {d_mid_idx.size} - {d_out_idx.size}')
-            num_chunks = (d_in_idx.size > 0) + (d_mid_idx.size > 0) + (d_out_idx.size > 0)
+            broadcast_buffers = {}
+            num_chunks = 0
             futures_list: list[concurrent.futures.Future] = []
             byte_offset = 0
             frame_id_byte = frame_count % 255
             
-            for indices_i, mode in [
-                (d_in_idx, EncodingMode.HIGH),
-                (d_mid_idx, EncodingMode.MED),
-                (d_out_idx, EncodingMode.LOW),]:
-                
-                if indices_i.size == 0: continue
-                
-                points_i = d_vertices[indices_i]
-                colors_i = d_colors[indices_i]
+            #t = time.perf_counter()
 
-                buffer_size = quantizer.estimate_buffer_size(mode, points_i.shape[0])
-                #print(f'mode: {mode} - buffer: {buffer_size / 1024}')
+            with stream_in:
+                if budget_in > 0:
+                    d_in_idx = d_valid_idx[d_in_mask]
+                    if d_in_idx.size > budget_in:
+                        d_in_idx = fast_subsample(d_in_idx, budget_in)
+                    
+                    if d_in_idx.size > 0:
+                        res_view = quantizer.encode(
+                            stream_in,
+                            EncodingMode.HIGH, 
+                            d_vertices[d_in_idx], 
+                            d_colors[d_in_idx],
+                            pinned_np_high)
+                        broadcast_buffers[EncodingMode.HIGH] = (stream_in, d_in_idx.size, res_view)
+                        num_chunks += 1
+                     
+            with stream_med:
+                if budget_mid > 0:
+                    d_mid_idx = d_valid_idx[d_mid_mask]
+                    if d_mid_idx.size > budget_mid:
+                        d_mid_idx = fast_subsample(d_mid_idx, budget_mid)
+                    
+                    if d_mid_idx.size > 0:
+                        res_view = quantizer.encode(
+                            stream_med,
+                            EncodingMode.MED, 
+                            d_vertices[d_mid_idx], 
+                            d_colors[d_mid_idx],
+                            pinned_np_med)
+                        broadcast_buffers[EncodingMode.MED] = (stream_med, d_mid_idx.size, res_view)
+                        num_chunks += 1
+
+            with stream_out:
+                if budget_out > 0:
+                    d_out_idx = d_valid_idx[d_out_mask]
+                    if d_out_idx.size > budget_out:
+                        d_out_idx = fast_subsample(d_out_idx, budget_out)
+                    
+                    if d_out_idx.size > 0:
+                        res_view = quantizer.encode(
+                            stream_out, 
+                            EncodingMode.LOW, 
+                            d_vertices[d_out_idx], 
+                            d_colors[d_out_idx],
+                            pinned_np_low)
+                        broadcast_buffers[EncodingMode.LOW] = (stream_out, d_out_idx.size, res_view)
+                        num_chunks += 1
+        
+            for mode, (stream, size, buffer_view)  in broadcast_buffers.items() :
+                stream.synchronize()
+
+                #buffer_size = quantizer.estimate_buffer_size(mode, points_i.shape[0])
+                #print(f'mode: {mode} - size: {size} buffer: {len(buffer) / 1024}')
+                buffer_bytes = buffer_view.tobytes()
+                
                 header = (
                         num_chunks.to_bytes(1, 'little') + 
                         frame_id_byte.to_bytes(1, 'little') + 
                         byte_offset.to_bytes(4, 'little'))
 
-                futures_list += [thread_executor.submit(encode_and_broadcast, mode, points_i, colors_i, header),]
-                byte_offset += buffer_size
+                futures_list += [thread_executor.submit(server.broadcast, header + buffer_bytes),]
+                byte_offset += len(buffer_bytes)
             
             concurrent.futures.wait(futures_list)
-
+            #print(f'->{(time.perf_counter() - t) * 1000}')
+            
             if debug:
                 if d_prev_cluster is not None:
                     cluster_cpu = cp.asnumpy(d_prev_cluster)

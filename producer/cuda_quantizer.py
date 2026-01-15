@@ -178,19 +178,19 @@ class CudaQuantizer:
         
         return total + final_pad
     
-    def encode(self, mode: EncodingMode, points: np.ndarray, colors: np.ndarray) -> bytes:
+    def encode(self, stream, mode: EncodingMode, points, colors, out_pinned=None) -> bytes:
         if mode == EncodingMode.HIGH:
-            return self.encode_highQ(points, colors)
+            return self.encode_highQ(stream, points, colors, out_pinned)
         elif mode == EncodingMode.MED:
-            return self.encode_medQ(points, colors)
-        return self.encode_lowQ(points, colors)
+            return self.encode_medQ(stream, points, colors, out_pinned)
+        return self.encode_lowQ(stream, points, colors, out_pinned)
 
-    def encode_highQ(self, points: np.ndarray, colors: np.ndarray) -> bytes:
+    def encode_highQ(self, stream, points, colors, out_pinned=None) -> bytes:
         if points.shape[0] == 0: return b""
         num_points = points.shape[0]
 
-        d_points = cp.asarray(points, dtype=cp.float32)
-        d_colors = cp.asarray(colors, dtype=cp.uint8)
+        d_points = points
+        d_colors = colors
 
         min_vals = cp.amin(d_points, axis=0)
         max_vals = cp.amax(d_points, axis=0)
@@ -216,10 +216,14 @@ class CudaQuantizer:
                 np.float32(scale[0]), np.float32(scale[1]), np.float32(scale[2]),
                 buf_coord, buf_col_r, buf_col_g, buf_col_b
             )
-        )
+        , stream=stream)
         
         total_size = self.estimate_buffer_size(EncodingMode.HIGH, num_points)
-        cpu_buffer = np.zeros(total_size, dtype=np.uint8)
+        
+        if out_pinned is not None:
+            cpu_buffer = out_pinned
+        else:
+            cpu_buffer = np.zeros(total_size, dtype=np.uint8)
         
         header = struct.pack('<6f', *min_v, *scale)
         header += struct.pack('<2i', EncodingMode.HIGH.value, num_points)
@@ -228,23 +232,38 @@ class CudaQuantizer:
         current_offset = 32
 
         end_coord = current_offset + num_points * 4
-        cpu_buffer[current_offset:end_coord] = buf_coord.get().view(np.uint8).ravel()
+        if out_pinned is not None and stream is not None:
+            buf_coord.get(stream=stream, out=cpu_buffer[current_offset:end_coord].view(np.uint32))
+        else:
+            cpu_buffer[current_offset:end_coord] = buf_coord.get().view(np.uint8).ravel()
         current_offset = end_coord 
 
         end_clr_r = current_offset + num_points
-        cpu_buffer[current_offset:end_clr_r] = buf_col_r.get().ravel()
+        if out_pinned is not None and stream is not None:
+            buf_col_r.get(stream=stream, out=cpu_buffer[current_offset:end_clr_r])
+        else:
+            cpu_buffer[current_offset:end_clr_r] = buf_col_r.get().ravel()
         current_offset = end_clr_r + ((4 - (end_clr_r % 4)) % 4)
 
         end_clr_g = current_offset + num_points
-        cpu_buffer[current_offset:end_clr_g] = buf_col_g.get().ravel()
+        if out_pinned is not None and stream is not None:
+            buf_col_g.get(stream=stream, out=cpu_buffer[current_offset:end_clr_g])
+        else:
+            cpu_buffer[current_offset:end_clr_g] = buf_col_g.get().ravel()
         current_offset = end_clr_g + ((4 - (end_clr_g % 4)) % 4)
 
         end_clr_b = current_offset + num_points
-        cpu_buffer[current_offset:end_clr_b] = buf_col_b.get().ravel()
+        if out_pinned is not None and stream is not None:
+            buf_col_b.get(stream=stream, out=cpu_buffer[current_offset:end_clr_b])
+        else:
+            cpu_buffer[current_offset:end_clr_b] = buf_col_b.get().ravel()
         
+        if out_pinned is not None:
+            return cpu_buffer[:total_size]
+            
         return cpu_buffer.tobytes()
     
-    def encode_medQ(self, points: np.ndarray, colors: np.ndarray) -> bytes:
+    def encode_medQ(self, stream, points, colors, out_pinned=None) -> bytes:
         if points.shape[0] == 0: return b""
         
         bits_per_coord = (8, 8, 8)
@@ -252,8 +271,8 @@ class CudaQuantizer:
         sx, sy, sz, scol = 1, 1, 1, 2
         
         num_points = points.shape[0]
-        d_points = cp.asarray(points, dtype=cp.float32)
-        d_colors = cp.asarray(colors, dtype=cp.uint8)
+        d_points = points
+        d_colors = colors
 
         min_vals = cp.amin(d_points, axis=0)
         max_vals = cp.amax(d_points, axis=0)
@@ -282,10 +301,14 @@ class CudaQuantizer:
                 buf_x, buf_y, buf_z, buf_col,
                 np.int32(sx), np.int32(sy), np.int32(sz), np.int32(scol)
             )
-        )
+        , stream=stream)
         
         total_size = self.estimate_buffer_size(EncodingMode.MED, num_points)
-        cpu_buffer = np.zeros(total_size, dtype=np.uint8)
+        
+        if out_pinned is not None:
+            cpu_buffer = out_pinned
+        else:
+            cpu_buffer = np.zeros(total_size, dtype=np.uint8)
         
         header = struct.pack('<6f', *min_v, *scale)
         header += struct.pack('<2i', EncodingMode.MED.value, num_points)
@@ -294,23 +317,37 @@ class CudaQuantizer:
         current_offset = 32
 
         end_x = current_offset + (num_points * sx)
-        cpu_buffer[current_offset:end_x] = buf_x.get().ravel()
+        if out_pinned is not None and stream is not None:
+            buf_x.get(stream=stream, out=cpu_buffer[current_offset:end_x])
+        else:
+            cpu_buffer[current_offset:end_x] = buf_x.get().ravel()
         current_offset = end_x + ((4 - (end_x % 4)) % 4)
 
         end_y = current_offset + (num_points * sy)
-        cpu_buffer[current_offset:end_y] = buf_y.get().ravel()
+        if out_pinned is not None and stream is not None:
+            buf_y.get(stream=stream, out=cpu_buffer[current_offset:end_y])
+        else:
+            cpu_buffer[current_offset:end_y] = buf_y.get().ravel()
         current_offset = end_y + ((4 - (end_y % 4)) % 4)
 
         end_z = current_offset + (num_points * sz)
-        cpu_buffer[current_offset:end_z] = buf_z.get().ravel()
+        if out_pinned is not None and stream is not None:
+            buf_z.get(stream=stream, out=cpu_buffer[current_offset:end_z])
+        else:
+            cpu_buffer[current_offset:end_z] = buf_z.get().ravel()
         current_offset = end_z + ((4 - (end_z % 4)) % 4)
 
         end_col = current_offset + (num_points * scol)
-        cpu_buffer[current_offset:end_col] = buf_col.get().ravel()
+        if out_pinned is not None and stream is not None:
+            buf_col.get(stream=stream, out=cpu_buffer[current_offset:end_col])
+        else:
+            cpu_buffer[current_offset:end_col] = buf_col.get().ravel()
         
+        if out_pinned is not None:
+            return cpu_buffer[:total_size]
         return cpu_buffer.tobytes()
     
-    def encode_lowQ(self, points: np.ndarray, colors: np.ndarray) -> bytes:
+    def encode_lowQ(self, stream, points, colors, out_pinned=None) -> bytes:
         if points.shape[0] == 0: return b""
         
         bits_per_coord = (8, 8, 8)
@@ -318,8 +355,8 @@ class CudaQuantizer:
         sx, sy, sz, scol = 1, 1, 1, 1
         
         num_points = points.shape[0]
-        d_points = cp.asarray(points, dtype=cp.float32)
-        d_colors = cp.asarray(colors, dtype=cp.uint8)
+        d_points = points
+        d_colors = colors
 
         min_vals = cp.amin(d_points, axis=0)
         max_vals = cp.amax(d_points, axis=0)
@@ -348,10 +385,14 @@ class CudaQuantizer:
                 buf_x, buf_y, buf_z, buf_col,
                 np.int32(sx), np.int32(sy), np.int32(sz), np.int32(scol)
             )
-        )
+        , stream=stream)
         
         total_size = self.estimate_buffer_size(EncodingMode.LOW, num_points)
-        cpu_buffer = np.zeros(total_size, dtype=np.uint8)
+        
+        if out_pinned is not None:
+            cpu_buffer = out_pinned
+        else:
+            cpu_buffer = np.zeros(total_size, dtype=np.uint8)
         
         header = struct.pack('<6f', *min_v, *scale)
         header += struct.pack('<2i', EncodingMode.LOW.value, num_points)
@@ -360,18 +401,32 @@ class CudaQuantizer:
         current_offset = 32
 
         end_x = current_offset + (num_points * sx)
-        cpu_buffer[current_offset:end_x] = buf_x.get().ravel()
+        if out_pinned is not None and stream is not None:
+            buf_x.get(stream=stream, out=cpu_buffer[current_offset:end_x])
+        else:
+            cpu_buffer[current_offset:end_x] = buf_x.get().ravel()
         current_offset = end_x + ((4 - (end_x % 4)) % 4)
 
         end_y = current_offset + (num_points * sy)
-        cpu_buffer[current_offset:end_y] = buf_y.get().ravel()
+        if out_pinned is not None and stream is not None:
+            buf_y.get(stream=stream, out=cpu_buffer[current_offset:end_y])
+        else:
+            cpu_buffer[current_offset:end_y] = buf_y.get().ravel()
         current_offset = end_y + ((4 - (end_y % 4)) % 4)
 
         end_z = current_offset + (num_points * sz)
-        cpu_buffer[current_offset:end_z] = buf_z.get().ravel()
+        if out_pinned is not None and stream is not None:
+            buf_z.get(stream=stream, out=cpu_buffer[current_offset:end_z])
+        else:
+            cpu_buffer[current_offset:end_z] = buf_z.get().ravel()
         current_offset = end_z + ((4 - (end_z % 4)) % 4)
 
         end_col = current_offset + (num_points * scol)
-        cpu_buffer[current_offset:end_col] = buf_col.get().ravel()
-        
+        if out_pinned is not None and stream is not None:
+            buf_col.get(stream=stream, out=cpu_buffer[current_offset:end_col])
+        else:
+            cpu_buffer[current_offset:end_col] = buf_col.get().ravel()
+            
+        if out_pinned is not None:
+            return cpu_buffer[:total_size]
         return cpu_buffer.tobytes()
