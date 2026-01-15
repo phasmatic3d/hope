@@ -97,7 +97,7 @@ class SecureWebSocketServer:
         self.key_file = key_file
         
         self.clients: Set[WebSocketServerProtocol] = set()
-        self._client_lock = asyncio.Lock()  # For thread-safe client management
+        self._client_lock = asyncio.Lock()
  
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
@@ -129,45 +129,36 @@ class SecureWebSocketServer:
                 self.port, 
                 ssl=ssl_context, 
                 max_size=None,
-                compression=None  # Disable compression for better performance
+                compression=None
             ):
                 await self._shutdown_event.wait()
         
         self.loop.run_until_complete(run_server())
 
     async def _handler(self, websocket: WebSocketServerProtocol):
-        """Handle individual WebSocket connections"""
-        # Add client
         self.clients.add(websocket)
         print(f"Client connected. Total clients: {len(self.clients)}")
         
         try:
-            # Keep connection alive and optionally handle incoming messages
             async for message in websocket:
-                # If you need to handle incoming messages, process them here
-                # For now, just ignore them as this is primarily for broadcasting
                 pass
                 
         except Exception as e:
             print(f"Client handler error: {e}")
         finally:
-            # Remove client
-            self.clients.discard(websocket)  # discard() won't raise if not present
+            self.clients.discard(websocket)
             print(f"Client disconnected. Total clients: {len(self.clients)}")
 
     def start(self):
-        """Start the WebSocket server thread"""
         self.thread.start()
         print("WebSocket server thread started")
 
     def stop(self):
-        """Stop the server gracefully"""
         print("Stopping WebSocket server...")
         
         async def _stop():
             self._shutdown_event.set()
             
-            # Close all client connections
             if self.clients:
                 await asyncio.gather(
                     *[client.close() for client in list(self.clients)],
@@ -186,50 +177,41 @@ class SecureWebSocketServer:
             self.thread.join(timeout=2)
 
     def broadcast(self, packet: bytes):
-        """Broadcast binary data to all connected clients"""
         if not self.clients:
             return
 
         async def _broadcast():
-            # Make a copy to avoid modification during iteration
             active_clients = list(self.clients)
             
             if not active_clients:
                 return
             
-            # Send to all clients concurrently
             results = await asyncio.gather(
                 *[self._send_to_client(ws, packet) for ws in active_clients],
                 return_exceptions=True
             )
             
-            # Check for failures
             failed = sum(1 for r in results if isinstance(r, Exception))
             if failed > 0:
                 print(f"Broadcast: {failed}/{len(active_clients)} clients failed")
 
         try:
             future = asyncio.run_coroutine_threadsafe(_broadcast(), self.loop)
-            # Don't wait for completion to avoid blocking the calling thread
-            # But you can check later: future.result(timeout=0.1)
         except Exception as e:
             print(f"Broadcast error: {e}")
 
     async def _send_to_client(self, ws: WebSocketServerProtocol, packet: bytes):
-        """Send packet to a single client with error handling"""
         try:
             await ws.send(packet)
         except Exception as e:
             print(f"Send error to client: {e}")
             self.clients.discard(ws)
-            raise  # Re-raise to be caught by gather()
+            raise
 
     def get_client_count(self) -> int:
-        """Get the current number of connected clients"""
         return len(self.clients)
 
     def is_running(self) -> bool:
-        """Check if the server thread is running"""
         return self.thread.is_alive()
 
 class SecureWebRTCServer:
@@ -243,7 +225,6 @@ class SecureWebRTCServer:
         self.clients: Set[WebSocketServerProtocol] = set()
         self.pcs: Dict[WebSocketServerProtocol, RTCPeerConnection] = {}
         
-        # NEW: Store queues for each connected client
         self.client_queues: Dict[WebSocketServerProtocol, asyncio.Queue] = {}
         
         self.loop = asyncio.new_event_loop()
@@ -252,7 +233,7 @@ class SecureWebRTCServer:
 
     def _run_loop(self):
         asyncio.set_event_loop(self.loop)
-        # ... (Same initialization) ...
+        
         if not self.cert_folder.exists():
             print(f"Error: Cert folder {self.cert_folder} not found.")
             return
@@ -271,7 +252,7 @@ class SecureWebRTCServer:
         
         async def run_server():
             async with serve(self._handler, self.host, self.port, ssl=ssl_context):
-                await asyncio.Future()  # Run forever
+                await asyncio.Future()
         
         self.loop.run_until_complete(run_server())
 
@@ -336,24 +317,18 @@ class SecureWebRTCServer:
                 await self._cleanup_peer(websocket)
 
     async def _client_sender_task(self, ws, channel, queue):
-        """Background task that manages the buffer for a single client."""
         try:
             while True:
-                # 1. Get the next packet from the hidden buffer (Queue)
                 packet = await queue.get()
                 
-                # 2. Backpressure Logic
-                # Wait until the socket's internal buffer drains below 256KB.
-                # This ensures we don't overwhelm the underlying SCTP connection.
                 while channel.bufferedAmount > 256 * 1024:
-                    await asyncio.sleep(0.005) # Sleep 5ms and check again
-                
-                # 3. Send (Room is available!)
+                    await asyncio.sleep(0.005) 
+
                 try:
                     if channel.readyState == "open":
                         channel.send(packet)
                     else:
-                        break # Channel died
+                        break
                 except Exception:
                     break
                 
@@ -361,7 +336,6 @@ class SecureWebRTCServer:
         except asyncio.CancelledError:
             pass
         finally:
-            # Cleanup queue reference if task dies
             self.client_queues.pop(ws, None)
 
     async def _cleanup_peer(self, websocket):
@@ -378,34 +352,23 @@ class SecureWebRTCServer:
 
     def stop(self):
         self._shutdown = True
-        # ... (keep existing stop logic) ...
 
     def broadcast(self, packet: bytes):
-        """Push packet to all client buffers immediately"""
         if not self.client_queues:
             return
 
         def _push_to_queues():
             for ws, queue in list(self.client_queues.items()):
                 try:
-                    # 'put_nowait' will crash if queue is full (maxsize=50).
-                    # Use 'await queue.put(packet)' if you want to BLOCK the python server 
-                    # until room is made (Not recommended, slows down camera).
-                    # Instead, we try to put, and if full, we drop (safest for live video).
-                    
                     if not queue.full():
                         queue.put_nowait(packet)
                     else:
-                        # Optional: Print warning
-                        # print("Buffer full, dropping frame for client")
                         pass
                 except Exception:
                     pass
 
-        # We run this small loop in the asyncio thread
         self.loop.call_soon_threadsafe(_push_to_queues)
 
-    # ... (Rest of class methods) ...
     def get_active_connections(self) -> int:
         return len(self.client_queues)
     
@@ -423,8 +386,6 @@ class SecureHTTPThreadedServer:
         self.thread = threading.Thread(target=self._run_server, daemon=True)
 
     def _run_server(self):
-        """Runs the HTTPS server with Cross-Origin Isolation headers."""
-        
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         try:
             ssl_context.load_cert_chain(
