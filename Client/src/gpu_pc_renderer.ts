@@ -38,8 +38,11 @@ const highQShader = {
             vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
             gl_Position = projectionMatrix * mvPosition;
 
-            float safeDist = max(-mvPosition.z, 0.01);
-            gl_PointSize = clamp((2.0 / safeDist), 1.0, 15.0);
+            float dist = -mvPosition.z; 
+            float closeDist = 0.01;
+            float farDist = 4.0;
+            float t = clamp((dist - closeDist) / (farDist - closeDist), 0.0, 1.0);
+            gl_PointSize = mix(10.0, 1.0, t);
         }
     `,
     fragmentShader: `
@@ -104,8 +107,11 @@ const standardShader = {
             vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
             gl_Position = projectionMatrix * mvPosition;
 
-            float safeDist = max(-mvPosition.z, 0.01);
-            gl_PointSize = clamp((2.0 / safeDist), 1.0, 15.0);
+            float dist = -mvPosition.z; 
+            float closeDist = 0.01;
+            float farDist = 4.0;
+            float t = clamp((dist - closeDist) / (farDist - closeDist), 0.0, 1.0);
+            gl_PointSize = mix(10.0, 1.0, t);
         }
     `,
     fragmentShader: `
