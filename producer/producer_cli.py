@@ -73,6 +73,35 @@ producer_cli.add_argument("--max_depth_meter", type=float, default=4.)
 
 producer_cli.add_argument("--debug", type=bool, default=True)
 
+producer_cli.add_argument("--offline_mode", action="store_true", help="Run offline compression and exit.")
+producer_cli.add_argument(
+    "--offline_target_fps",
+    type=float,
+    default=30.0,
+    help="Offline-only target streaming fps used to derive the point budget.",
+)
+producer_cli.add_argument(
+    "--offline_bandwidth_mb_per_s",
+    type=float,
+    default=40.0,
+    help="Offline-only available bandwidth in MB/s used to derive the point budget.",
+)
+
+producer_cli.add_argument(
+    "--offline_prefix",
+    type=str,
+    default="TRACKING",
+    help="Name of the offline input folder under producer/exported_PCs. outputs go to <prefix>_IMPORTANCE.",
+)
+producer_cli.add_argument("--offline_query_x", type=float, default=420.0, help="SAM query x pixel.")
+producer_cli.add_argument("--offline_query_y", type=float, default=210.0, help="SAM query y pixel.")
+producer_cli.add_argument("--offline_box_size", type=float, default=10.0, help="SAM query box half-size in pixels.")
+producer_cli.add_argument(
+    "--offline_debug_roi",
+    action="store_true",
+    help="Write ROI debug overlays/logs during offline compression.",
+)
+
 #openssl genrsa -out server.key 2048
 #openssl req -new -key server.key -out server.csr
 #openssl x509 -req -days 365 -in server.csr -signkey server.key -out server.crt
@@ -114,15 +143,15 @@ def getRequest(outputPath : Path, url : str) -> None:
     with tqdm.wrapattr(req.raw, "read", total=fileSize, desc=desc) as r_raw:
         with open(outputFile, "wb") as f:
             shutil.copyfileobj(r_raw, f)
-            
+
 def exportDefaultConfig(path: Path):
     import yaml
-    
+
     data = {
         'point_budget' : 100000,
         'num_clusters' : 2,
         'cluster_header_byte_sz' : 6,
     }
-    
+
     with open(path / 'config.yaml', 'w') as file:
         yaml.dump(data, file)

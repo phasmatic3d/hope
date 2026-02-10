@@ -151,7 +151,6 @@ class SecureWebSocketServer:
 
     def start(self):
         self.thread.start()
-        print("WebSocket server thread started")
 
     def stop(self):
         print("Stopping WebSocket server...")
@@ -371,10 +370,10 @@ class SecureWebRTCServer:
 
     def get_active_connections(self) -> int:
         return len(self.client_queues)
-    
+
     def get_total_connections(self) -> int:
         return len(self.pcs)
-        
+
 class SecureHTTPThreadedServer:
     def __init__(self, host: str, port: int, cert_folder: str, cert_file: str, key_file: str, directory: str):
         self.host = host
@@ -384,6 +383,7 @@ class SecureHTTPThreadedServer:
         self.key_file = key_file
         self.directory = directory
         self.thread = threading.Thread(target=self._run_server, daemon=True)
+        self.httpd = None
 
     def _run_server(self):
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -409,10 +409,22 @@ class SecureHTTPThreadedServer:
         try:
             with socketserver.TCPServer((self.host, self.port), COOPCOEPHandler) as httpd:
                 httpd.socket = ssl_context.wrap_socket(httpd.socket, server_side=True)
+                # Store server ref so another thread can stop it.
+                self.httpd = httpd
                 print(f"HTTPS Clienting serving '{self.directory}' at https://{self.host}:{self.port}")
                 httpd.serve_forever()
+                self.httpd = None
         except OSError as e:
             print(f"HTTP Port {self.port} likely in use. Error: {e}")
 
     def start(self):
         self.thread.start()
+
+    def stop(self):
+        """Stop the HTTPS file server thread."""
+        # shutdown() breaks out of serve_forever in _run_server.
+        if self.httpd is not None:
+            self.httpd.shutdown()
+            self.httpd.server_close()
+        if self.thread.is_alive():
+            self.thread.join(timeout=2)

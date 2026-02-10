@@ -10,7 +10,7 @@
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
 
   "cmake.generator": "Ninja",
-  "cmake.sourceDirectory": "${workspaceFolder}/producer",
+  "cmake.sourceDirectory": "D:/Work/Work/Hope-new/hope/Client/deps/draco",
   "cmake.buildDirectory": "${workspaceFolder}/producer/build",
   "cmake.configureSettings": {
   "Python_EXECUTABLE": "${config:python.defaultInterpreterPath}"

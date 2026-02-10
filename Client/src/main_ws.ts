@@ -4,6 +4,7 @@ import { openConnection } from './transmissionWS';
 //import { openConnection } from './transmissionWebRTC';
 import { FreeRoamController } from './FreeRoamController';
 import { createGPUPointCloud } from './gpu_pc_renderer'; 
+import { createPerfCsvExporter } from './perf_csv_export';
 
 const SERVER_HEADER_SIZE = 6; // 1 (chunks) + 1 (id) + 4 (offset)
 
@@ -27,7 +28,7 @@ async function setupScene_gpu() {
         stencil: false,
         alpha: false });
 
-    renderer.setPixelRatio(1.0);     
+    renderer.setPixelRatio(1.0);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.xr.enabled = true;
     renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
@@ -37,7 +38,10 @@ async function setupScene_gpu() {
 
 	const gl = renderer.getContext() as WebGL2RenderingContext;
     const ext = gl.getExtension('EXT_disjoint_timer_query_webgl2');
-    const query = ext ? gl.createQuery() : null;
+    const gpuQueries: WebGLQuery[] = [];
+
+    // Mobile browsers may miss timer-query support, so fallback timing stays active.
+    if (!ext) console.log('[Perf] EXT_disjoint_timer_query_webgl2 unavailable; using CPU render timing fallback.');
 
     const camCtrl = new FreeRoamController(scene, renderer, {
         startPosition: [0.0, 0.0, 1.0],
@@ -45,54 +49,115 @@ async function setupScene_gpu() {
         sprintMultiplier: 2.0,
         damping: 10
     });
-    
+
     const camera = camCtrl.camera;
 
     const processPointCloud = createGPUPointCloud(scene);
+    const perfExporter = createPerfCsvExporter('point-cloud-perf-ws');
 
+    // Queue decode-complete frames until one GPU render sample is ready for each.
+    const pendingFrames: Array<{ frameId: number; decodeMs: number }> = [];
 	let uploadTimeAccumulator = 0;
-    let frameChunkCount = 0;
+    let activeFrameId = -1;
+    let receivedChunks = 0;
+    let expectedChunks = 0;
 
+
+    /**
+     * Pairs one decode-complete frame with one render timing sample.
+     * This keeps CSV rows aligned with fully assembled point clouds.
+     */
+    function recordCompletedFrame(renderMs: number) {
+        const completed = pendingFrames.shift();
+        if (!completed) return;
+
+        perfExporter.addSample(completed.frameId, completed.decodeMs, renderMs);
+        console.log(`[Perf] Frame ${completed.frameId} Decode(full): ${completed.decodeMs.toFixed(3)}ms | Render: ${renderMs.toFixed(3)}ms`);
+    }
+
+    /**
+     * Starts one GPU timer query for the current render pass.
+     * A fresh query per frame avoids re-reading stale timings from reused query objects.
+     */
     function measureGPU() {
-        if (!ext || !query) return;
+        if (!ext) return;
+
+        const query = gl.createQuery();
+        if (!query) {
+            renderer.render(scene, camera);
+            return;
+        }
+
+        gpuQueries.push(query);
         gl.beginQuery(ext.TIME_ELAPSED_EXT, query);
         renderer.render(scene, camera);
         gl.endQuery(ext.TIME_ELAPSED_EXT);
-        requestAnimationFrame(checkQuery);
+        pollCompletedQueries();
     }
 
-    function checkQuery() {
-        if (!ext || !query) return;
-        
-        const available = gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE);
-        if (available) {
-            const timeNs = gl.getQueryParameter(query, gl.QUERY_RESULT);
-            const gpuTimeMs = timeNs / 1000000;
-            
-            if (Math.random() < 0.01) {
-                console.log(`[Perf] GPU Render: ${gpuTimeMs.toFixed(3)}ms | CPU Upload: ${uploadTimeAccumulator.toFixed(3)}ms`);
+    /**
+     * Drains ready GPU timing queries in FIFO order.
+     * This keeps timings aligned with render completion order.
+     */
+    function pollCompletedQueries() {
+        if (!ext) return;
+
+        while (gpuQueries.length > 0) {
+            const query = gpuQueries[0];
+            const available = gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE);
+            if (!available) break;
+
+            const isDisjoint = gl.getParameter(ext.GPU_DISJOINT_EXT);
+            if (!isDisjoint) {
+                const timeNs = gl.getQueryParameter(query, gl.QUERY_RESULT);
+                const gpuTimeMs = timeNs / 1000000;
+
+                // Timer query path on desktops uses true GPU elapsed time.
+                recordCompletedFrame(gpuTimeMs);
+                uploadTimeAccumulator = 0;
             }
-            
-            uploadTimeAccumulator = 0; 
-        } else {
-            // Keep checking next frame
-            requestAnimationFrame(checkQuery);
+
+            gl.deleteQuery(query);
+            gpuQueries.shift();
         }
     }
 
     renderer.setAnimationLoop(() => {
         camCtrl.update(0.01);
-        //renderer.render(scene, camera);
-        //return;
+
         if (ext) {
-            measureGPU(); // Render wrapped in timer
+            measureGPU(); // Render wrapped in GPU timer query.
         } else {
+            // Fallback path uses CPU-side render timing on platforms without timer queries.
+            const renderStart = performance.now();
             renderer.render(scene, camera);
+            const cpuRenderMs = performance.now() - renderStart;
+            recordCompletedFrame(cpuRenderMs);
         }
     });
 
     // Resize
     window.addEventListener('resize', () => camCtrl.onResize(window.innerWidth, window.innerHeight));
+
+    // Download button gives a manual export path to normal disk.
+    const downloadBtn = document.createElement('button');
+    downloadBtn.textContent = 'Download Perf CSV';
+    downloadBtn.style.position = 'fixed';
+    downloadBtn.style.top = '12px';
+    downloadBtn.style.right = '12px';
+    downloadBtn.style.zIndex = '9999';
+    downloadBtn.style.padding = '8px 12px';
+    downloadBtn.style.borderRadius = '6px';
+    downloadBtn.style.border = '1px solid #444';
+    downloadBtn.style.background = '#ffffff';
+    downloadBtn.style.color = '#111111';
+    downloadBtn.style.cursor = 'pointer';
+    // Manual export writes the current in-memory sample set to CSV.
+    downloadBtn.addEventListener('click', () => {
+        perfExporter.downloadCsvToDisk();
+    });
+    document.body.appendChild(downloadBtn);
+
 
     // --- 4. Network Logic ---
     const HALF_BUFFER_SIZE = sharedEncodedView.byteLength / 2;
@@ -101,11 +166,19 @@ async function setupScene_gpu() {
     openConnection(
         (data: ArrayBuffer) => {
             const dv = new DataView(data);
-            
+
             // Header: [Chunks (1)][FrameId (1)][ByteOffset (4)]
             const numChunks = dv.getUint8(0);
             const frameId = dv.getUint8(1);
-            const chunkOffset = dv.getUint32(2, true); 
+            const chunkOffset = dv.getUint32(2, true);
+
+            // Reset counters when a new frame id appears in the stream.
+            if (frameId !== activeFrameId) {
+                activeFrameId = frameId;
+                receivedChunks = 0;
+                expectedChunks = numChunks;
+                uploadTimeAccumulator = 0;
+            }
 
             // Double Buffering Swap Logic
             // If this is the *first* chunk of a frame (offset 0), we decide which buffer half to use.
@@ -120,7 +193,7 @@ async function setupScene_gpu() {
             // Payload starts after the 6-byte server header
             const payload = new Uint8Array(data, SERVER_HEADER_SIZE);
             const writePos = bufferOffsetBase + chunkOffset;
-            
+
             // Safety Check
             if (writePos + payload.byteLength > sharedEncodedView.byteLength) {
                 console.error(`Buffer Overflow writting at:${writePos} len:${payload.byteLength}`);
@@ -139,6 +212,12 @@ async function setupScene_gpu() {
             );
 
 			uploadTimeAccumulator += chunkUploadTime!;
+            receivedChunks += 1;
+
+            // Full decode time is the sum across all chunks in the frame.
+            if (expectedChunks > 0 && receivedChunks >= expectedChunks) {
+                pendingFrames.push({ frameId, decodeMs: uploadTimeAccumulator });
+            }
         },
         (err: unknown) => console.log('WebSocket Error:', err)
     );

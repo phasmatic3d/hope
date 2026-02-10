@@ -10,7 +10,6 @@ export async function openConnection(
     console.warn("WebSockets")
     // toggle this to switch between ws:// and wss://
     const USE_TLS = true;
-
     // host + port for each mode
     const HOST = window.location.hostname;//'192.168.1.152';
     //const HOST = 'localhost';
