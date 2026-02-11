@@ -130,15 +130,8 @@ def decode_chunk(buffer_bytes: bytes) -> tuple[np.ndarray, np.ndarray, int]:
 
     offset = 32
     if mode == EncodingMode.HIGH.value:
-        x = np.frombuffer(buffer_bytes, dtype=np.uint16, count=num_points, offset=offset)
-        offset += num_points * 2
-        offset += (4 - (offset % 4)) % 4
-        y = np.frombuffer(buffer_bytes, dtype=np.uint16, count=num_points, offset=offset)
-        offset += num_points * 2
-        offset += (4 - (offset % 4)) % 4
-        z = np.frombuffer(buffer_bytes, dtype=np.uint16, count=num_points, offset=offset)
-        offset += num_points * 2
-        offset += (4 - (offset % 4)) % 4
+        packed = np.frombuffer(buffer_bytes, dtype=np.uint32, count=num_points, offset=offset)
+        offset += num_points * 4
         r = np.frombuffer(buffer_bytes, dtype=np.uint8, count=num_points, offset=offset)
         offset += num_points
         offset += (4 - (offset % 4)) % 4
@@ -147,17 +140,18 @@ def decode_chunk(buffer_bytes: bytes) -> tuple[np.ndarray, np.ndarray, int]:
         offset += (4 - (offset % 4)) % 4
         b = np.frombuffer(buffer_bytes, dtype=np.uint8, count=num_points, offset=offset)
 
-        norm = np.stack([
-            x.astype(np.float32) / 8191.0,
-            y.astype(np.float32) / 8191.0,
-            z.astype(np.float32) / 16383.0,
-        ], axis=1)
+        x = (packed & 2047) / 2047.0
+        y = ((packed >> 11) & 2047) / 2047.0
+        z = ((packed >> 22) & 1023) / 1023.0
+        norm = np.stack([x, y, z], axis=1).astype(np.float32)
         xyz = (norm / scale_vals) + min_vals
         rgb = np.stack([r, g, b], axis=1).astype(np.uint8)
         return xyz, rgb, mode
 
     sx = 2 if mode == EncodingMode.MED.value else 1
-    max_coord = np.array([2047.0, 2047.0, 1023.0], dtype=np.float32) if mode == EncodingMode.MED.value else np.array([255.0, 255.0, 255.0], dtype=np.float32)
+    # MED carries 11/11/10 coordinates while LOW carries 8/8/8 coordinates.
+    scol = 4
+    bits_col = (8, 8, 8)
 
     coord_dtype = np.uint16 if sx == 2 else np.uint8
     x = np.frombuffer(buffer_bytes, dtype=coord_dtype, count=num_points, offset=offset)
@@ -171,33 +165,83 @@ def decode_chunk(buffer_bytes: bytes) -> tuple[np.ndarray, np.ndarray, int]:
     offset += (4 - (offset % 4)) % 4
     packed = np.frombuffer(buffer_bytes, dtype=np.uint32, count=num_points, offset=offset)
 
-    norm = np.stack([
-        x.astype(np.float32) / max_coord[0],
-        y.astype(np.float32) / max_coord[1],
-        z.astype(np.float32) / max_coord[2],
-    ], axis=1)
+    max_coord = np.array([
+        float((1 << (11 if mode == EncodingMode.MED.value else 8)) - 1),
+        float((1 << (11 if mode == EncodingMode.MED.value else 8)) - 1),
+        float((1 << (10 if mode == EncodingMode.MED.value else 8)) - 1),
+    ], dtype=np.float32)
+    norm = np.stack([x, y, z], axis=1).astype(np.float32) / max_coord
     xyz = (norm / scale_vals) + min_vals
 
+    br, bg, bb = bits_col
     packed_vals = packed.astype(np.uint32)
-    r = (packed_vals & 255).astype(np.uint8)
-    g = ((packed_vals >> 8) & 255).astype(np.uint8)
-    b = ((packed_vals >> 16) & 255).astype(np.uint8)
+    r = packed_vals & ((1 << br) - 1)
+    g = (packed_vals >> br) & ((1 << bg) - 1)
+    b = (packed_vals >> (br + bg)) & ((1 << bb) - 1)
+    r = (r.astype(np.float32) / ((1 << br) - 1) * 255.0).astype(np.uint8)
+    g = (g.astype(np.float32) / ((1 << bg) - 1) * 255.0).astype(np.uint8)
+    b = (b.astype(np.float32) / ((1 << bb) - 1) * 255.0).astype(np.uint8)
     rgb = np.stack([r, g, b], axis=1)
     return xyz, rgb, mode
 
 
-def allocate_budgets(n_in: int, n_mid: int, n_out: int, total_budget: int) -> tuple[int, int, int]:
-    """Split a point budget into in/mid/out buckets."""
-    if n_in >= total_budget:
-        return total_budget, 0, 0
+def allocate_budgets(
+    n_in: int,
+    n_mid: int,
+    n_out: int,
+    total_budget: int,
+    min_keep_ratio_high: float,
+    min_keep_ratio_med: float,
+    min_keep_ratio_low: float,
+) -> tuple[int, int, int]:
+    """Split a point budget into in/mid/out buckets with per-cluster keep floors."""
+    # Keep at least a configurable percentage from each cluster when possible.
+    min_in = min(n_in, int(np.ceil(n_in * min_keep_ratio_high)))
+    min_mid = min(n_mid, int(np.ceil(n_mid * min_keep_ratio_med)))
+    min_out = min(n_out, int(np.ceil(n_out * min_keep_ratio_low)))
 
-    remaining = total_budget - n_in
-    if n_mid >= remaining:
-        return n_in, remaining, 0
+    min_required = min_in + min_mid + min_out
+    if min_required >= total_budget:
+        # If budget is too small, reduce floors proportionally and distribute leftovers.
+        scale = total_budget / min_required if min_required > 0 else 0.0
+        alloc_in = min(min_in, int(np.floor(min_in * scale)))
+        alloc_mid = min(min_mid, int(np.floor(min_mid * scale)))
+        alloc_out = min(min_out, int(np.floor(min_out * scale)))
+        used = alloc_in + alloc_mid + alloc_out
+        remaining = total_budget - used
 
-    remaining -= n_mid
-    return n_in, n_mid, min(n_out, remaining)
+        for cluster in ("in", "mid", "out"):
+            if remaining <= 0:
+                break
+            if cluster == "in":
+                extra = min(remaining, n_in - alloc_in)
+                alloc_in += extra
+            elif cluster == "mid":
+                extra = min(remaining, n_mid - alloc_mid)
+                alloc_mid += extra
+            else:
+                extra = min(remaining, n_out - alloc_out)
+                alloc_out += extra
+            remaining -= extra
+        return alloc_in, alloc_mid, alloc_out
 
+    budget_in = min_in
+    budget_mid = min_mid
+    budget_out = min_out
+    remaining = total_budget - min_required
+
+    # Fill remaining budget by importance order.
+    add_in = min(remaining, n_in - budget_in)
+    budget_in += add_in
+    remaining -= add_in
+
+    add_mid = min(remaining, n_mid - budget_mid)
+    budget_mid += add_mid
+    remaining -= add_mid
+
+    add_out = min(remaining, n_out - budget_out)
+    budget_out += add_out
+    return budget_in, budget_mid, budget_out
 
 def estimate_compressed_bytes_for_budget(
     quantizer: CudaQuantizer,
@@ -205,10 +249,21 @@ def estimate_compressed_bytes_for_budget(
     n_mid: int,
     n_out: int,
     total_budget: int,
+    min_keep_ratio_high: float,
+    min_keep_ratio_med: float,
+    min_keep_ratio_low: float,
 ) -> int:
     """Estimate compressed bytes for a candidate total budget."""
     # This mirrors the same importance split used during actual encoding.
-    budget_in, budget_mid, budget_out = allocate_budgets(n_in, n_mid, n_out, total_budget)
+    budget_in, budget_mid, budget_out = allocate_budgets(
+        n_in,
+        n_mid,
+        n_out,
+        total_budget,
+        min_keep_ratio_high=min_keep_ratio_high,
+        min_keep_ratio_med=min_keep_ratio_med,
+        min_keep_ratio_low=min_keep_ratio_low,
+    )
     total_bytes = 0
     if budget_in > 0:
         total_bytes += quantizer.estimate_buffer_size(EncodingMode.HIGH, budget_in)
@@ -226,6 +281,9 @@ def derive_offline_point_budget(
     n_out: int,
     target_fps: float,
     bandwidth_mb_per_s: float,
+    min_keep_ratio_high: float,
+    min_keep_ratio_med: float,
+    min_keep_ratio_low: float,
 ) -> tuple[int, int]:
     """Compute the max point budget that fits frame bandwidth constraints."""
     # Convert MB/s to bytes per frame for the requested streaming fps.
@@ -239,14 +297,22 @@ def derive_offline_point_budget(
     best = 0
     while left <= right:
         mid = (left + right) // 2
-        estimated_bytes = estimate_compressed_bytes_for_budget(quantizer, n_in, n_mid, n_out, mid)
+        estimated_bytes = estimate_compressed_bytes_for_budget(
+            quantizer,
+            n_in,
+            n_mid,
+            n_out,
+            mid,
+            min_keep_ratio_high=min_keep_ratio_high,
+            min_keep_ratio_med=min_keep_ratio_med,
+            min_keep_ratio_low=min_keep_ratio_low,
+        )
         if estimated_bytes <= bytes_per_frame:
             best = mid
             left = mid + 1
         else:
             right = mid - 1
     return best, bytes_per_frame
-
 
 def fast_subsample(d_indices: cp.ndarray, budget: int) -> cp.ndarray:
     """Pick evenly spaced indices on the GPU."""
@@ -363,7 +429,8 @@ def run_offline_compression(args, server=None) -> None:
     stream_med = cp.cuda.Stream(non_blocking=True)
     stream_out = cp.cuda.Stream(non_blocking=True)
 
-    # Allocate pinned buffers for the worst-case frame budget at the selected depth resolution.
+    
+# Allocate pinned buffers for the worst-case frame budget at the selected depth resolution.
     max_points_per_frame = cmr_depth_width * cmr_depth_height
     pinned_mem_high = cp.cuda.alloc_pinned_memory(max_points_per_frame * 15)
     pinned_mem_med = cp.cuda.alloc_pinned_memory(max_points_per_frame * 15)
@@ -577,14 +644,35 @@ def run_offline_compression(args, server=None) -> None:
             n_out,
             args.offline_target_fps,
             args.offline_bandwidth_mb_per_s,
+            args.min_keep_ratio_high,
+            args.min_keep_ratio_med,
+            args.min_keep_ratio_low,
         )
         total_budget = derived_budget
-        budget_in, budget_mid, budget_out = allocate_budgets(n_in, n_mid, n_out, total_budget)
-        estimated_payload = estimate_compressed_bytes_for_budget(quantizer, n_in, n_mid, n_out, total_budget)
+        budget_in, budget_mid, budget_out = allocate_budgets(
+            n_in,
+            n_mid,
+            n_out,
+            total_budget,
+            args.min_keep_ratio_high,
+            args.min_keep_ratio_med,
+            args.min_keep_ratio_low,
+        )
+        estimated_payload = estimate_compressed_bytes_for_budget(
+            quantizer,
+            n_in,
+            n_mid,
+            n_out,
+            total_budget,
+            args.min_keep_ratio_high,
+            args.min_keep_ratio_med,
+            args.min_keep_ratio_low,
+        )
         print(
             f"[offline] budgets for {ply_path.name}: in={budget_in} mid={budget_mid} out={budget_out} "
             f"(total={total_budget}, est={estimated_payload}B, target={target_frame_bytes}B @ {args.offline_target_fps:.2f}fps)"
         )
+
 
         # This mirrors online framing so the web client can process chunks in real-time order.
         frame_id_byte = frame_idx % 255

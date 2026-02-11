@@ -68,12 +68,31 @@ producer_cli.add_argument("--realsense_depth_stream", type=str, default="dpth_mi
 producer_cli.add_argument("--realsense_target_fps", type=int, default=30, choices=[90, 30, 15, 6])
 producer_cli.add_argument("--cluster_predictor", type=str, default="sam2", choices=["yolo", "sam2",])
 producer_cli.add_argument("--point_cloud_budget", type=int, default=150000)
+producer_cli.add_argument(
+    "--min_keep_ratio_low",
+    type=float,
+    default=0.5,
+    help="Minimum keep ratio for LOW cluster points when clipping by budget.",
+)
+producer_cli.add_argument(
+    "--min_keep_ratio_med",
+    type=float,
+    default=0.65,
+    help="Minimum keep ratio for MED cluster points when clipping by budget.",
+)
+producer_cli.add_argument(
+    "--min_keep_ratio_high",
+    type=float,
+    default=0.8,
+    help="Minimum keep ratio for HIGH cluster points when clipping by budget.",
+)
 producer_cli.add_argument("--min_depth_meter", type=float, default=0.01)
 producer_cli.add_argument("--max_depth_meter", type=float, default=4.)
 
 producer_cli.add_argument("--debug", type=bool, default=True)
 
 producer_cli.add_argument("--offline_mode", action="store_true", help="Run offline compression and exit.")
+
 producer_cli.add_argument(
     "--offline_target_fps",
     type=float,
@@ -86,6 +105,7 @@ producer_cli.add_argument(
     default=40.0,
     help="Offline-only available bandwidth in MB/s used to derive the point budget.",
 )
+
 
 producer_cli.add_argument(
     "--offline_prefix",

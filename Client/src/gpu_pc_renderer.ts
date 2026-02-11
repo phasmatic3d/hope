@@ -15,9 +15,7 @@ const highQShader = {
         precision highp int;
         precision highp float;
 
-        in uint xData;
-        in uint yData;
-        in uint zData;
+        in uint packedPos; // 32-bit: Z(10) | Y(11) | X(11)
         in uint rData;
         in uint gData;
         in uint bData;
@@ -28,9 +26,9 @@ const highQShader = {
         out vec3 vColor;
 
         void main() {
-            float x = float(xData) / 8191.0;
-            float y = float(yData) / 8191.0;
-            float z = float(zData) / 16383.0;
+            float x = float(packedPos & 2047u) / 2047.0;
+            float y = float((packedPos >> 11) & 2047u) / 2047.0;
+            float z = float((packedPos >> 22) & 1023u) / 1023.0;
 
             vec3 norm = vec3(x, y, z);
             vec3 pos = (norm / uScale) + uMin;
@@ -211,17 +209,8 @@ export function createGPUPointCloud(scene: THREE.Scene) {
             mat.uniforms.uMin.value.set(minX, minY, minZ);
             mat.uniforms.uScale.value.set(scaleX, scaleY, scaleZ);
 
-            updateAttribute(geo, 'xData', sharedBuf, currentOffset, numPoints, 2);
-            currentOffset += numPoints * 2;
-            currentOffset += (4 - (currentOffset % 4)) % 4;
-
-            updateAttribute(geo, 'yData', sharedBuf, currentOffset, numPoints, 2);
-            currentOffset += numPoints * 2;
-            currentOffset += (4 - (currentOffset % 4)) % 4;
-
-            updateAttribute(geo, 'zData', sharedBuf, currentOffset, numPoints, 2);
-            currentOffset += numPoints * 2;
-            currentOffset += (4 - (currentOffset % 4)) % 4;
+            updateAttribute(geo, 'packedPos', sharedBuf, currentOffset, numPoints, 4);
+            currentOffset += numPoints * 4;
 
             updateAttribute(geo, 'rData', sharedBuf, currentOffset, numPoints, 1);
             currentOffset += numPoints;
@@ -233,23 +222,18 @@ export function createGPUPointCloud(scene: THREE.Scene) {
 
             updateAttribute(geo, 'bData', sharedBuf, currentOffset, numPoints, 1);
         } else {
-            let bx=8, by=8, bz=8;
+            // Match producer-side quantization profiles for MED and LOW payloads.
+            let bx=11, by=11, bz=10;
             let br=8, bg=8, bb=8;
-            let sxyz=1;
+            let sx=2;
             let scol=4;
 
             if (mode === MODE_MED) {
                 mesh.material = matMed;
-                bx=11; by=11; bz=10;
-                br=8; bg=8; bb=8;
-                sxyz=2;
-                scol=4;
             } else { // MODE_LOW
                 mesh.material = matLow;
                 bx=8; by=8; bz=8;
-                br=8; bg=8; bb=8;
-                sxyz=1;
-                scol=4;
+                sx=1;
             }
 
             const mat = mesh.material as THREE.ShaderMaterial;
@@ -258,16 +242,16 @@ export function createGPUPointCloud(scene: THREE.Scene) {
             mat.uniforms.uBitsPos.value.set(bx, by, bz);
             mat.uniforms.uBitsCol.value.set(br, bg, bb);
 
-            updateAttribute(geo, 'xData', sharedBuf, currentOffset, numPoints, sxyz);
-            currentOffset += numPoints * sxyz;
+            updateAttribute(geo, 'xData', sharedBuf, currentOffset, numPoints, sx);
+            currentOffset += numPoints * sx;
             currentOffset += (4 - (currentOffset % 4)) % 4;
 
-            updateAttribute(geo, 'yData', sharedBuf, currentOffset, numPoints, sxyz);
-            currentOffset += numPoints * sxyz;
+            updateAttribute(geo, 'yData', sharedBuf, currentOffset, numPoints, sx);
+            currentOffset += numPoints * sx;
             currentOffset += (4 - (currentOffset % 4)) % 4;
 
-            updateAttribute(geo, 'zData', sharedBuf, currentOffset, numPoints, sxyz);
-            currentOffset += numPoints * sxyz;
+            updateAttribute(geo, 'zData', sharedBuf, currentOffset, numPoints, sx);
+            currentOffset += numPoints * sx;
             currentOffset += (4 - (currentOffset % 4)) % 4;
 
             updateAttribute(geo, 'packedColor', sharedBuf, currentOffset, numPoints, scol);

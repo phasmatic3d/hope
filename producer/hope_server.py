@@ -58,6 +58,9 @@ def camera_process(
         ready_cluster_event: mp.Event,
         ready_roi_event: mp.Event,
         point_cloud_budget : int,
+        min_keep_ratio_high: float,
+        min_keep_ratio_med: float,
+        min_keep_ratio_low: float,
         min_depth_meter : float,
         max_depth_meter : float,
         debug : bool) :
@@ -118,15 +121,55 @@ def camera_process(
         return d_indices[idx_to_keep]
 
     def allocate_budgets(n_in, n_mid, n_out, total_budget):
-        if n_in >= total_budget:
-            return total_budget, 0, 0
-        
-        remaining = total_budget - n_in
-        if n_mid >= remaining:
-            return n_in, remaining, 0
-        
-        remaining -= n_mid
-        return n_in, n_mid, min(n_out, remaining)
+        """Allocate points while honoring minimum per-cluster keep ratios."""
+        # Protect a minimum floor for each cluster before filling by priority.
+        min_in = min(n_in, int(np.ceil(n_in * min_keep_ratio_high)))
+        min_mid = min(n_mid, int(np.ceil(n_mid * min_keep_ratio_med)))
+        min_out = min(n_out, int(np.ceil(n_out * min_keep_ratio_low)))
+
+        min_required = min_in + min_mid + min_out
+        if min_required >= total_budget:
+            # Scale floors down proportionally when budget cannot satisfy all minima.
+            scale = total_budget / min_required if min_required > 0 else 0.0
+            alloc_in = min(min_in, int(np.floor(min_in * scale)))
+            alloc_mid = min(min_mid, int(np.floor(min_mid * scale)))
+            alloc_out = min(min_out, int(np.floor(min_out * scale)))
+            used = alloc_in + alloc_mid + alloc_out
+            remaining = total_budget - used
+
+            # Fill leftover points in importance order without exceeding source sizes.
+            for cluster in ("in", "mid", "out"):
+                if remaining <= 0:
+                    break
+                if cluster == "in":
+                    extra = min(remaining, n_in - alloc_in)
+                    alloc_in += extra
+                elif cluster == "mid":
+                    extra = min(remaining, n_mid - alloc_mid)
+                    alloc_mid += extra
+                else:
+                    extra = min(remaining, n_out - alloc_out)
+                    alloc_out += extra
+                remaining -= extra
+            return alloc_in, alloc_mid, alloc_out
+
+        budget_in = min_in
+        budget_mid = min_mid
+        budget_out = min_out
+        remaining = total_budget - min_required
+
+        # Spend extra points by cluster priority: HIGH -> MED -> LOW.
+        add_in = min(remaining, n_in - budget_in)
+        budget_in += add_in
+        remaining -= add_in
+
+        add_mid = min(remaining, n_mid - budget_mid)
+        budget_mid += add_mid
+        remaining -= add_mid
+
+        add_out = min(remaining, n_out - budget_out)
+        budget_out += add_out
+        return budget_in, budget_mid, budget_out
     
     pinned_mem_high = cp.cuda.alloc_pinned_memory(point_cloud_budget * 15)
     pinned_mem_med  = cp.cuda.alloc_pinned_memory(point_cloud_budget * 15)
@@ -583,14 +626,14 @@ def launch_processes(server, args, device : str) -> None:
         names = ["person"]
         predictor.set_classes(names, predictor.get_text_pe(names))
 
-        predictor_proc = mp.Process(target=thread_worker_yoloe, 
-            args=(predictor, device, 
-                  ipc_queue, 
+        predictor_proc = mp.Process(target=thread_worker_yoloe,
+            args=(predictor, device,
+                  ipc_queue,
                   (cmr_clr_height, cmr_clr_width), stop_event, ready_frame_event, ready_cluster_event, ready_roi_event, predictor_event))
     else:
         print('Failed to parse predictor')
         return
-    
+
     try:
         predictor_proc.start()
 
@@ -599,16 +642,19 @@ def launch_processes(server, args, device : str) -> None:
             time.sleep(0.1)
         print("Worker Ready!")
 
-        camera_process(server, 
+        camera_process(server,
             d_shared_frame, d_shared_cluster, d_shared_roi,
             cmr_clr_width, cmr_clr_height,
             cmr_depth_width, cmr_depth_height, cmr_fps,
             stop_event, ready_frame_event, ready_cluster_event, ready_roi_event,
             args.point_cloud_budget,
+            args.min_keep_ratio_high,
+            args.min_keep_ratio_med,
+            args.min_keep_ratio_low,
             args.min_depth_meter,
             args.max_depth_meter,
             debug)
-        
+
         predictor_proc.terminate()
         predictor_proc.join()
     except KeyboardInterrupt:
