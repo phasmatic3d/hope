@@ -69,6 +69,11 @@ producer_cli.add_argument("--realsense_target_fps", type=int, default=30, choice
 producer_cli.add_argument("--cluster_predictor", type=str, default="sam2", choices=["yolo", "sam2",])
 producer_cli.add_argument("--point_cloud_budget", type=int, default=150000)
 producer_cli.add_argument(
+    "--low_dedup",
+    action="store_true",
+    help="Deduplicate LOW points by pre-quantized XYZ+RGB key before encoding.",
+)
+producer_cli.add_argument(
     "--min_keep_ratio_low",
     type=float,
     default=0.5,

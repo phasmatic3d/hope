@@ -31,7 +31,14 @@ const highQShader = {
             float z = float((packedPos >> 22) & 1023u) / 1023.0;
 
             vec3 norm = vec3(x, y, z);
-            vec3 pos = (norm / uScale) + uMin;
+            // Z is dequantized as inverse depth and then flipped back to metric depth.
+            float invZ = (norm.z / uScale.z) + uMin.z;
+            float depthZ = 1.0 / max(invZ, 1e-6);
+            vec3 pos = vec3(
+                (norm.x / uScale.x) + uMin.x,
+                (norm.y / uScale.y) + uMin.y,
+                depthZ
+            );
 
             vColor = vec3(float(rData), float(gData), float(bData)) / 255.0;
 
@@ -60,7 +67,6 @@ const standardShader = {
         uMin: { value: new THREE.Vector3() },
         uScale: { value: new THREE.Vector3() },
         uBitsPos: { value: new THREE.Vector3(8, 8, 8) }, 
-        uBitsCol: { value: new THREE.Vector3(8, 8, 8) }
     },
     vertexShader: `
         precision highp int;
@@ -69,12 +75,13 @@ const standardShader = {
         in uint xData;
         in uint yData;
         in uint zData;
-        in uint packedColor;
+        in uint rData;
+        in uint gData;
+        in uint bData;
 
         uniform vec3 uMin;
         uniform vec3 uScale;
         uniform vec3 uBitsPos;
-        uniform vec3 uBitsCol;
 
         out vec3 vColor;
 
@@ -88,19 +95,19 @@ const standardShader = {
                 float(yData) / float(max_y),
                 float(zData) / float(max_z)
             );
-            vec3 pos = (norm / uScale) + uMin;
+            // Z is dequantized as inverse depth and then flipped back to metric depth.
+            float invZ = (norm.z / uScale.z) + uMin.z;
+            float depthZ = 1.0 / max(invZ, 1e-6);
+            vec3 pos = vec3(
+                (norm.x / uScale.x) + uMin.x,
+                (norm.y / uScale.y) + uMin.y,
+                depthZ
+            );
 
-            uint br = uint(uBitsCol.x);
-            uint bg = uint(uBitsCol.y);
-            uint bb = uint(uBitsCol.z);
-
-            uint maskR = (1u << br) - 1u;
-            uint maskG = (1u << bg) - 1u;
-            uint maskB = (1u << bb) - 1u;
-
-            float r = float((packedColor) & maskR) / float(maskR);
-            float g = float((packedColor >> br) & maskG) / float(maskG);
-            float b = float((packedColor >> (br + bg)) & maskB) / float(maskB);
+            // MED/LOW now use planar RGB like HIGH.
+            float r = float(rData) / 255.0;
+            float g = float(gData) / 255.0;
+            float b = float(bData) / 255.0;
 
             vColor = vec3(r, g, b);
 
@@ -133,6 +140,15 @@ export function createGPUPointCloud(scene: THREE.Scene) {
         vertexShader: highQShader.vertexShader,
         fragmentShader: highQShader.fragmentShader,
         glslVersion: THREE.GLSL3 
+    });
+
+    // MED now uses packed coordinates, so it gets a dedicated HIGH-like material.
+    // This avoids sharing uMin/uScale uniforms with HIGH chunks.
+    const matMedPacked = new THREE.ShaderMaterial({
+        uniforms: THREE.UniformsUtils.clone(highQShader.uniforms),
+        vertexShader: highQShader.vertexShader,
+        fragmentShader: highQShader.fragmentShader,
+        glslVersion: THREE.GLSL3
     });
 
     const matMed = new THREE.ShaderMaterial({
@@ -202,8 +218,9 @@ export function createGPUPointCloud(scene: THREE.Scene) {
 
         let currentOffset = offset + HEADER_SIZE;
 
-        if (mode === MODE_HIGH) {
-            mesh.material = matHigh;
+        if (mode === MODE_HIGH || mode === MODE_MED) {
+            // MED uses packed coordinates like HIGH, but keeps isolated transform uniforms.
+            mesh.material = (mode === MODE_HIGH) ? matHigh : matMedPacked;
             const mat = mesh.material as THREE.ShaderMaterial;
             
             mat.uniforms.uMin.value.set(minX, minY, minZ);
@@ -222,25 +239,15 @@ export function createGPUPointCloud(scene: THREE.Scene) {
 
             updateAttribute(geo, 'bData', sharedBuf, currentOffset, numPoints, 1);
         } else {
-            // Match producer-side quantization profiles for MED and LOW payloads.
-            let bx=11, by=11, bz=10;
-            let br=8, bg=8, bb=8;
-            let sx=2;
-            let scol=4;
-
-            if (mode === MODE_MED) {
-                mesh.material = matMed;
-            } else { // MODE_LOW
-                mesh.material = matLow;
-                bx=8; by=8; bz=8;
-                sx=1;
-            }
+            // LOW keeps split XYZ bytes while MED moved to packed HIGH layout.
+            let bx=8, by=8, bz=8;
+            let sx=1;
+            mesh.material = matLow;
 
             const mat = mesh.material as THREE.ShaderMaterial;
             mat.uniforms.uMin.value.set(minX, minY, minZ);
             mat.uniforms.uScale.value.set(scaleX, scaleY, scaleZ);
             mat.uniforms.uBitsPos.value.set(bx, by, bz);
-            mat.uniforms.uBitsCol.value.set(br, bg, bb);
 
             updateAttribute(geo, 'xData', sharedBuf, currentOffset, numPoints, sx);
             currentOffset += numPoints * sx;
@@ -254,14 +261,22 @@ export function createGPUPointCloud(scene: THREE.Scene) {
             currentOffset += numPoints * sx;
             currentOffset += (4 - (currentOffset % 4)) % 4;
 
-            updateAttribute(geo, 'packedColor', sharedBuf, currentOffset, numPoints, scol);
+            updateAttribute(geo, 'rData', sharedBuf, currentOffset, numPoints, 1);
+            currentOffset += numPoints;
+            currentOffset += (4 - (currentOffset % 4)) % 4;
+
+            updateAttribute(geo, 'gData', sharedBuf, currentOffset, numPoints, 1);
+            currentOffset += numPoints;
+            currentOffset += (4 - (currentOffset % 4)) % 4;
+
+            updateAttribute(geo, 'bData', sharedBuf, currentOffset, numPoints, 1);
         }
 
         geo.setDrawRange(0, numPoints);
     }
 
     let pendingFrameId = -1;
-    let usedMeshes = 0; // NEW: Track how many meshes used for current frame
+    let accumulatedChunks: { offset: number; length: number }[] = [];
 
     return (
         sharedBuf: SharedArrayBuffer,
@@ -271,23 +286,28 @@ export function createGPUPointCloud(scene: THREE.Scene) {
     ) => {
         const tStart = performance.now();
 
-        // 1. New Frame Detection
         if (frameId !== pendingFrameId) {
             pendingFrameId = frameId;
-            // Hide all meshes immediately to clear the previous frame
-            for (let m of meshPool) m.visible = false;
-            usedMeshes = 0;
+            accumulatedChunks = [];
         }
 
-        // 2. Partial Rendering Logic
-        // We render chunk-by-chunk as they arrive.
-        // We do NOT wait for accumulatedChunks.length == numChunks.
-        // If a chunk is lost, its corresponding mesh stays invisible.
-        if (usedMeshes < MAX_CHUNKS) {
-            const mesh = meshPool[usedMeshes];
-            updateMeshFromChunk(mesh, sharedBuf, chunk.offset);
-            mesh.visible = true;
-            usedMeshes++;
+        // Accumulate chunks for the pending frame.
+        accumulatedChunks.push(chunk);
+
+        if (accumulatedChunks.length === numChunks) {
+            // Commit the frame atomically after decoding all chunks.
+            for (let m of meshPool) m.visible = false;
+
+            for (let i = 0; i < accumulatedChunks.length; i++) {
+                if (i >= MAX_CHUNKS) break;
+
+                const ch = accumulatedChunks[i];
+                const mesh = meshPool[i];
+                updateMeshFromChunk(mesh, sharedBuf, ch.offset);
+                mesh.visible = true;
+            }
+
+            accumulatedChunks = [];
         }
 
         return performance.now() - tStart;

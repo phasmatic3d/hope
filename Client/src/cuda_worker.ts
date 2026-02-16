@@ -91,7 +91,9 @@ self.onmessage = async (ev: MessageEvent<any>) => {
 
                 decodedPosView[writeIndex * 3 + 0] = (qx / maxX) / scaleX + minX;
                 decodedPosView[writeIndex * 3 + 1] = (qy / maxY) / scaleY + minY;
-                decodedPosView[writeIndex * 3 + 2] = (qz / maxZ) / scaleZ + minZ;
+                // Z was encoded in inverse-depth space, then converted back here.
+                const invZ = (qz / maxZ) / scaleZ + minZ;
+                decodedPosView[writeIndex * 3 + 2] = 1.0 / Math.max(invZ, 1e-6);
 
                 // 2. Unpack Colors (YCoCg)
                 // Read 2 bytes (16 bits)

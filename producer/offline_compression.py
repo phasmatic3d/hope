@@ -52,7 +52,7 @@ def read_ply_ascii(path: Path) -> tuple[np.ndarray, np.ndarray]:
         }
         dtype_fields = [(name, type_map[prop]) for prop, name in properties]
         ply_dtype = np.dtype(dtype_fields)
-        # Read the binary vertex payload in one shot for speed.
+
         raw = handle.read(vertex_count * ply_dtype.itemsize)
         data = np.frombuffer(raw, dtype=ply_dtype, count=vertex_count)
 
@@ -145,43 +145,54 @@ def decode_chunk(buffer_bytes: bytes) -> tuple[np.ndarray, np.ndarray, int]:
         z = ((packed >> 22) & 1023) / 1023.0
         norm = np.stack([x, y, z], axis=1).astype(np.float32)
         xyz = (norm / scale_vals) + min_vals
+        # Z was quantized as inverse depth, so map it back to depth.
+        xyz[:, 2] = 1.0 / np.maximum(xyz[:, 2], 1e-6)
         rgb = np.stack([r, g, b], axis=1).astype(np.uint8)
         return xyz, rgb, mode
 
-    sx = 2 if mode == EncodingMode.MED.value else 1
-    # MED carries 11/11/10 coordinates while LOW carries 8/8/8 coordinates.
-    scol = 4
-    bits_col = (8, 8, 8)
+    if mode == EncodingMode.MED.value:
+        # MED position payload now mirrors HIGH packed coordinates.
+        packed = np.frombuffer(buffer_bytes, dtype=np.uint32, count=num_points, offset=offset)
+        offset += num_points * 4
+        x = (packed & 2047) / 2047.0
+        y = ((packed >> 11) & 2047) / 2047.0
+        z = ((packed >> 22) & 1023) / 1023.0
+        norm = np.stack([x, y, z], axis=1).astype(np.float32)
+        xyz = (norm / scale_vals) + min_vals
+        # Z was quantized as inverse depth, so map it back to depth.
+        xyz[:, 2] = 1.0 / np.maximum(xyz[:, 2], 1e-6)
+    else:
+        sx = 1
+        x = np.frombuffer(buffer_bytes, dtype=np.uint8, count=num_points, offset=offset)
+        offset += num_points * sx
+        offset += (4 - (offset % 4)) % 4
 
-    coord_dtype = np.uint16 if sx == 2 else np.uint8
-    x = np.frombuffer(buffer_bytes, dtype=coord_dtype, count=num_points, offset=offset)
-    offset += num_points * sx
-    offset += (4 - (offset % 4)) % 4
-    y = np.frombuffer(buffer_bytes, dtype=coord_dtype, count=num_points, offset=offset)
-    offset += num_points * sx
-    offset += (4 - (offset % 4)) % 4
-    z = np.frombuffer(buffer_bytes, dtype=coord_dtype, count=num_points, offset=offset)
-    offset += num_points * sx
-    offset += (4 - (offset % 4)) % 4
-    packed = np.frombuffer(buffer_bytes, dtype=np.uint32, count=num_points, offset=offset)
+        y = np.frombuffer(buffer_bytes, dtype=np.uint8, count=num_points, offset=offset)
+        offset += num_points * sx
+        offset += (4 - (offset % 4)) % 4
 
-    max_coord = np.array([
-        float((1 << (11 if mode == EncodingMode.MED.value else 8)) - 1),
-        float((1 << (11 if mode == EncodingMode.MED.value else 8)) - 1),
-        float((1 << (10 if mode == EncodingMode.MED.value else 8)) - 1),
-    ], dtype=np.float32)
-    norm = np.stack([x, y, z], axis=1).astype(np.float32) / max_coord
-    xyz = (norm / scale_vals) + min_vals
+        z = np.frombuffer(buffer_bytes, dtype=np.uint8, count=num_points, offset=offset)
+        offset += num_points * sx
+        offset += (4 - (offset % 4)) % 4
 
-    br, bg, bb = bits_col
-    packed_vals = packed.astype(np.uint32)
-    r = packed_vals & ((1 << br) - 1)
-    g = (packed_vals >> br) & ((1 << bg) - 1)
-    b = (packed_vals >> (br + bg)) & ((1 << bb) - 1)
-    r = (r.astype(np.float32) / ((1 << br) - 1) * 255.0).astype(np.uint8)
-    g = (g.astype(np.float32) / ((1 << bg) - 1) * 255.0).astype(np.uint8)
-    b = (b.astype(np.float32) / ((1 << bb) - 1) * 255.0).astype(np.uint8)
-    rgb = np.stack([r, g, b], axis=1)
+        max_coord = np.array([255.0, 255.0, 255.0], dtype=np.float32)
+        norm = np.stack([x, y, z], axis=1).astype(np.float32) / max_coord
+        xyz = (norm / scale_vals) + min_vals
+        # Z was quantized as inverse depth, so map it back to depth.
+        xyz[:, 2] = 1.0 / np.maximum(xyz[:, 2], 1e-6)
+
+    # MED/LOW now use planar RGB just like HIGH.
+    r = np.frombuffer(buffer_bytes, dtype=np.uint8, count=num_points, offset=offset)
+    offset += num_points
+    offset += (4 - (offset % 4)) % 4
+
+    g = np.frombuffer(buffer_bytes, dtype=np.uint8, count=num_points, offset=offset)
+    offset += num_points
+    offset += (4 - (offset % 4)) % 4
+
+    b = np.frombuffer(buffer_bytes, dtype=np.uint8, count=num_points, offset=offset)
+
+    rgb = np.stack([r, g, b], axis=1).astype(np.uint8)
     return xyz, rgb, mode
 
 
@@ -388,9 +399,6 @@ def load_frame_rgb(input_root: Path, frame_stem: str, fallback_rgb: np.ndarray) 
     # Exported frames follow frame_XXXX_rgb.png, keyed by the PLY stem.
     png_path = input_root / f"{frame_stem}_rgb.png"
     bgr = cv2.imread(str(png_path), cv2.IMREAD_COLOR)
-    if bgr is None:
-        # Fall back to reconstructed colors when the PNG is missing.
-        return fallback_rgb
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
 
@@ -450,15 +458,16 @@ def run_offline_compression(args, server=None) -> None:
             "points_cluster_high",
             "points_cluster_mid",
             "points_cluster_low",
+            "points_cluster_low_after_dedup",
             "uncompressed_size_mb",
             "cluster_high_size_mb",
             "cluster_mid_size_mb",
             "cluster_low_size_mb",
+            "cluster_low_size_mb_after_dedup",
             "total_compressed_size_mb",
             "detection_time_ms",
             "encode_time_ms",
             "point_budget",
-            "keep_ratio",
             "keep_ratio_high",
             "keep_ratio_mid",
             "keep_ratio_low",
@@ -501,7 +510,6 @@ def run_offline_compression(args, server=None) -> None:
         color_img = np.zeros((cmr_clr_height, cmr_clr_width, 3), dtype=np.uint8)
         if xyz.shape[0] == cmr_clr_width * cmr_clr_height:
             color_img = rgb.reshape(cmr_clr_height, cmr_clr_width, 3)
-        # Prefer the exported RGB frame for clustering, with a PLY-derived fallback.
         color_img = load_frame_rgb(input_root, ply_path.stem, color_img)
 
         detection_ms = 0.0
@@ -674,11 +682,14 @@ def run_offline_compression(args, server=None) -> None:
         )
 
 
-        # This mirrors online framing so the web client can process chunks in real-time order.
         frame_id_byte = frame_idx % 255
         byte_offset = 0
 
         broadcast_buffers = {}
+        # These metrics keep LOW pre/post dedup visible in the CSV report.
+        low_points_before_dedup = 0
+        low_points_after_dedup = 0
+        low_size_bytes_before_dedup = 0
         with stream_in:
             if budget_in > 0:
                 d_in_point_idx = d_point_idx[d_in_mask]
@@ -735,21 +746,46 @@ def run_offline_compression(args, server=None) -> None:
                     d_out_point_idx = d_out_point_idx[keep_pos]
                     d_out_flat_idx = d_out_flat_idx[keep_pos]
                 if d_out_point_idx.size > 0:
-                    print(f"[offline] encoding LOW for {ply_path.name} ({int(d_out_point_idx.size)} points)")
-                    t_start = time.perf_counter()
-                    res_view = quantizer.encode(
-                        stream_out,
-                        EncodingMode.LOW,
-                        d_vertices[d_out_point_idx],
-                        d_colors[d_out_point_idx],
-                        pinned_np_low,
-                    )
-                    stream_out.synchronize()
-                    t_ms = (time.perf_counter() - t_start) * 1000.0
-                    idx_cpu = cp.asnumpy(d_out_flat_idx).astype(np.int32, copy=False)
-                    broadcast_buffers[EncodingMode.LOW] = (d_out_point_idx.size, res_view, t_ms, idx_cpu)
+                    # Record LOW metrics before dedup so reports can compare both stages.
+                    low_points_before_dedup = int(d_out_point_idx.size)
+                    low_size_bytes_before_dedup = quantizer.estimate_buffer_size(EncodingMode.LOW, low_points_before_dedup)
 
-        # Use encoded chunk count, not budget count, so frame completion is accurate on client.
+                    d_low_points = d_vertices[d_out_point_idx]
+                    d_low_colors = d_colors[d_out_point_idx]
+                    d_low_flat_idx = d_out_flat_idx
+                    low_min_v = None
+                    low_scale = None
+                    if args.low_dedup: # dedup
+                        # Compute once so dedup and encode quantize with the same LOW range.
+                        low_min_v, low_scale = quantizer._compute_low_quant_params(d_low_points)
+                        dedup_idx = quantizer.build_low_dedup_indices(
+                            d_low_points,
+                            d_low_colors,
+                            min_v=low_min_v,
+                            scale=low_scale,
+                        )
+                        d_low_points = d_low_points[dedup_idx]
+                        d_low_colors = d_low_colors[dedup_idx]
+                        d_low_flat_idx = d_low_flat_idx[dedup_idx]
+
+                    low_points_after_dedup = int(d_low_points.shape[0])
+                    if d_low_points.shape[0] > 0:
+                        print(f"[offline] encoding LOW for {ply_path.name} ({int(d_low_points.shape[0])} points)")
+                        t_start = time.perf_counter()
+                        res_view = quantizer.encode(
+                            stream_out,
+                            EncodingMode.LOW,
+                            d_low_points,
+                            d_low_colors,
+                            pinned_np_low,
+                            min_v=low_min_v,
+                            scale=low_scale,
+                        )
+                        stream_out.synchronize()
+                        t_ms = (time.perf_counter() - t_start) * 1000.0
+                        idx_cpu = cp.asnumpy(d_low_flat_idx).astype(np.int32, copy=False)
+                        broadcast_buffers[EncodingMode.LOW] = (d_low_points.shape[0], res_view, t_ms, idx_cpu)
+
         num_chunks = len(broadcast_buffers)
 
         assembled_xyz: list[np.ndarray] = []
@@ -757,7 +793,6 @@ def run_offline_compression(args, server=None) -> None:
         assembled_idx: list[np.ndarray] = []
         assembled_buffers: list[bytes] = []
         total_encode_ms = 0.0
-        total_kept_points = 0
         encoded_size_by_mode = {
             EncodingMode.HIGH: 0,
             EncodingMode.MED: 0,
@@ -795,7 +830,6 @@ def run_offline_compression(args, server=None) -> None:
             assembled_idx.append(idx_cpu)
             assembled_buffers.append(buffer_bytes)
             total_encode_ms += t_ms
-            total_kept_points += int(count)
             kept_points_by_mode[mode] = int(count)
             # Track encoded payload size for each cluster tier.
             encoded_size_by_mode[mode] = len(buffer_bytes)
@@ -838,13 +872,15 @@ def run_offline_compression(args, server=None) -> None:
         original_size_mb = bytes_to_mb(xyz.nbytes + rgb.nbytes)
         high_size_mb = bytes_to_mb(encoded_size_by_mode[EncodingMode.HIGH])
         mid_size_mb = bytes_to_mb(encoded_size_by_mode[EncodingMode.MED])
-        low_size_mb = bytes_to_mb(encoded_size_by_mode[EncodingMode.LOW])
-        total_cluster_size_mb = high_size_mb + mid_size_mb + low_size_mb
-        keep_ratio = float(total_kept_points) / original_points if original_points > 0 else 0.0
+        low_size_mb = bytes_to_mb(low_size_bytes_before_dedup)
+        low_size_after_dedup_mb = bytes_to_mb(encoded_size_by_mode[EncodingMode.LOW])
+        total_cluster_size_mb = high_size_mb + mid_size_mb + low_size_after_dedup_mb
         # Each cluster ratio compares kept points against cluster source points.
         keep_ratio_high = float(kept_points_by_mode[EncodingMode.HIGH]) / n_in if n_in > 0 else 0.0
         keep_ratio_mid = float(kept_points_by_mode[EncodingMode.MED]) / n_mid if n_mid > 0 else 0.0
-        keep_ratio_low = float(kept_points_by_mode[EncodingMode.LOW]) / n_out if n_out > 0 else 0.0
+
+        low_points_kept_for_ratio = low_points_before_dedup
+        keep_ratio_low = float(low_points_kept_for_ratio) / n_out if n_out > 0 else 0.0
         # Log full frame stats plus per-cluster point and buffer metrics.
         csv_writer.writerow(
             [
@@ -852,16 +888,17 @@ def run_offline_compression(args, server=None) -> None:
                 original_points,
                 n_in,
                 n_mid,
-                n_out,
+                low_points_before_dedup,
+                low_points_after_dedup,
                 f"{original_size_mb:.6f}",
                 f"{high_size_mb:.6f}",
                 f"{mid_size_mb:.6f}",
                 f"{low_size_mb:.6f}",
+                f"{low_size_after_dedup_mb:.6f}",
                 f"{total_cluster_size_mb:.6f}",
                 f"{detection_ms:.3f}",
                 f"{total_encode_ms:.3f}",
                 total_budget,
-                f"{keep_ratio:.6f}",
                 f"{keep_ratio_high:.6f}",
                 f"{keep_ratio_mid:.6f}",
                 f"{keep_ratio_low:.6f}",

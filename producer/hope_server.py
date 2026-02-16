@@ -63,7 +63,8 @@ def camera_process(
         min_keep_ratio_low: float,
         min_depth_meter : float,
         max_depth_meter : float,
-        debug : bool) :
+        debug : bool,
+        low_dedup: bool) :
 
     visualization_mode = VisualizationMode.COLOR
     quantizer = CudaQuantizer()
@@ -121,7 +122,7 @@ def camera_process(
         return d_indices[idx_to_keep]
 
     def allocate_budgets(n_in, n_mid, n_out, total_budget):
-        """Allocate points while honoring minimum per-cluster keep ratios."""
+        """Allocate points with minimum per-cluster keep ratios."""
         # Protect a minimum floor for each cluster before filling by priority.
         min_in = min(n_in, int(np.ceil(n_in * min_keep_ratio_high)))
         min_mid = min(n_mid, int(np.ceil(n_mid * min_keep_ratio_med)))
@@ -304,14 +305,35 @@ def camera_process(
                         d_out_idx = fast_subsample(d_out_idx, budget_out)
                     
                     if d_out_idx.size > 0:
-                        res_view = quantizer.encode(
-                            stream_out, 
-                            EncodingMode.LOW, 
-                            d_vertices[d_out_idx], 
-                            d_colors[d_out_idx],
-                            pinned_np_low)
-                        broadcast_buffers[EncodingMode.LOW] = (stream_out, d_out_idx.size, res_view)
-                        num_chunks += 1
+                        # Optionally dedup using the same 8-bit LOW quantization key.
+                        d_low_points = d_vertices[d_out_idx]
+                        d_low_colors = d_colors[d_out_idx]
+                        low_min_v = None
+                        low_scale = None
+                        if low_dedup:
+                            # Compute once so online dedup and LOW encode use matching params.
+                            low_min_v, low_scale = quantizer._compute_low_quant_params(d_low_points)
+                            dedup_idx = quantizer.build_low_dedup_indices(
+                                d_low_points,
+                                d_low_colors,
+                                min_v=low_min_v,
+                                scale=low_scale,
+                            )
+                            d_low_points = d_low_points[dedup_idx]
+                            d_low_colors = d_low_colors[dedup_idx]
+
+                        if d_low_points.shape[0] > 0:
+                            # Pass shared params when dedup is active; fallback stays unchanged.
+                            res_view = quantizer.encode(
+                                stream_out,
+                                EncodingMode.LOW,
+                                d_low_points,
+                                d_low_colors,
+                                pinned_np_low,
+                                min_v=low_min_v,
+                                scale=low_scale)
+                            broadcast_buffers[EncodingMode.LOW] = (stream_out, d_low_points.shape[0], res_view)
+                            num_chunks += 1
         
             for mode, (stream, size, buffer_view)  in broadcast_buffers.items() :
                 stream.synchronize()
@@ -653,7 +675,8 @@ def launch_processes(server, args, device : str) -> None:
             args.min_keep_ratio_low,
             args.min_depth_meter,
             args.max_depth_meter,
-            debug)
+            debug,
+            args.low_dedup)
 
         predictor_proc.terminate()
         predictor_proc.join()
