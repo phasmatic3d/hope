@@ -71,24 +71,24 @@ producer_cli.add_argument("--point_cloud_budget", type=int, default=150000)
 producer_cli.add_argument(
     "--low_dedup",
     action="store_true",
-    help="Deduplicate LOW points by pre-quantized XYZ+RGB key before encoding.",
+    help="Deduplicate LOW points by pre-quantized XYZ key before encoding.",
 )
 producer_cli.add_argument(
     "--min_keep_ratio_low",
     type=float,
-    default=0.5,
+    default=0.6,
     help="Minimum keep ratio for LOW cluster points when clipping by budget.",
 )
 producer_cli.add_argument(
     "--min_keep_ratio_med",
     type=float,
-    default=0.65,
+    default=0.7,
     help="Minimum keep ratio for MED cluster points when clipping by budget.",
 )
 producer_cli.add_argument(
     "--min_keep_ratio_high",
     type=float,
-    default=0.8,
+    default=0.9,
     help="Minimum keep ratio for HIGH cluster points when clipping by budget.",
 )
 producer_cli.add_argument("--min_depth_meter", type=float, default=0.01)
@@ -107,7 +107,7 @@ producer_cli.add_argument(
 producer_cli.add_argument(
     "--offline_bandwidth_mb_per_s",
     type=float,
-    default=40.0,
+    default=16.0,
     help="Offline-only available bandwidth in MB/s used to derive the point budget.",
 )
 

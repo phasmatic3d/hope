@@ -43,7 +43,7 @@ class CudaQuantizer:
             float orig_x = vertices[i * 3 + 0];
             float orig_y = vertices[i * 3 + 1];
             float orig_z = vertices[i * 3 + 2];
-
+            // Quantize depth in inverse-Z space for better near-depth resolution.
             float inv_z = 1.0f / fmaxf(orig_z, 1e-6f);
             
             const float x = __saturatef((orig_x - min_x) * scale_x);
@@ -111,7 +111,7 @@ class CudaQuantizer:
             float orig_x = vertices[i * 3 + 0];
             float orig_y = vertices[i * 3 + 1];
             float orig_z = vertices[i * 3 + 2];
-
+            // Quantize depth in inverse-Z space for better near-depth resolution.
             float inv_z = 1.0f / fmaxf(orig_z, 1e-6f);
             
             const float x = __saturatef((orig_x - min_x) * scale_x);
@@ -199,7 +199,7 @@ class CudaQuantizer:
 
 
     def _compute_low_quant_params(self, points):
-        """Compute LOW quantization min/scale"""
+        """Compute LOW quantization min/scale using inverse-depth Z."""
         # LOW stores Z in 1/z space, so its range comes from inverse depth.
         d_points = points
         min_vals = cp.amin(d_points, axis=0)
@@ -215,13 +215,12 @@ class CudaQuantizer:
         return min_v.astype(np.float32, copy=False), scale.astype(np.float32, copy=False)
 
     def build_low_dedup_indices(self, points, colors, min_v=None, scale=None):
-        """Return sorted first-occurrence indices for LOW pre-quantized XYZ+RGB keys."""
-        # This mirrors LOW quantization so dedup matches what encode_lowQ would write.
+        """Return sorted first-occurrence indices for LOW pre-quantized XYZ keys."""
+        # This mirrors LOW position quantization so dedup aligns with LOW spatial bins.
         if points.shape[0] == 0:
             return cp.empty((0,), dtype=cp.int32)
 
         d_points = points
-        d_colors = colors
         inv_z = 1.0 / cp.maximum(d_points[:, 2], cp.float32(1e-6))
 
         # Reuse caller-provided params so dedup and encode share the same range.
@@ -238,21 +237,13 @@ class CudaQuantizer:
         qx = cp.rint(x * 255.0).astype(cp.uint8)
         qy = cp.rint(y * 255.0).astype(cp.uint8)
         qz = cp.rint(z * 255.0).astype(cp.uint8)
-
-        qr = d_colors[:, 0].astype(cp.uint8)
-        qg = d_colors[:, 1].astype(cp.uint8)
-        qb = d_colors[:, 2].astype(cp.uint8)
-
         key = (
             qx.astype(cp.uint64)
             | (qy.astype(cp.uint64) << np.uint64(8))
             | (qz.astype(cp.uint64) << np.uint64(16))
-            | (qr.astype(cp.uint64) << np.uint64(24))
-            | (qg.astype(cp.uint64) << np.uint64(32))
-            | (qb.astype(cp.uint64) << np.uint64(40))
         )
 
-        # unique returns first-hit indices. sorting keeps source order stable.
+        # unique returns first-hit indices; sorting keeps source order stable.
         _, first_idx = cp.unique(key, return_index=True)
         return cp.sort(first_idx.astype(cp.int32))
     def encode(self, stream, mode: EncodingMode, points, colors, out_pinned=None, min_v=None, scale=None) -> bytes:
@@ -274,7 +265,7 @@ class CudaQuantizer:
         inv_z = 1.0 / cp.maximum(d_points[:, 2], cp.float32(1e-6))
         min_v = cp.asnumpy(min_vals)
         max_v = cp.asnumpy(max_vals)
-
+        # Z stores inverse depth, so its quantization range is built from 1/z.
         min_v[2] = float(cp.min(inv_z).get())
         max_v[2] = float(cp.max(inv_z).get())
         diff = (max_v - min_v)
@@ -357,7 +348,7 @@ class CudaQuantizer:
         inv_z = 1.0 / cp.maximum(d_points[:, 2], cp.float32(1e-6))
         min_v = cp.asnumpy(min_vals)
         max_v = cp.asnumpy(max_vals)
-
+        # Z stores inverse depth, so its quantization range is built from 1/z.
         min_v[2] = float(cp.min(inv_z).get())
         max_v[2] = float(cp.max(inv_z).get())
         diff = (max_v - min_v)

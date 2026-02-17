@@ -122,42 +122,20 @@ def camera_process(
         return d_indices[idx_to_keep]
 
     def allocate_budgets(n_in, n_mid, n_out, total_budget):
-        """Allocate points with minimum per-cluster keep ratios."""
+        """Allocate points while honoring minimum per-cluster keep ratios."""
         # Protect a minimum floor for each cluster before filling by priority.
         min_in = min(n_in, int(np.ceil(n_in * min_keep_ratio_high)))
         min_mid = min(n_mid, int(np.ceil(n_mid * min_keep_ratio_med)))
         min_out = min(n_out, int(np.ceil(n_out * min_keep_ratio_low)))
 
         min_required = min_in + min_mid + min_out
-        if min_required >= total_budget:
-            # Scale floors down proportionally when budget cannot satisfy all minima.
-            scale = total_budget / min_required if min_required > 0 else 0.0
-            alloc_in = min(min_in, int(np.floor(min_in * scale)))
-            alloc_mid = min(min_mid, int(np.floor(min_mid * scale)))
-            alloc_out = min(min_out, int(np.floor(min_out * scale)))
-            used = alloc_in + alloc_mid + alloc_out
-            remaining = total_budget - used
-
-            # Fill leftover points in importance order without exceeding source sizes.
-            for cluster in ("in", "mid", "out"):
-                if remaining <= 0:
-                    break
-                if cluster == "in":
-                    extra = min(remaining, n_in - alloc_in)
-                    alloc_in += extra
-                elif cluster == "mid":
-                    extra = min(remaining, n_mid - alloc_mid)
-                    alloc_mid += extra
-                else:
-                    extra = min(remaining, n_out - alloc_out)
-                    alloc_out += extra
-                remaining -= extra
-            return alloc_in, alloc_mid, alloc_out
+        # Keep floors hard by lifting small budgets to the minimum required total.
+        effective_budget = max(total_budget, min_required)
 
         budget_in = min_in
         budget_mid = min_mid
         budget_out = min_out
-        remaining = total_budget - min_required
+        remaining = effective_budget - min_required
 
         # Spend extra points by cluster priority: HIGH -> MED -> LOW.
         add_in = min(remaining, n_in - budget_in)
@@ -172,9 +150,11 @@ def camera_process(
         budget_out += add_out
         return budget_in, budget_mid, budget_out
     
-    pinned_mem_high = cp.cuda.alloc_pinned_memory(point_cloud_budget * 15)
-    pinned_mem_med  = cp.cuda.alloc_pinned_memory(point_cloud_budget * 15)
-    pinned_mem_low  = cp.cuda.alloc_pinned_memory(point_cloud_budget * 15)
+    # Buffers are sized for the full depth grid because hard floors can exceed the base budget.
+    max_points_per_frame = cmr_depth_width * cmr_depth_height
+    pinned_mem_high = cp.cuda.alloc_pinned_memory(max_points_per_frame * 15)
+    pinned_mem_med  = cp.cuda.alloc_pinned_memory(max_points_per_frame * 15)
+    pinned_mem_low  = cp.cuda.alloc_pinned_memory(max_points_per_frame * 15)
 
     pinned_np_high = np.frombuffer(pinned_mem_high, dtype=np.uint8)
     pinned_np_med = np.frombuffer(pinned_mem_med, dtype=np.uint8)
@@ -257,8 +237,22 @@ def camera_process(
             n_mid = cp.count_nonzero(d_mid_mask)
             n_out = cp.count_nonzero(d_out_mask)
 
+            n_out_budget_pool = int(n_out)
+            if low_dedup and int(n_out) > 0:
+                d_out_budget_idx = d_valid_idx[d_out_mask]
+                d_low_budget_points = d_vertices[d_out_budget_idx]
+                d_low_budget_colors = d_colors[d_out_budget_idx]
+                low_budget_min_v, low_budget_scale = quantizer._compute_low_quant_params(d_low_budget_points)
+                d_low_budget_dedup_idx = quantizer.build_low_dedup_indices(
+                    d_low_budget_points,
+                    d_low_budget_colors,
+                    min_v=low_budget_min_v,
+                    scale=low_budget_scale,
+                )
+                n_out_budget_pool = int(d_low_budget_dedup_idx.shape[0])
+
             budget_in, budget_mid, budget_out = allocate_budgets(
-                int(n_in), int(n_mid), int(n_out), point_cloud_budget)
+                int(n_in), int(n_mid), n_out_budget_pool, point_cloud_budget)
             
             broadcast_buffers = {}
             num_chunks = 0
@@ -301,11 +295,8 @@ def camera_process(
             with stream_out:
                 if budget_out > 0:
                     d_out_idx = d_valid_idx[d_out_mask]
-                    if d_out_idx.size > budget_out:
-                        d_out_idx = fast_subsample(d_out_idx, budget_out)
-                    
+
                     if d_out_idx.size > 0:
-                        # Optionally dedup using the same 8-bit LOW quantization key.
                         d_low_points = d_vertices[d_out_idx]
                         d_low_colors = d_colors[d_out_idx]
                         low_min_v = None
@@ -321,6 +312,11 @@ def camera_process(
                             )
                             d_low_points = d_low_points[dedup_idx]
                             d_low_colors = d_low_colors[dedup_idx]
+
+                        if d_low_points.shape[0] > budget_out:
+                            keep_pos = fast_subsample(cp.arange(d_low_points.shape[0], dtype=cp.int32), budget_out)
+                            d_low_points = d_low_points[keep_pos]
+                            d_low_colors = d_low_colors[keep_pos]
 
                         if d_low_points.shape[0] > 0:
                             # Pass shared params when dedup is active; fallback stays unchanged.
