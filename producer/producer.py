@@ -5,6 +5,8 @@ import pyrealsense2 as rs
 import producer_cli as producer_cli
 import offline_compression
 import time
+import subprocess
+import platform
 
 from pathlib import Path
 
@@ -17,7 +19,17 @@ def wait_for_first_client(server) -> None:
         time.sleep(0.5)
 
 
+def build_client_bundle() -> None:
+    client_dir = Path(__file__).resolve().parent.parent / "Client"
+    npm_executable = "npm.cmd" if platform.system() == "Windows" else "npm"
+    print(f"Building client in: {client_dir}")
+    subprocess.run([npm_executable, "run", "build"], cwd=client_dir, check=True)
+
+
 def main():  
+    # Run the client build
+    build_client_bundle()
+
     DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     
     print(f"Using device: {DEVICE}")
@@ -113,6 +125,7 @@ if __name__ == "__main__":
     print("Is CUDA available:", torch.cuda.is_available())
     #realsense_config()
     main()
+
 
 
     
