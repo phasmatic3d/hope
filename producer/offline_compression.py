@@ -52,7 +52,7 @@ def read_ply_ascii(path: Path) -> tuple[np.ndarray, np.ndarray]:
         }
         dtype_fields = [(name, type_map[prop]) for prop, name in properties]
         ply_dtype = np.dtype(dtype_fields)
-
+        # Read the binary vertex payload in one shot for speed.
         raw = handle.read(vertex_count * ply_dtype.itemsize)
         data = np.frombuffer(raw, dtype=ply_dtype, count=vertex_count)
 
@@ -212,34 +212,13 @@ def allocate_budgets(
     min_out = min(n_out, int(np.ceil(n_out * min_keep_ratio_low)))
 
     min_required = min_in + min_mid + min_out
-    if min_required >= total_budget:
-        # If budget is too small, reduce floors proportionally and distribute leftovers.
-        scale = total_budget / min_required if min_required > 0 else 0.0
-        alloc_in = min(min_in, int(np.floor(min_in * scale)))
-        alloc_mid = min(min_mid, int(np.floor(min_mid * scale)))
-        alloc_out = min(min_out, int(np.floor(min_out * scale)))
-        used = alloc_in + alloc_mid + alloc_out
-        remaining = total_budget - used
-
-        for cluster in ("in", "mid", "out"):
-            if remaining <= 0:
-                break
-            if cluster == "in":
-                extra = min(remaining, n_in - alloc_in)
-                alloc_in += extra
-            elif cluster == "mid":
-                extra = min(remaining, n_mid - alloc_mid)
-                alloc_mid += extra
-            else:
-                extra = min(remaining, n_out - alloc_out)
-                alloc_out += extra
-            remaining -= extra
-        return alloc_in, alloc_mid, alloc_out
+    # Keep floors hard by lifting small budgets to the minimum required total.
+    effective_budget = max(total_budget, min_required)
 
     budget_in = min_in
     budget_mid = min_mid
     budget_out = min_out
-    remaining = total_budget - min_required
+    remaining = effective_budget - min_required
 
     # Fill remaining budget by importance order.
     add_in = min(remaining, n_in - budget_in)
@@ -303,9 +282,17 @@ def derive_offline_point_budget(
     if max_points <= 0:
         return 0, bytes_per_frame
 
+    # Keep per-cluster floors as hard minimums even if bandwidth is very tight.
+    min_required = (
+        min(n_in, int(np.ceil(n_in * min_keep_ratio_high)))
+        + min(n_mid, int(np.ceil(n_mid * min_keep_ratio_med)))
+        + min(n_out, int(np.ceil(n_out * min_keep_ratio_low)))
+    )
+    min_required = min(min_required, max_points)
+
     # Binary search finds the largest budget that stays within frame payload.
-    left, right = 0, max_points
-    best = 0
+    left, right = min_required, max_points
+    best = min_required
     while left <= right:
         mid = (left + right) // 2
         estimated_bytes = estimate_compressed_bytes_for_budget(
@@ -399,6 +386,9 @@ def load_frame_rgb(input_root: Path, frame_stem: str, fallback_rgb: np.ndarray) 
     # Exported frames follow frame_XXXX_rgb.png, keyed by the PLY stem.
     png_path = input_root / f"{frame_stem}_rgb.png"
     bgr = cv2.imread(str(png_path), cv2.IMREAD_COLOR)
+    if bgr is None:
+        # Fall back to reconstructed colors when the PNG is missing.
+        return fallback_rgb
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
 
@@ -459,6 +449,11 @@ def run_offline_compression(args, server=None) -> None:
             "points_cluster_mid",
             "points_cluster_low",
             "points_cluster_low_after_dedup",
+            "points_total_after_dedup",
+            "points_cluster_high_SS",
+            "points_cluster_mid_SS",
+            "points_cluster_low_SS",
+            "points_cluster_total_SS",
             "uncompressed_size_mb",
             "cluster_high_size_mb",
             "cluster_mid_size_mb",
@@ -510,6 +505,7 @@ def run_offline_compression(args, server=None) -> None:
         color_img = np.zeros((cmr_clr_height, cmr_clr_width, 3), dtype=np.uint8)
         if xyz.shape[0] == cmr_clr_width * cmr_clr_height:
             color_img = rgb.reshape(cmr_clr_height, cmr_clr_width, 3)
+        # Prefer the exported RGB frame for clustering, with a PLY-derived fallback.
         color_img = load_frame_rgb(input_root, ply_path.stem, color_img)
 
         detection_ms = 0.0
@@ -644,12 +640,26 @@ def run_offline_compression(args, server=None) -> None:
         n_mid = int(cp.count_nonzero(d_mid_mask))
         n_out = int(cp.count_nonzero(d_out_mask))
 
+        n_out_budget_pool = n_out
+        if args.low_dedup and n_out > 0:
+            d_out_budget_idx = d_point_idx[d_out_mask]
+            d_low_budget_points = d_vertices[d_out_budget_idx]
+            d_low_budget_colors = d_colors[d_out_budget_idx]
+            low_budget_min_v, low_budget_scale = quantizer._compute_low_quant_params(d_low_budget_points)
+            d_low_budget_dedup_idx = quantizer.build_low_dedup_indices(
+                d_low_budget_points,
+                d_low_budget_colors,
+                min_v=low_budget_min_v,
+                scale=low_budget_scale,
+            )
+            n_out_budget_pool = int(d_low_budget_dedup_idx.shape[0])
+
         # Derive this frame budget from target fps and available bandwidth.
         derived_budget, target_frame_bytes = derive_offline_point_budget(
             quantizer,
             n_in,
             n_mid,
-            n_out,
+            n_out_budget_pool,
             args.offline_target_fps,
             args.offline_bandwidth_mb_per_s,
             args.min_keep_ratio_high,
@@ -660,7 +670,7 @@ def run_offline_compression(args, server=None) -> None:
         budget_in, budget_mid, budget_out = allocate_budgets(
             n_in,
             n_mid,
-            n_out,
+            n_out_budget_pool,
             total_budget,
             args.min_keep_ratio_high,
             args.min_keep_ratio_med,
@@ -670,7 +680,7 @@ def run_offline_compression(args, server=None) -> None:
             quantizer,
             n_in,
             n_mid,
-            n_out,
+            n_out_budget_pool,
             total_budget,
             args.min_keep_ratio_high,
             args.min_keep_ratio_med,
@@ -682,6 +692,7 @@ def run_offline_compression(args, server=None) -> None:
         )
 
 
+        # This mirrors online framing so the web client can process chunks in real-time order.
         frame_id_byte = frame_idx % 255
         byte_offset = 0
 
@@ -741,12 +752,7 @@ def run_offline_compression(args, server=None) -> None:
             if budget_out > 0:
                 d_out_point_idx = d_point_idx[d_out_mask]
                 d_out_flat_idx = d_flat_idx[d_out_mask]
-                if d_out_point_idx.size > budget_out:
-                    keep_pos = fast_subsample(cp.arange(d_out_point_idx.size, dtype=cp.int32), budget_out)
-                    d_out_point_idx = d_out_point_idx[keep_pos]
-                    d_out_flat_idx = d_out_flat_idx[keep_pos]
                 if d_out_point_idx.size > 0:
-                    # Record LOW metrics before dedup so reports can compare both stages.
                     low_points_before_dedup = int(d_out_point_idx.size)
                     low_size_bytes_before_dedup = quantizer.estimate_buffer_size(EncodingMode.LOW, low_points_before_dedup)
 
@@ -755,7 +761,7 @@ def run_offline_compression(args, server=None) -> None:
                     d_low_flat_idx = d_out_flat_idx
                     low_min_v = None
                     low_scale = None
-                    if args.low_dedup: # dedup
+                    if args.low_dedup:
                         # Compute once so dedup and encode quantize with the same LOW range.
                         low_min_v, low_scale = quantizer._compute_low_quant_params(d_low_points)
                         dedup_idx = quantizer.build_low_dedup_indices(
@@ -769,6 +775,13 @@ def run_offline_compression(args, server=None) -> None:
                         d_low_flat_idx = d_low_flat_idx[dedup_idx]
 
                     low_points_after_dedup = int(d_low_points.shape[0])
+
+                    # Subsample after dedup so the final budget is drawn from unique LOW points.
+                    if d_low_points.shape[0] > budget_out:
+                        keep_pos = fast_subsample(cp.arange(d_low_points.shape[0], dtype=cp.int32), budget_out)
+                        d_low_points = d_low_points[keep_pos]
+                        d_low_colors = d_low_colors[keep_pos]
+                        d_low_flat_idx = d_low_flat_idx[keep_pos]
                     if d_low_points.shape[0] > 0:
                         print(f"[offline] encoding LOW for {ply_path.name} ({int(d_low_points.shape[0])} points)")
                         t_start = time.perf_counter()
@@ -786,6 +799,7 @@ def run_offline_compression(args, server=None) -> None:
                         idx_cpu = cp.asnumpy(d_low_flat_idx).astype(np.int32, copy=False)
                         broadcast_buffers[EncodingMode.LOW] = (d_low_points.shape[0], res_view, t_ms, idx_cpu)
 
+        # Use encoded chunk count, not budget count, so frame completion is accurate on client.
         num_chunks = len(broadcast_buffers)
 
         assembled_xyz: list[np.ndarray] = []
@@ -878,10 +892,18 @@ def run_offline_compression(args, server=None) -> None:
         # Each cluster ratio compares kept points against cluster source points.
         keep_ratio_high = float(kept_points_by_mode[EncodingMode.HIGH]) / n_in if n_in > 0 else 0.0
         keep_ratio_mid = float(kept_points_by_mode[EncodingMode.MED]) / n_mid if n_mid > 0 else 0.0
+        # LOW floors are allocated against the post-dedup pool when dedup is enabled.
+        low_points_kept_for_ratio = kept_points_by_mode[EncodingMode.LOW]
+        low_points_base_for_ratio = low_points_after_dedup if args.low_dedup else n_out
+        keep_ratio_low = float(low_points_kept_for_ratio) / low_points_base_for_ratio if low_points_base_for_ratio > 0 else 0.0
+        # Track final post-subsampling point counts per cluster and total.
+        points_cluster_high_ss = kept_points_by_mode[EncodingMode.HIGH]
+        points_cluster_mid_ss = kept_points_by_mode[EncodingMode.MED]
+        points_cluster_low_ss = kept_points_by_mode[EncodingMode.LOW]
+        # This tracks total source points after LOW dedup, before any point-budget subsampling.
+        points_total_after_dedup = n_in + n_mid + low_points_after_dedup
+        points_cluster_total_ss = points_cluster_high_ss + points_cluster_mid_ss + points_cluster_low_ss
 
-        low_points_kept_for_ratio = low_points_before_dedup
-        keep_ratio_low = float(low_points_kept_for_ratio) / n_out if n_out > 0 else 0.0
-        # Log full frame stats plus per-cluster point and buffer metrics.
         csv_writer.writerow(
             [
                 "Cuda quantization",
@@ -890,6 +912,11 @@ def run_offline_compression(args, server=None) -> None:
                 n_mid,
                 low_points_before_dedup,
                 low_points_after_dedup,
+                points_total_after_dedup,
+                points_cluster_high_ss,
+                points_cluster_mid_ss,
+                points_cluster_low_ss,
+                points_cluster_total_ss,
                 f"{original_size_mb:.6f}",
                 f"{high_size_mb:.6f}",
                 f"{mid_size_mb:.6f}",
