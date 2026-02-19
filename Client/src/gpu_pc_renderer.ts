@@ -47,7 +47,7 @@ const highQShader = {
             float closeDist = 0.01;
             float farDist = 4.0;
             float t = clamp((dist - closeDist) / (farDist - closeDist), 0.0, 1.0);
-            gl_PointSize = mix(10.0, 1.0, t);
+            gl_PointSize = mix(1.0, 3.0, t);
         }
     `,
     fragmentShader: `
@@ -115,7 +115,7 @@ const standardShader = {
             float closeDist = 0.01;
             float farDist = 4.0;
             float t = clamp((dist - closeDist) / (farDist - closeDist), 0.0, 1.0);
-            gl_PointSize = mix(10.0, 1.0, t);
+            gl_PointSize = mix(1.0, 7.0, t);
         }
     `,
     fragmentShader: `
