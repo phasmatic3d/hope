@@ -422,9 +422,11 @@ class SecureHTTPThreadedServer:
 
     def stop(self):
         """Stop the HTTPS file server thread."""
-        # shutdown() breaks out of serve_forever in _run_server.
-        if self.httpd is not None:
-            self.httpd.shutdown()
-            self.httpd.server_close()
+        # Copy the server reference once to avoid cross-thread races.
+        httpd = self.httpd
+        if httpd is not None:
+            httpd.shutdown()
+            httpd.server_close()
+            self.httpd = None
         if self.thread.is_alive():
             self.thread.join(timeout=2)
