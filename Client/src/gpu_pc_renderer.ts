@@ -31,9 +31,7 @@ const highQShader = {
             float z = float((packedPos >> 22) & 1023u) / 1023.0;
 
             vec3 norm = vec3(x, y, z);
-            // Z is dequantized as inverse depth and then flipped back to metric depth.
-            float invZ = (norm.z / uScale.z) + uMin.z;
-            float depthZ = 1.0 / max(invZ, 1e-6);
+            float depthZ = (norm.z / uScale.z) + uMin.z;
             vec3 pos = vec3(
                 (norm.x / uScale.x) + uMin.x,
                 (norm.y / uScale.y) + uMin.y,
@@ -95,7 +93,6 @@ const standardShader = {
                 float(yData) / float(max_y),
                 float(zData) / float(max_z)
             );
-            // Z is dequantized as inverse depth and then flipped back to metric depth.
             float invZ = (norm.z / uScale.z) + uMin.z;
             float depthZ = 1.0 / max(invZ, 1e-6);
             vec3 pos = vec3(

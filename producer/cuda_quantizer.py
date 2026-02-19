@@ -43,7 +43,6 @@ class CudaQuantizer:
             float orig_x = vertices[i * 3 + 0];
             float orig_y = vertices[i * 3 + 1];
             float orig_z = vertices[i * 3 + 2];
-            // Quantize depth in inverse-Z space for better near-depth resolution.
             float inv_z = 1.0f / fmaxf(orig_z, 1e-6f);
             
             const float x = __saturatef((orig_x - min_x) * scale_x);
@@ -111,12 +110,9 @@ class CudaQuantizer:
             float orig_x = vertices[i * 3 + 0];
             float orig_y = vertices[i * 3 + 1];
             float orig_z = vertices[i * 3 + 2];
-            // Quantize depth in inverse-Z space for better near-depth resolution.
-            float inv_z = 1.0f / fmaxf(orig_z, 1e-6f);
-            
             const float x = __saturatef((orig_x - min_x) * scale_x);
             const float y = __saturatef((orig_y - min_y) * scale_y);
-            const float z = __saturatef((inv_z - min_z) * scale_z);
+            const float z = __saturatef((orig_z - min_z) * scale_z);
             
             // 11 bits each for X,Y (2047) and 10 for Z (1023)
             const uint32_t max_x = (1 << 11) - 1;
@@ -262,12 +258,10 @@ class CudaQuantizer:
 
         min_vals = cp.amin(d_points, axis=0)
         max_vals = cp.amax(d_points, axis=0)
-        inv_z = 1.0 / cp.maximum(d_points[:, 2], cp.float32(1e-6))
         min_v = cp.asnumpy(min_vals)
         max_v = cp.asnumpy(max_vals)
-        # Z stores inverse depth, so its quantization range is built from 1/z.
-        min_v[2] = float(cp.min(inv_z).get())
-        max_v[2] = float(cp.max(inv_z).get())
+        min_v[2] = float(min_vals[2].get())
+        max_v[2] = float(max_vals[2].get())
         diff = (max_v - min_v)
         diff[diff < 1e-6] = 1.0
         scale = 1.0 / diff
@@ -345,12 +339,10 @@ class CudaQuantizer:
 
         min_vals = cp.amin(d_points, axis=0)
         max_vals = cp.amax(d_points, axis=0)
-        inv_z = 1.0 / cp.maximum(d_points[:, 2], cp.float32(1e-6))
         min_v = cp.asnumpy(min_vals)
         max_v = cp.asnumpy(max_vals)
-        # Z stores inverse depth, so its quantization range is built from 1/z.
-        min_v[2] = float(cp.min(inv_z).get())
-        max_v[2] = float(cp.max(inv_z).get())
+        min_v[2] = float(min_vals[2].get())
+        max_v[2] = float(max_vals[2].get())
         diff = (max_v - min_v)
         diff[diff < 1e-6] = 1.0
         scale = 1.0 / diff

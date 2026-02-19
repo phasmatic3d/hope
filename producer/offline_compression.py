@@ -1,4 +1,5 @@
 import csv
+import concurrent.futures
 import struct
 import time
 from pathlib import Path
@@ -97,6 +98,14 @@ def write_ply_binary(path: Path, xyz: np.ndarray, rgb: np.ndarray) -> None:
         handle.write(vertex_data.tobytes())
 
 
+
+
+def apply_depth_clip_mask(points_xyz: np.ndarray, enable_depth_clip: bool) -> np.ndarray:
+    if not enable_depth_clip:
+        return np.ones(points_xyz.shape[0], dtype=bool)
+    depth = points_xyz[:, 2]
+    return (depth >= 0.1) & (depth <= 1.3)
+
 def build_cluster_map(binary_mask: torch.Tensor, target_shape: tuple[int, int]) -> torch.Tensor:
     """Create a 0/1/2 cluster map from a binary mask."""
     # Normalize incoming logits/masks to (H, W) before interpolation.
@@ -145,8 +154,6 @@ def decode_chunk(buffer_bytes: bytes) -> tuple[np.ndarray, np.ndarray, int]:
         z = ((packed >> 22) & 1023) / 1023.0
         norm = np.stack([x, y, z], axis=1).astype(np.float32)
         xyz = (norm / scale_vals) + min_vals
-        # Z was quantized as inverse depth, so map it back to depth.
-        xyz[:, 2] = 1.0 / np.maximum(xyz[:, 2], 1e-6)
         rgb = np.stack([r, g, b], axis=1).astype(np.uint8)
         return xyz, rgb, mode
 
@@ -159,8 +166,6 @@ def decode_chunk(buffer_bytes: bytes) -> tuple[np.ndarray, np.ndarray, int]:
         z = ((packed >> 22) & 1023) / 1023.0
         norm = np.stack([x, y, z], axis=1).astype(np.float32)
         xyz = (norm / scale_vals) + min_vals
-        # Z was quantized as inverse depth, so map it back to depth.
-        xyz[:, 2] = 1.0 / np.maximum(xyz[:, 2], 1e-6)
     else:
         sx = 1
         x = np.frombuffer(buffer_bytes, dtype=np.uint8, count=num_points, offset=offset)
@@ -441,38 +446,44 @@ def run_offline_compression(args, server=None) -> None:
     csv_path = output_root / "compression_report.csv"
     csv_file = open(csv_path, "w", newline="", encoding="utf-8")
     csv_writer = csv.writer(csv_file)
-    csv_writer.writerow(
-        [
-            "method",
-            "points_full",
-            "points_cluster_high",
-            "points_cluster_mid",
-            "points_cluster_low",
-            "points_cluster_low_after_dedup",
-            "points_total_after_dedup",
-            "points_cluster_high_SS",
-            "points_cluster_mid_SS",
-            "points_cluster_low_SS",
-            "points_cluster_total_SS",
-            "uncompressed_size_mb",
-            "cluster_high_size_mb",
-            "cluster_mid_size_mb",
-            "cluster_low_size_mb",
-            "cluster_low_size_mb_after_dedup",
-            "total_compressed_size_mb",
-            "detection_time_ms",
-            "encode_time_ms",
-            "point_budget",
-            "keep_ratio_high",
-            "keep_ratio_mid",
-            "keep_ratio_low",
-        ]
-    )
+    csv_header = [
+        "method",
+        "points_full",
+        "points_cluster_high",
+        "points_cluster_mid",
+        "points_cluster_low",
+        "points_cluster_low_after_dedup",
+        "points_total_after_dedup",
+        "points_cluster_high_SS",
+        "points_cluster_mid_SS",
+        "points_cluster_low_SS",
+        "points_cluster_total_SS",
+        "uncompressed_size_mb",
+        "cluster_high_size_mb",
+        "cluster_mid_size_mb",
+        "cluster_low_size_mb",
+        "cluster_low_size_mb_after_dedup",
+        "total_compressed_size_mb",
+        "detection_time_ms",
+        "encode_time_ms",
+        "broadcast_time_ms",
+        "point_budget",
+        "keep_ratio_high",
+        "keep_ratio_mid",
+        "keep_ratio_low",
+    ]
+    if args.enable_depth_clip:
+        csv_header.insert(2, "points_after_depth_clip")
+        csv_header.insert(19, "depth_clip_ms")
+    csv_writer.writerow(csv_header)
 
     predictor = None
     yolo_class_idx = 0
     roi_init = False
     prev_cluster = None
+
+    # executor
+    broadcast_executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
 
     if args.cluster_predictor == "yolo":
         model_path = "yoloe-11l-seg.pt" if args.yolo_size == "large" else "yoloe-11s-seg.pt"
@@ -498,7 +509,13 @@ def run_offline_compression(args, server=None) -> None:
     ply_files = sorted(input_root.glob("*.ply"))
     for frame_idx, ply_path in enumerate(ply_files):
         print(f"[offline] frame {frame_idx + 1}/{len(ply_files)}: loading {ply_path.name}")
-        xyz, rgb = read_ply_ascii(ply_path)
+        xyz_raw, rgb_raw = read_ply_ascii(ply_path)
+        depth_clip_start = time.perf_counter()
+        depth_keep_mask = apply_depth_clip_mask(xyz_raw, args.enable_depth_clip)
+        depth_clip_ms = (time.perf_counter() - depth_clip_start) * 1000.0
+
+        xyz = xyz_raw[depth_keep_mask]
+        rgb = rgb_raw[depth_keep_mask]
         d_vertices = cp.asarray(xyz, dtype=cp.float32)
         d_colors = cp.asarray(rgb, dtype=cp.uint8)
 
@@ -606,12 +623,12 @@ def run_offline_compression(args, server=None) -> None:
         else:
             cluster_for_points = prev_cluster
 
-        flat_indices_cpu = load_depth_valid_indices(
+        raw_flat_indices_cpu = load_depth_valid_indices(
             input_root,
             ply_path.stem,
             (cmr_depth_height, cmr_depth_width),
         )
-        if flat_indices_cpu is None:
+        if raw_flat_indices_cpu is None:
             if d_vertices.shape[0] == cmr_depth_width * cmr_depth_height:
                 flat_indices_cpu = np.arange(d_vertices.shape[0], dtype=np.int32)
             else:
@@ -619,8 +636,11 @@ def run_offline_compression(args, server=None) -> None:
                 print(
                     f"[offline][warn] missing {ply_path.stem}_depth.png; using vertex-order indices for rasterization"
                 )
-
-        if flat_indices_cpu.shape[0] != d_vertices.shape[0]:
+        elif raw_flat_indices_cpu.shape[0] == xyz_raw.shape[0]:
+            flat_indices_cpu = raw_flat_indices_cpu[depth_keep_mask]
+        elif raw_flat_indices_cpu.shape[0] == d_vertices.shape[0]:
+            flat_indices_cpu = raw_flat_indices_cpu
+        else:
             print(
                 f"[offline][warn] depth index count mismatch on {ply_path.name}; using vertex-order indices"
             )
@@ -701,6 +721,9 @@ def run_offline_compression(args, server=None) -> None:
         low_points_before_dedup = 0
         low_points_after_dedup = 0
         low_size_bytes_before_dedup = 0
+
+        encode_window_start = time.perf_counter()
+
         with stream_in:
             if budget_in > 0:
                 d_in_point_idx = d_point_idx[d_in_mask]
@@ -710,8 +733,6 @@ def run_offline_compression(args, server=None) -> None:
                     d_in_point_idx = d_in_point_idx[keep_pos]
                     d_in_flat_idx = d_in_flat_idx[keep_pos]
                 if d_in_point_idx.size > 0:
-                    print(f"[offline] encoding HIGH for {ply_path.name} ({int(d_in_point_idx.size)} points)")
-                    t_start = time.perf_counter()
                     res_view = quantizer.encode(
                         stream_in,
                         EncodingMode.HIGH,
@@ -719,11 +740,7 @@ def run_offline_compression(args, server=None) -> None:
                         d_colors[d_in_point_idx],
                         pinned_np_high,
                     )
-                    stream_in.synchronize()
-                    t_ms = (time.perf_counter() - t_start) * 1000.0
-                    # Track source depth pixels so raster output matches frame geometry.
-                    idx_cpu = cp.asnumpy(d_in_flat_idx).astype(np.int32, copy=False)
-                    broadcast_buffers[EncodingMode.HIGH] = (d_in_point_idx.size, res_view, t_ms, idx_cpu)
+                    broadcast_buffers[EncodingMode.HIGH] = (stream_in, d_in_point_idx.size, res_view, d_in_flat_idx)
 
         with stream_med:
             if budget_mid > 0:
@@ -734,8 +751,6 @@ def run_offline_compression(args, server=None) -> None:
                     d_mid_point_idx = d_mid_point_idx[keep_pos]
                     d_mid_flat_idx = d_mid_flat_idx[keep_pos]
                 if d_mid_point_idx.size > 0:
-                    print(f"[offline] encoding MED for {ply_path.name} ({int(d_mid_point_idx.size)} points)")
-                    t_start = time.perf_counter()
                     res_view = quantizer.encode(
                         stream_med,
                         EncodingMode.MED,
@@ -743,10 +758,7 @@ def run_offline_compression(args, server=None) -> None:
                         d_colors[d_mid_point_idx],
                         pinned_np_med,
                     )
-                    stream_med.synchronize()
-                    t_ms = (time.perf_counter() - t_start) * 1000.0
-                    idx_cpu = cp.asnumpy(d_mid_flat_idx).astype(np.int32, copy=False)
-                    broadcast_buffers[EncodingMode.MED] = (d_mid_point_idx.size, res_view, t_ms, idx_cpu)
+                    broadcast_buffers[EncodingMode.MED] = (stream_med, d_mid_point_idx.size, res_view, d_mid_flat_idx)
 
         with stream_out:
             if budget_out > 0:
@@ -783,8 +795,6 @@ def run_offline_compression(args, server=None) -> None:
                         d_low_colors = d_low_colors[keep_pos]
                         d_low_flat_idx = d_low_flat_idx[keep_pos]
                     if d_low_points.shape[0] > 0:
-                        print(f"[offline] encoding LOW for {ply_path.name} ({int(d_low_points.shape[0])} points)")
-                        t_start = time.perf_counter()
                         res_view = quantizer.encode(
                             stream_out,
                             EncodingMode.LOW,
@@ -794,10 +804,14 @@ def run_offline_compression(args, server=None) -> None:
                             min_v=low_min_v,
                             scale=low_scale,
                         )
-                        stream_out.synchronize()
-                        t_ms = (time.perf_counter() - t_start) * 1000.0
-                        idx_cpu = cp.asnumpy(d_low_flat_idx).astype(np.int32, copy=False)
-                        broadcast_buffers[EncodingMode.LOW] = (d_low_points.shape[0], res_view, t_ms, idx_cpu)
+                        broadcast_buffers[EncodingMode.LOW] = (stream_out, d_low_points.shape[0], res_view, d_low_flat_idx)
+
+        # Synchronize 
+        for mode in (EncodingMode.HIGH, EncodingMode.MED, EncodingMode.LOW):
+            if mode in broadcast_buffers:
+                stream, _, _, _ = broadcast_buffers[mode]
+                stream.synchronize()
+        encode_time_ms = (time.perf_counter() - encode_window_start) * 1000.0
 
         # Use encoded chunk count, not budget count, so frame completion is accurate on client.
         num_chunks = len(broadcast_buffers)
@@ -806,7 +820,6 @@ def run_offline_compression(args, server=None) -> None:
         assembled_rgb: list[np.ndarray] = []
         assembled_idx: list[np.ndarray] = []
         assembled_buffers: list[bytes] = []
-        total_encode_ms = 0.0
         encoded_size_by_mode = {
             EncodingMode.HIGH: 0,
             EncodingMode.MED: 0,
@@ -819,12 +832,12 @@ def run_offline_compression(args, server=None) -> None:
             EncodingMode.LOW: 0,
         }
 
-        for mode in (EncodingMode.HIGH, EncodingMode.MED, EncodingMode.LOW):
-            if mode not in broadcast_buffers:
-                continue
-            count, buffer_view, t_ms, idx_cpu = broadcast_buffers[mode]
+        futures_list: list[concurrent.futures.Future] = []
+        broadcast_window_start = time.perf_counter()
+
+        # Broadcast
+        for mode, (_, count, buffer_view, _) in broadcast_buffers.items():
             buffer_bytes = buffer_view.tobytes()
-            mode_name = mode.name.lower()
 
             # Stream each completed chunk right away so the client can decode and render progressively.
             if server is not None and num_chunks > 0:
@@ -833,9 +846,30 @@ def run_offline_compression(args, server=None) -> None:
                     + frame_id_byte.to_bytes(1, "little")
                     + byte_offset.to_bytes(4, "little")
                 )
-                server.broadcast(header + buffer_bytes)
+                futures_list.append(broadcast_executor.submit(server.broadcast, header + buffer_bytes))
                 byte_offset += len(buffer_bytes)
 
+            kept_points_by_mode[mode] = int(count)
+            # Track encoded payload size for each cluster tier.
+            encoded_size_by_mode[mode] = len(buffer_bytes)
+
+        if futures_list:
+            concurrent.futures.wait(futures_list)
+
+        broadcast_ms = (time.perf_counter() - broadcast_window_start) * 1000.0
+        if args.enable_depth_clip:
+            print(
+                f"[offline] depth_clip_ms={depth_clip_ms:.3f} "
+                f"encode_time_ms={encode_time_ms:.3f} broadcast_ms={broadcast_ms:.3f}"
+            )
+        else:
+            print(f"[offline] encode_time_ms={encode_time_ms:.3f} broadcast_ms={broadcast_ms:.3f}")
+
+        # server-side decode
+        for mode, (_, count, buffer_view, idx_gpu) in broadcast_buffers.items():
+            idx_cpu = cp.asnumpy(idx_gpu).astype(np.int32, copy=False)
+            buffer_bytes = buffer_view.tobytes()
+            mode_name = mode.name.lower()
             print(f"[offline] decoding {mode_name} for {ply_path.name} ({int(count)} points)")
             # Decode each importance tier, then assemble into a single output.
             xyz_dec, rgb_dec, _ = decode_chunk(buffer_bytes)
@@ -843,10 +877,6 @@ def run_offline_compression(args, server=None) -> None:
             assembled_rgb.append(rgb_dec)
             assembled_idx.append(idx_cpu)
             assembled_buffers.append(buffer_bytes)
-            total_encode_ms += t_ms
-            kept_points_by_mode[mode] = int(count)
-            # Track encoded payload size for each cluster tier.
-            encoded_size_by_mode[mode] = len(buffer_bytes)
 
         if assembled_xyz:
             # Sort by original pixel index so PLY and PNG outputs share the same point order.
@@ -882,7 +912,8 @@ def run_offline_compression(args, server=None) -> None:
         write_depth_png(depth_path, depth_buf)
         write_rgb_png(rgb_path, rgb_buf)
 
-        original_points = int(xyz.shape[0])
+        original_points = int(xyz_raw.shape[0])
+        points_after_depth_clip = int(xyz.shape[0])
         original_size_mb = bytes_to_mb(xyz.nbytes + rgb.nbytes)
         high_size_mb = bytes_to_mb(encoded_size_by_mode[EncodingMode.HIGH])
         mid_size_mb = bytes_to_mb(encoded_size_by_mode[EncodingMode.MED])
@@ -904,32 +935,35 @@ def run_offline_compression(args, server=None) -> None:
         points_total_after_dedup = n_in + n_mid + low_points_after_dedup
         points_cluster_total_ss = points_cluster_high_ss + points_cluster_mid_ss + points_cluster_low_ss
 
-        csv_writer.writerow(
-            [
-                "Cuda quantization",
-                original_points,
-                n_in,
-                n_mid,
-                low_points_before_dedup,
-                low_points_after_dedup,
-                points_total_after_dedup,
-                points_cluster_high_ss,
-                points_cluster_mid_ss,
-                points_cluster_low_ss,
-                points_cluster_total_ss,
-                f"{original_size_mb:.6f}",
-                f"{high_size_mb:.6f}",
-                f"{mid_size_mb:.6f}",
-                f"{low_size_mb:.6f}",
-                f"{low_size_after_dedup_mb:.6f}",
-                f"{total_cluster_size_mb:.6f}",
-                f"{detection_ms:.3f}",
-                f"{total_encode_ms:.3f}",
-                total_budget,
-                f"{keep_ratio_high:.6f}",
-                f"{keep_ratio_mid:.6f}",
-                f"{keep_ratio_low:.6f}",
-            ]
-        )
+        csv_row = [
+            "Cuda quantization",
+            original_points,
+            n_in,
+            n_mid,
+            low_points_before_dedup,
+            low_points_after_dedup,
+            points_total_after_dedup,
+            points_cluster_high_ss,
+            points_cluster_mid_ss,
+            points_cluster_low_ss,
+            points_cluster_total_ss,
+            f"{original_size_mb:.6f}",
+            f"{high_size_mb:.6f}",
+            f"{mid_size_mb:.6f}",
+            f"{low_size_mb:.6f}",
+            f"{low_size_after_dedup_mb:.6f}",
+            f"{total_cluster_size_mb:.6f}",
+            f"{detection_ms:.3f}",
+            f"{encode_time_ms:.3f}",
+            f"{broadcast_ms:.3f}",
+            total_budget,
+            f"{keep_ratio_high:.6f}",
+            f"{keep_ratio_mid:.6f}",
+            f"{keep_ratio_low:.6f}",
+        ]
+        if args.enable_depth_clip:
+            csv_row.insert(2, points_after_depth_clip)
+            csv_row.insert(19, f"{depth_clip_ms:.3f}")
+        csv_writer.writerow(csv_row)
 
     csv_file.close()

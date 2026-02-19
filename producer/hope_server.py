@@ -36,6 +36,13 @@ class VisualizationMode(Enum):
     COLOR = auto()
     DEPTH = auto()
 
+
+def apply_depth_clip_mask(depth_img: np.ndarray, enable_depth_clip: bool) -> np.ndarray:
+    valid_mask = depth_img > 0
+    if not enable_depth_clip:
+        return valid_mask
+    return valid_mask & (depth_img >= 100) & (depth_img <= 1300)
+
 def open_ipc_array(handle, shape, dtype):
     size = int(np.prod(shape)) * np.dtype(dtype).itemsize
     dev_ptr = cp.cuda.runtime.ipcOpenMemHandle(handle, cp.cuda.runtime.cudaIpcMemLazyEnablePeerAccess)
@@ -64,7 +71,8 @@ def camera_process(
         min_depth_meter : float,
         max_depth_meter : float,
         debug : bool,
-        low_dedup: bool) :
+        low_dedup: bool,
+        enable_depth_clip: bool) :
 
     visualization_mode = VisualizationMode.COLOR
     quantizer = CudaQuantizer()
@@ -102,6 +110,7 @@ def camera_process(
 
     frame_id = 0
     frame_count = 0
+    log_interval_frames = 30
     roi = None
     d_prev_cluster = cp.zeros_like(d_shared_cluster)
     
@@ -215,7 +224,9 @@ def camera_process(
             
             #t = time.perf_counter()
             
-            d_depth_img = cp.asarray(depth_img) 
+            depth_clip_start = time.perf_counter()
+            valid_depth_mask = apply_depth_clip_mask(depth_img, enable_depth_clip)
+            depth_clip_ms = (time.perf_counter() - depth_clip_start) * 1000.0
             
             d_pixel_indices = (
                 (d_texcoords[:, 1] * (cmr_clr_height - 1)).astype(cp.int32) * cmr_clr_width +
@@ -224,8 +235,8 @@ def camera_process(
             d_flat_colors = d_shared_frame.reshape(-1, 3)
             d_colors = d_flat_colors[d_pixel_indices] 
 
-            d_depth_flat = d_depth_img.ravel()
-            d_valid_idx = cp.flatnonzero(d_depth_flat > 0)
+            d_valid_mask = cp.asarray(valid_depth_mask).ravel()
+            d_valid_idx = cp.flatnonzero(d_valid_mask)
             #d_prev_cluster_flat = d_prev_cluster.ravel()
 
             d_cluster_values = d_prev_cluster.ravel()[d_valid_idx]
@@ -253,6 +264,8 @@ def camera_process(
 
             budget_in, budget_mid, budget_out = allocate_budgets(
                 int(n_in), int(n_mid), n_out_budget_pool, point_cloud_budget)
+
+            encode_window_start = time.perf_counter()
             
             broadcast_buffers = {}
             num_chunks = 0
@@ -302,7 +315,6 @@ def camera_process(
                         low_min_v = None
                         low_scale = None
                         if low_dedup:
-                            # Compute once so online dedup and LOW encode use matching params.
                             low_min_v, low_scale = quantizer._compute_low_quant_params(d_low_points)
                             dedup_idx = quantizer.build_low_dedup_indices(
                                 d_low_points,
@@ -331,6 +343,10 @@ def camera_process(
                             broadcast_buffers[EncodingMode.LOW] = (stream_out, d_low_points.shape[0], res_view)
                             num_chunks += 1
         
+
+
+            # Broadcast 
+            broadcast_window_start = time.perf_counter()
             for mode, (stream, size, buffer_view)  in broadcast_buffers.items() :
                 stream.synchronize()
 
@@ -346,7 +362,19 @@ def camera_process(
                 futures_list += [thread_executor.submit(server.broadcast, header + buffer_bytes),]
                 byte_offset += len(buffer_bytes)
             
+            encode_time_ms = (time.perf_counter() - encode_window_start) * 1000.0
             concurrent.futures.wait(futures_list)
+            broadcast_ms = (time.perf_counter() - broadcast_window_start) * 1000.0
+            if frame_count % log_interval_frames == 0:
+                if enable_depth_clip:
+                    print(
+                        f"[online] frame={frame_count} chunks={num_chunks} "
+                        f"depth_clip_ms={depth_clip_ms:.3f} encode_time_ms={encode_time_ms:.3f} "
+                        f"broadcast_ms={broadcast_ms:.3f}")
+                else:
+                    print(
+                        f"[online] frame={frame_count} chunks={num_chunks} "
+                        f"encode_time_ms={encode_time_ms:.3f} broadcast_ms={broadcast_ms:.3f}")
             #print(f'->{(time.perf_counter() - t) * 1000}')
             
             if debug:
@@ -672,7 +700,8 @@ def launch_processes(server, args, device : str) -> None:
             args.min_depth_meter,
             args.max_depth_meter,
             debug,
-            args.low_dedup)
+            args.low_dedup,
+            args.enable_depth_clip)
 
         predictor_proc.terminate()
         predictor_proc.join()

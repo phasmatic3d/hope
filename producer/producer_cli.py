@@ -93,6 +93,10 @@ producer_cli.add_argument(
 )
 producer_cli.add_argument("--min_depth_meter", type=float, default=0.01)
 producer_cli.add_argument("--max_depth_meter", type=float, default=4.)
+producer_cli.add_argument(
+    "--enable_depth_clip",
+    action="store_true",
+)
 
 producer_cli.add_argument("--debug", type=bool, default=True)
 
