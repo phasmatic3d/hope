@@ -12,19 +12,12 @@ CONFIG_PATH = os.path.join(WORKING_DIR, "configs")
 CHECKPOINT_PATH = os.path.join(WORKING_DIR, "checkpoints")
 CERTIFICAT_PATH = os.path.join(WORKING_DIR, "cert")
 SAM2p1_BASE_URL="https://dl.fbaipublicfiles.com/segment_anything_2/092824"
-SAM2_BASE_URL="https://dl.fbaipublicfiles.com/segment_anything_2/072824"
 
 sam2p1_configs = [
     f"{SAM2p1_BASE_URL}/sam2.1_hiera_tiny.pt",
     f"{SAM2p1_BASE_URL}/sam2.1_hiera_small.pt",
     f"{SAM2p1_BASE_URL}/sam2.1_hiera_base_plus.pt",
     f"{SAM2p1_BASE_URL}/sam2.1_hiera_large.pt"]
-
-sam2_configs = [
-    f"{SAM2_BASE_URL}/sam2_hiera_tiny.pt",
-    f"{SAM2_BASE_URL}/sam2_hiera_small.pt",
-    f"{SAM2_BASE_URL}/sam2_hiera_base_plus.pt",
-    f"{SAM2_BASE_URL}/sam2_hiera_large.pt"]
 
 class MODEL_SIZE(Enum):
     TINY = 0
@@ -37,12 +30,6 @@ map_to_config = {
     MODEL_SIZE.SMALL: [os.path.join("sam2.1", "sam2.1_hiera_s.yaml"), sam2p1_configs[MODEL_SIZE.SMALL.value]],
     MODEL_SIZE.BASE_PLUS: [os.path.join("sam2.1", "sam2.1_hiera_base+.yaml"), sam2p1_configs[MODEL_SIZE.BASE_PLUS.value]],
     MODEL_SIZE.LARGE: [os.path.join("sam2.1", "sam2.1_hiera_l.yaml"), sam2p1_configs[MODEL_SIZE.LARGE.value]] }
-
-map_to_config_sam2 = {
-    MODEL_SIZE.TINY: [os.path.join("sam2", "sam2_hiera_t.yaml"), sam2_configs[MODEL_SIZE.TINY.value]],
-    MODEL_SIZE.SMALL: [os.path.join("sam2", "sam2_hiera_s.yaml"), sam2_configs[MODEL_SIZE.SMALL.value]],
-    MODEL_SIZE.BASE_PLUS: [os.path.join("sam2", "sam2_hiera_b+.yaml"), sam2_configs[MODEL_SIZE.BASE_PLUS.value]],
-    MODEL_SIZE.LARGE: [os.path.join("sam2", "sam2_hiera_l.yaml"), sam2_configs[MODEL_SIZE.LARGE.value]] }
 
 map_to_enum = {
     "tiny" : MODEL_SIZE.TINY,
@@ -69,11 +56,6 @@ producer_cli.add_argument("--realsense_target_fps", type=int, default=30, choice
 producer_cli.add_argument("--cluster_predictor", type=str, default="sam2", choices=["yolo", "sam2",])
 producer_cli.add_argument("--point_cloud_budget", type=int, default=150000)
 producer_cli.add_argument(
-    "--low_dedup",
-    action="store_true",
-    help="Deduplicate LOW points by pre-quantized XYZ key before encoding.",
-)
-producer_cli.add_argument(
     "--min_keep_ratio_low",
     type=float,
     default=0.6,
@@ -97,8 +79,6 @@ producer_cli.add_argument(
     "--enable_depth_clip",
     action="store_true",
 )
-
-producer_cli.add_argument("--debug", type=bool, default=True)
 
 producer_cli.add_argument("--offline_mode", action="store_true", help="Run offline compression and exit.")
 
@@ -125,32 +105,9 @@ producer_cli.add_argument(
 producer_cli.add_argument("--offline_query_x", type=float, default=420.0, help="SAM query x pixel.")
 producer_cli.add_argument("--offline_query_y", type=float, default=210.0, help="SAM query y pixel.")
 producer_cli.add_argument("--offline_box_size", type=float, default=10.0, help="SAM query box half-size in pixels.")
-producer_cli.add_argument(
-    "--offline_debug_roi",
-    action="store_true",
-    help="Write ROI debug overlays/logs during offline compression.",
-)
-
-#openssl genrsa -out server.key 2048
-#openssl req -new -key server.key -out server.csr
-#openssl x509 -req -days 365 -in server.csr -signkey server.key -out server.crt
-#npm run build and copy folder
-# Server Arts
-producer_cli.add_argument(
-    "--server_host",        
-    type=str, 
-    default="195.251.252.45",
-    help="Broadcast server host"
-)
-
-producer_cli.add_argument(
-    "--server_port",        
-    type=int, 
-    default=9003,
-    help="Broadcast server port"
-)
 
 def getRequest(outputPath : Path, url : str) -> None:
+    # Stream the checkpoint download and save it to the requested folder.
     req = requests.get(url, stream=True, allow_redirects=True, timeout=10)
 
     if req.status_code != 200:
@@ -172,15 +129,3 @@ def getRequest(outputPath : Path, url : str) -> None:
     with tqdm.wrapattr(req.raw, "read", total=fileSize, desc=desc) as r_raw:
         with open(outputFile, "wb") as f:
             shutil.copyfileobj(r_raw, f)
-
-def exportDefaultConfig(path: Path):
-    import yaml
-
-    data = {
-        'point_budget' : 100000,
-        'num_clusters' : 2,
-        'cluster_header_byte_sz' : 6,
-    }
-
-    with open(path / 'config.yaml', 'w') as file:
-        yaml.dump(data, file)

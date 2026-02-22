@@ -2,8 +2,6 @@ import math
 import enum
 import numpy as np
 import mediapipe as mp
-import copy
-import threading
 
 from dataclasses import dataclass
 
@@ -20,8 +18,6 @@ from mediapipe.tasks.python.vision import (
 )
 
 from mediapipe.tasks.python import BaseOptions
-
-DEBUG = False
 
 #copied from the library directly
 class HandLandmark(enum.IntEnum):
@@ -127,8 +123,7 @@ class PointingGestureRecognizer:
         focal_length_x: float,
         focal_length_y: float,
         box_size: float=0.05,
-        delay_frames: int=15,
-        debug: bool=False
+        delay_frames: int=15
     ):
         assert(focal_length_x > 0 and focal_length_y > 0)
         assert(image_width > 0 and image_height > 0)
@@ -154,9 +149,6 @@ class PointingGestureRecognizer:
         self.focal_distance_y = focal_length_y
         self.box_size = box_size
         self.query_area = None
-        self.cb_result = None
-        self.lock = threading.Lock()
-        self.debug = debug
 
     def recognize(self, np_image: np.array, frame_timestamp_ms: int):
         for box in self.latest_bounding_boxes:
@@ -165,10 +157,6 @@ class PointingGestureRecognizer:
         self.landmarker.detect_async(image=Image(image_format=ImageFormat.SRGB, data=np_image), timestamp_ms=frame_timestamp_ms)
 
     def on_landmarks_v2(self, result: HandLandmarkerResult, image: Image, timestamp_ms: int) -> None:
-        if self.debug and result.hand_landmarks:
-            with self.lock:
-                self.cb_result = copy.deepcopy(result.hand_landmarks)
-
         if not result.hand_landmarks:
             # no hand → reset
             for i in range(self.options.num_hands):
@@ -188,13 +176,8 @@ class PointingGestureRecognizer:
                 aTob /= (np.linalg.norm(aTob) + 1.e-6)
                 return aTob
         
-            #angle_1 = angle_degree(to_vec(dip, tip), to_vec(dip, pip))
-            #angle_2 = angle_degree(to_vec(pip, dip), to_vec(pip, mcp))
-            #print(f'{angle_1} {angle_2}')
-            #return angle_1 > 155 and angle_2 > 155
             costheta1 = np.dot(to_vec(dip, tip), to_vec(dip, pip))
             costheta2 = np.dot(to_vec(pip, dip), to_vec(pip, mcp))
-            #print(f'{self.STRAIGHT_COS_THREASH} {costheta1} {costheta2}')
             return costheta1 < self.STRAIGHT_COS_THREASH and costheta2 < self.STRAIGHT_COS_THREASH
 
         def is_partial_fist(thump_tip, index_mcp, middle_finger_tip, ring_finder_tip, pinky_tip, wrist):
@@ -202,7 +185,6 @@ class PointingGestureRecognizer:
                 aTob = np.array([b.x, b.y]) - np.array([a.x, a.y])
                 return np.linalg.norm(aTob)
             
-            #wrist_dist_thump = dist(thump_tip, wrist)
             wrist_dist_index = dist(index_mcp, wrist)
             wrist_dist_middle = dist(middle_finger_tip, wrist)
             wrist_dist_ring = dist(ring_finder_tip, wrist)
@@ -211,10 +193,7 @@ class PointingGestureRecognizer:
             return \
                 wrist_dist_middle < wrist_dist_index and \
                 wrist_dist_ring < wrist_dist_index
-            #and \
-            #   wrist_dist_pinky < wrist_dist_index
 
-        # run the for loop in case we want multiple hands later
         for hand_index, hand_landmarks in enumerate(detected):
             is_pointing_hand: bool = \
                 is_finger_straight(
@@ -248,8 +227,6 @@ class PointingGestureRecognizer:
             bboxMin = np.array([minX, minY])
             bboxMax = np.array([maxX, maxY])
             DipToTip = tip_v - dip_v
-            #DipToTipDist = np.linalg.norm(DipToTip)
-            #DipToTip = DipToTip / DipToTipDist
             bboxMin = bboxMin + DipToTip * 0.8
             bboxMax = bboxMax + DipToTip * 0.8
             bboxMin = np.clip(bboxMin, 0.0, 1.0)

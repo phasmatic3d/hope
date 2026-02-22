@@ -1,27 +1,17 @@
-from enum import Enum, auto
 import time
 import os
-import mediapipe as mediap
 import cupy as cp
 import numpy as np
 import producer_cli as producer_cli
 
 from pathlib import Path
-from mediapipe.framework.formats import landmark_pb2
-
 from cuda_quantizer import CudaQuantizer, EncodingMode
 
 import pyrealsense2 as rs
-import cv2
 import sam2_camera_predictor as sam2_camera
 from ultralytics import YOLOE
 
-import concurrent.futures
-
-from concurrent.futures import (
-    ThreadPoolExecutor,
-    ProcessPoolExecutor
-)
+from concurrent.futures import ThreadPoolExecutor
 
 import multiprocessing as mp
 
@@ -31,11 +21,6 @@ from point_gesture_recognizer import PointingGestureRecognizer
 
 import torch
 import torch.nn.functional as F
-
-class VisualizationMode(Enum):
-    COLOR = auto()
-    DEPTH = auto()
-
 
 def apply_depth_clip_mask(depth_img: np.ndarray, enable_depth_clip: bool) -> np.ndarray:
     valid_mask = depth_img > 0
@@ -70,17 +55,11 @@ def camera_process(
         min_keep_ratio_low: float,
         min_depth_meter : float,
         max_depth_meter : float,
-        debug : bool,
-        low_dedup: bool,
         enable_depth_clip: bool) :
 
-    visualization_mode = VisualizationMode.COLOR
     quantizer = CudaQuantizer()
     thread_executor = ThreadPoolExecutor(max_workers=3)
     
-    if debug:
-        win_name = "RealSense vis"
-        cv2.namedWindow(win_name, cv2.WINDOW_AUTOSIZE)
 
     pipeline = rs.pipeline()
     cfg = rs.config()
@@ -101,8 +80,7 @@ def camera_process(
         focal_length_x= color_intrinsics.fx,
         focal_length_y=color_intrinsics.fy,
         box_size=0.02, 
-        delay_frames=15,
-        debug=debug)
+        delay_frames=15)
     
     depth_thresh = rs.threshold_filter(min_depth_meter, max_depth_meter)
     align = rs.align(rs.stream.color)
@@ -110,17 +88,12 @@ def camera_process(
 
     frame_id = 0
     frame_count = 0
-    log_interval_frames = 30
     roi = None
     d_prev_cluster = cp.zeros_like(d_shared_cluster)
     
     stream_in = cp.cuda.Stream(non_blocking=True)
     stream_med = cp.cuda.Stream(non_blocking=True)
     stream_out = cp.cuda.Stream(non_blocking=True)
-    
-    def gpu_subsample(d_indices, budget):
-        if d_indices.size <= budget: return d_indices
-        return cp.random.choice(d_indices, budget, replace=False)
     
     def fast_subsample(d_indices, budget):
         n = d_indices.size
@@ -169,9 +142,9 @@ def camera_process(
     pinned_np_med = np.frombuffer(pinned_mem_med, dtype=np.uint8)
     pinned_np_low = np.frombuffer(pinned_mem_low, dtype=np.uint8)
     
+    # Render-Broadcast loop
     try:
         while not stop_event.is_set():
-            ms_now = time.perf_counter()
             frame_count += 1
             frame_id += 1
             frames = pipeline.wait_for_frames()
@@ -188,11 +161,6 @@ def camera_process(
             color_img = np.asanyarray(color_frame.get_data())   
             depth_img = np.asanyarray(depth_frame.get_data())
             
-            color_img_display = None
-            
-            if debug:
-                color_img_display = color_img.copy()
-
             gesture_recognizer.recognize(color_img, frame_id)
 
             for bounding_box_normalized in gesture_recognizer.latest_bounding_boxes:
@@ -222,11 +190,7 @@ def camera_process(
             d_vertices = cp.frombuffer(v_buf, dtype=np.float32).reshape(num_points, 3)
             d_texcoords = cp.frombuffer(t_buf, dtype=np.float32).reshape(num_points, 2)
             
-            #t = time.perf_counter()
-            
-            depth_clip_start = time.perf_counter()
             valid_depth_mask = apply_depth_clip_mask(depth_img, enable_depth_clip)
-            depth_clip_ms = (time.perf_counter() - depth_clip_start) * 1000.0
             
             d_pixel_indices = (
                 (d_texcoords[:, 1] * (cmr_clr_height - 1)).astype(cp.int32) * cmr_clr_width +
@@ -237,7 +201,6 @@ def camera_process(
 
             d_valid_mask = cp.asarray(valid_depth_mask).ravel()
             d_valid_idx = cp.flatnonzero(d_valid_mask)
-            #d_prev_cluster_flat = d_prev_cluster.ravel()
 
             d_cluster_values = d_prev_cluster.ravel()[d_valid_idx]
             d_in_mask = (d_cluster_values == 1)
@@ -249,7 +212,7 @@ def camera_process(
             n_out = cp.count_nonzero(d_out_mask)
 
             n_out_budget_pool = int(n_out)
-            if low_dedup and int(n_out) > 0:
+            if int(n_out) > 0:
                 d_out_budget_idx = d_valid_idx[d_out_mask]
                 d_low_budget_points = d_vertices[d_out_budget_idx]
                 d_low_budget_colors = d_colors[d_out_budget_idx]
@@ -265,8 +228,6 @@ def camera_process(
             budget_in, budget_mid, budget_out = allocate_budgets(
                 int(n_in), int(n_mid), n_out_budget_pool, point_cloud_budget)
 
-            encode_window_start = time.perf_counter()
-            
             broadcast_buffers = {}
             num_chunks = 0
             futures_list: list[concurrent.futures.Future] = []
@@ -312,18 +273,15 @@ def camera_process(
                     if d_out_idx.size > 0:
                         d_low_points = d_vertices[d_out_idx]
                         d_low_colors = d_colors[d_out_idx]
-                        low_min_v = None
-                        low_scale = None
-                        if low_dedup:
-                            low_min_v, low_scale = quantizer._compute_low_quant_params(d_low_points)
-                            dedup_idx = quantizer.build_low_dedup_indices(
-                                d_low_points,
-                                d_low_colors,
-                                min_v=low_min_v,
-                                scale=low_scale,
-                            )
-                            d_low_points = d_low_points[dedup_idx]
-                            d_low_colors = d_low_colors[dedup_idx]
+                        low_min_v, low_scale = quantizer._compute_low_quant_params(d_low_points)
+                        dedup_idx = quantizer.build_low_dedup_indices(
+                            d_low_points,
+                            d_low_colors,
+                            min_v=low_min_v,
+                            scale=low_scale,
+                        )
+                        d_low_points = d_low_points[dedup_idx]
+                        d_low_colors = d_low_colors[dedup_idx]
 
                         if d_low_points.shape[0] > budget_out:
                             keep_pos = fast_subsample(cp.arange(d_low_points.shape[0], dtype=cp.int32), budget_out)
@@ -331,7 +289,6 @@ def camera_process(
                             d_low_colors = d_low_colors[keep_pos]
 
                         if d_low_points.shape[0] > 0:
-                            # Pass shared params when dedup is active; fallback stays unchanged.
                             res_view = quantizer.encode(
                                 stream_out,
                                 EncodingMode.LOW,
@@ -346,13 +303,9 @@ def camera_process(
 
 
             # Broadcast 
-            broadcast_window_start = time.perf_counter()
             for mode, (stream, size, buffer_view)  in broadcast_buffers.items() :
                 stream.synchronize()
-
-                #buffer_size = quantizer.estimate_buffer_size(mode, points_i.shape[0])
-                #print(f'mode: {mode} - size: {size} buffer: {len(buffer) / 1024}')
-                buffer_bytes = buffer_view.tobytes() if stream != cp.cuda.Stream.null else buffer_view
+                buffer_bytes = buffer_view.tobytes()
                 
                 header = (
                         num_chunks.to_bytes(1, 'little') + 
@@ -362,81 +315,8 @@ def camera_process(
                 futures_list += [thread_executor.submit(server.broadcast, header + buffer_bytes),]
                 byte_offset += len(buffer_bytes)
             
-            encode_time_ms = (time.perf_counter() - encode_window_start) * 1000.0
-            concurrent.futures.wait(futures_list)
-            broadcast_ms = (time.perf_counter() - broadcast_window_start) * 1000.0
-            if frame_count % log_interval_frames == 0:
-                if enable_depth_clip:
-                    print(
-                        f"[online] frame={frame_count} chunks={num_chunks} "
-                        f"depth_clip_ms={depth_clip_ms:.3f} encode_time_ms={encode_time_ms:.3f} "
-                        f"broadcast_ms={broadcast_ms:.3f}")
-                else:
-                    print(
-                        f"[online] frame={frame_count} chunks={num_chunks} "
-                        f"encode_time_ms={encode_time_ms:.3f} broadcast_ms={broadcast_ms:.3f}")
-            #print(f'->{(time.perf_counter() - t) * 1000}')
-            
-            if debug:
-                if d_prev_cluster is not None:
-                    cluster_cpu = cp.asnumpy(d_prev_cluster)
-                    color_img_display[cluster_cpu[:, :, 0] == 1, 2] = 255
-                    color_img_display[cluster_cpu[:, :, 0] == 2, 1] = 255
-                    
-                frame_s = (time.perf_counter() - ms_now)
-                fps_text = f"{int(1 / frame_s)}fps / {frame_s * 1000:.2f}ms"
-                cv2.putText(color_img_display, fps_text, (cmr_clr_width - 350, cmr_clr_height - 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-
-                if roi is not None:
-                    cv2.rectangle(color_img_display, (roi[0], roi[1]), (roi[2], roi[3]), (0, 255, 0), 2)
-                    roi = None
-                    
-                def ensure_landmark_list(data):
-                    if isinstance(data, landmark_pb2.NormalizedLandmarkList):
-                        return data
-                    elif isinstance(data, list):
-                        return landmark_pb2.NormalizedLandmarkList(
-                            landmark=[landmark_pb2.NormalizedLandmark(x=lm.x, y=lm.y, z=lm.z) for lm in data]
-                        )
-                    else:
-                        raise TypeError("Unexpected landmark data type")
-
-                mp_drawing = mediap.solutions.drawing_utils
-                mp_hands = mediap.solutions.hands
-                
-                with gesture_recognizer.lock:
-                    if gesture_recognizer.cb_result is not None:
-                        for hand_landmark in gesture_recognizer.cb_result:
-                            hand_landmark = ensure_landmark_list(hand_landmark)
-                            mp_drawing.draw_landmarks(
-                                image=color_img_display,
-                                landmark_list=hand_landmark,
-                                connections=mp_hands.HAND_CONNECTIONS,
-                                landmark_drawing_spec=mp_drawing.DrawingSpec(color=(0,255,0), thickness=2, circle_radius=2),
-                                connection_drawing_spec=mp_drawing.DrawingSpec(color=(255,0,0), thickness=2))
-                    gesture_recognizer.cb_result = None
-
-                if visualization_mode is VisualizationMode.DEPTH:
-                    if depth_img.max() > 0:
-                        depth_8u = cv2.convertScaleAbs(depth_img, alpha=255.0 / depth_img.max())
-                        depth_colormap = cv2.applyColorMap(depth_8u, cv2.COLORMAP_JET)
-                        color_img_display = depth_colormap
-
-                cv2.imshow(win_name, cv2.cvtColor(cv2.resize(color_img_display, (1280, 720)), cv2.COLOR_RGB2BGR))
-                key = cv2.waitKey(1)
-                
-                if key in (ord('q'), 27): 
-                    break
-                elif key == ord('d'):
-                    visualization_mode = (
-                        VisualizationMode.DEPTH if visualization_mode == VisualizationMode.COLOR else VisualizationMode.COLOR
-                    )
-            
     finally:
         pipeline.stop()
-        cv2.destroyAllWindows()
-        print("Camera process stopped")
 
 def thread_worker_sam2(
         path_to_yaml, path_to_chkp, device, image_size,
@@ -572,7 +452,7 @@ def thread_worker_yoloe(
         roi_init = False
         cls_index = 0
         d_cluster[:] = 0
-        
+
         dummy = np.zeros((384, 640, 3), dtype=np.uint8)
         result = model.predict(dummy, conf=0.1, verbose=False) 
         binary_mask = torch.zeros(size=(384, 640), dtype=torch.bool, device=model.device)
@@ -581,8 +461,6 @@ def thread_worker_yoloe(
         while not stop_event.is_set():
             if ready_frame_event.is_set():
                 frame_cpu = cp.asnumpy(d_frame) 
-                #t_frame = torch.as_tensor(d_frame, device=device).permute(2, 0, 1).unsqueeze(0).type(torch.float32) / 255
-                #t_frame = F.interpolate(t_frame, size=(640, 640), mode='bilinear', align_corners=False)
                 result = model.predict(frame_cpu, conf=0.1, verbose=False)[0]
 
                 if ready_roi_event.is_set():
@@ -625,7 +503,6 @@ def launch_processes(server, args, device : str) -> None:
     cmr_clr_width, cmr_clr_height = producer_cli.map_to_camera_res[args.realsense_clr_stream]
     cmr_depth_width, cmr_depth_height = producer_cli.map_to_camera_res[args.realsense_depth_stream]
     cmr_fps = args.realsense_target_fps
-    debug = args.debug
 
     stop_event = mp.Event()
     ready_frame_event = mp.Event()
@@ -677,7 +554,6 @@ def launch_processes(server, args, device : str) -> None:
                   ipc_queue,
                   (cmr_clr_height, cmr_clr_width), stop_event, ready_frame_event, ready_cluster_event, ready_roi_event, predictor_event))
     else:
-        print('Failed to parse predictor')
         return
 
     try:
@@ -699,14 +575,11 @@ def launch_processes(server, args, device : str) -> None:
             args.min_keep_ratio_low,
             args.min_depth_meter,
             args.max_depth_meter,
-            debug,
-            args.low_dedup,
             args.enable_depth_clip)
 
         predictor_proc.terminate()
         predictor_proc.join()
     except KeyboardInterrupt:
-        print("Stopping processes...")
         stop_event.set()
         if predictor_proc.is_alive():
             predictor_proc.terminate()

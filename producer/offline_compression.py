@@ -53,7 +53,8 @@ def read_ply_ascii(path: Path) -> tuple[np.ndarray, np.ndarray]:
         }
         dtype_fields = [(name, type_map[prop]) for prop, name in properties]
         ply_dtype = np.dtype(dtype_fields)
-        # Read the binary vertex payload in one shot for speed.
+
+
         raw = handle.read(vertex_count * ply_dtype.itemsize)
         data = np.frombuffer(raw, dtype=ply_dtype, count=vertex_count)
 
@@ -101,6 +102,7 @@ def write_ply_binary(path: Path, xyz: np.ndarray, rgb: np.ndarray) -> None:
 
 
 def apply_depth_clip_mask(points_xyz: np.ndarray, enable_depth_clip: bool) -> np.ndarray:
+    """Return a mask for points that pass the optional depth clip."""
     if not enable_depth_clip:
         return np.ones(points_xyz.shape[0], dtype=bool)
     depth = points_xyz[:, 2]
@@ -326,63 +328,8 @@ def fast_subsample(d_indices: cp.ndarray, budget: int) -> cp.ndarray:
     return d_indices[idx_to_keep]
 
 
-def write_depth_png(path: Path, depth_buf: np.ndarray) -> None:
-    """Write depth to a 16-bit PNG after min/max normalization."""
-    # Flattened buffers become a single-row image so they still serialize.
-    if depth_buf.ndim == 1:
-        depth_buf = depth_buf.reshape(1, -1)
-    depth_min = float(depth_buf.min()) if depth_buf.size > 0 else 0.0
-    depth_max = float(depth_buf.max()) if depth_buf.size > 0 else 1.0
-    scale = 65535.0 / (depth_max - depth_min) if depth_max > depth_min else 1.0
-    depth_u16 = np.clip((depth_buf - depth_min) * scale, 0.0, 65535.0).astype(np.uint16)
-    cv2.imwrite(str(path), depth_u16)
-
-
-def write_rgb_png(path: Path, rgb_buf: np.ndarray) -> None:
-    """Write RGB data to PNG, reshaping single-row buffers if needed."""
-    # Flattened buffers become a single-row image so they still serialize.
-    if rgb_buf.ndim == 2:
-        rgb_buf = rgb_buf.reshape(1, -1, 3)
-    rgb_u8 = rgb_buf.astype(np.uint8, copy=False)
-    cv2.imwrite(str(path), cv2.cvtColor(rgb_u8, cv2.COLOR_RGB2BGR))
-
-
-def rebuild_image_buffers(
-    xyz_points: np.ndarray,
-    rgb_points: np.ndarray,
-    point_indices: np.ndarray,
-    image_shape: tuple[int, int],
-) -> tuple[np.ndarray, np.ndarray]:
-    """Scatter decoded point buffers back to camera-sized depth and RGB images."""
-    height, width = image_shape
-    # Keep a dense camera grid so PNGs are always 2D images.
-    depth_img = np.zeros((height, width), dtype=np.float32)
-    rgb_img = np.zeros((height, width, 3), dtype=np.uint8)
-    if xyz_points.size == 0 or point_indices.size == 0:
-        return depth_img, rgb_img
-
-    # Map 1D point indices into 2D pixel coordinates.
-    rows = point_indices // width
-    cols = point_indices % width
-    valid = (rows >= 0) & (rows < height) & (cols >= 0) & (cols < width)
-    depth_img[rows[valid], cols[valid]] = xyz_points[valid, 2]
-    rgb_img[rows[valid], cols[valid]] = rgb_points[valid]
-    return depth_img, rgb_img
-
-
-def write_roi_debug_overlay(path: Path, color_img: np.ndarray, roi_box: tuple[int, int, int, int], label: str) -> None:
-    """Write a debug overlay with the ROI rectangle and label."""
-    # Copy before drawing so the original frame stays untouched.
-    overlay = color_img.copy()
-    x1, y1, x2, y2 = roi_box
-    cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 255, 0), 2)
-    cv2.putText(overlay, label, (x1, max(0, y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-    cv2.imwrite(str(path), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
-
-
 def bytes_to_mb(num_bytes: int) -> float:
-    """Convert raw byte counts to MiB for CSV reporting."""
-    # Keep this conversion centralized so CSV units stay consistent.
+    """Convert byte counts to MiB for report rows."""
     return float(num_bytes) / (1024.0 * 1024.0)
 
 
@@ -397,17 +344,12 @@ def load_frame_rgb(input_root: Path, frame_stem: str, fallback_rgb: np.ndarray) 
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
 
-def load_depth_valid_indices(input_root: Path, frame_stem: str, depth_shape: tuple[int, int]) -> np.ndarray | None:
+def load_depth_valid_indices(input_root: Path, frame_stem: str) -> np.ndarray:
     """Load flat valid-depth pixel indices for a frame if a depth PNG exists."""
-    # Offline exports can carry frame_XXXX_depth.png next to frame_XXXX.ply.
+
     depth_path = input_root / f"{frame_stem}_depth.png"
     depth_img = cv2.imread(str(depth_path), cv2.IMREAD_UNCHANGED)
-    if depth_img is None:
-        return None
-    if depth_img.ndim == 3:
-        depth_img = depth_img[..., 0]
-    if tuple(depth_img.shape[:2]) != depth_shape:
-        return None
+
     # PLY generation keeps depth>0 points, so use the same mask ordering.
     return np.flatnonzero(depth_img.reshape(-1) > 0).astype(np.int32, copy=False)
 
@@ -422,7 +364,6 @@ def run_offline_compression(args, server=None) -> None:
     output_root.mkdir(parents=True, exist_ok=True)
     print(f"[offline] input: {input_root} output: {output_root}")
 
-    # Bind the GPU once so CuPy ops stay on the same device.
     cp.cuda.Device(0).use()
     cmr_clr_width, cmr_clr_height = producer_cli.map_to_camera_res[args.realsense_clr_stream]
     cmr_depth_width, cmr_depth_height = producer_cli.map_to_camera_res[args.realsense_depth_stream]
@@ -443,6 +384,7 @@ def run_offline_compression(args, server=None) -> None:
     pinned_np_med = np.frombuffer(pinned_mem_med, dtype=np.uint8)
     pinned_np_low = np.frombuffer(pinned_mem_low, dtype=np.uint8)
 
+    # Keep one report per offline run inside the dataset output folder.
     csv_path = output_root / "compression_report.csv"
     csv_file = open(csv_path, "w", newline="", encoding="utf-8")
     csv_writer = csv.writer(csv_file)
@@ -509,6 +451,7 @@ def run_offline_compression(args, server=None) -> None:
     ply_files = sorted(input_root.glob("*.ply"))
     for frame_idx, ply_path in enumerate(ply_files):
         print(f"[offline] frame {frame_idx + 1}/{len(ply_files)}: loading {ply_path.name}")
+
         xyz_raw, rgb_raw = read_ply_ascii(ply_path)
         depth_clip_start = time.perf_counter()
         depth_keep_mask = apply_depth_clip_mask(xyz_raw, args.enable_depth_clip)
@@ -528,57 +471,29 @@ def run_offline_compression(args, server=None) -> None:
         detection_ms = 0.0
         if predictor is not None and args.cluster_predictor == "yolo":
             # YOLO keeps per-frame segmentation in offline mode.
-            print(f"[offline] running {args.cluster_predictor} segmentation on {ply_path.name}")
             detect_start = time.perf_counter()
-            if args.cluster_predictor == "yolo":
-                # Offline YOLO combines masks per class, so log that no ROI is used.
-                if args.offline_debug_roi:
-                    print("[offline][roi] yolo uses combined masks for the target class (no explicit ROI).")
-                result = predictor.predict(color_img, conf=0.1, verbose=False)[0]
-                # Keep the mask accumulation on torch so shape fixes can stay on GPU.
-                mask = torch.zeros((cmr_clr_height, cmr_clr_width), dtype=torch.bool, device=args.device)
-                if result.masks is not None:
-                    classes = result.boxes.cls.cpu().numpy().astype(np.int32)
-                    for box_i, cls_i in enumerate(classes):
-                        if cls_i != yolo_class_idx:
-                            continue
-                        yolo_mask = result.masks.data[box_i] > 0.5
-                        # YOLO can output a fixed inference shape, so remap to camera resolution.
-                        if tuple(yolo_mask.shape[-2:]) != (cmr_clr_height, cmr_clr_width):
-                            yolo_mask = F.interpolate(
-                                yolo_mask.unsqueeze(0).unsqueeze(0).float(),
-                                size=(cmr_clr_height, cmr_clr_width),
-                                mode="nearest",
-                            ).squeeze(0).squeeze(0) > 0.5
-                        mask |= yolo_mask
-                    if args.offline_debug_roi:
-                        # Draw detected boxes so the ROI-free selection is visible.
-                        yolo_debug = color_img.copy()
-                        for box in result.boxes.xyxy.cpu().numpy().astype(np.int32):
-                            x1, y1, x2, y2 = box.tolist()
-                            cv2.rectangle(yolo_debug, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                        debug_path = output_root / f"{ply_path.stem}_yolo_roi_debug.png"
-                        cv2.imwrite(str(debug_path), cv2.cvtColor(yolo_debug, cv2.COLOR_RGB2BGR))
-                cluster_map = build_cluster_map(mask, (cmr_clr_height, cmr_clr_width))
-                prev_cluster = cluster_map
+            result = predictor.predict(color_img, conf=0.1, verbose=False)[0]
+            # Keep the mask accumulation on torch so shape fixes can stay on GPU.
+            mask = torch.zeros((cmr_clr_height, cmr_clr_width), dtype=torch.bool, device=args.device)
+            if result.masks is not None:
+                classes = result.boxes.cls.cpu().numpy().astype(np.int32)
+                for box_i, cls_i in enumerate(classes):
+                    if cls_i != yolo_class_idx:
+                        continue
+                    yolo_mask = result.masks.data[box_i] > 0.5
+                    # YOLO can output a fixed inference shape, so remap to camera resolution.
+                    if tuple(yolo_mask.shape[-2:]) != (cmr_clr_height, cmr_clr_width):
+                        yolo_mask = F.interpolate(
+                            yolo_mask.unsqueeze(0).unsqueeze(0).float(),
+                            size=(cmr_clr_height, cmr_clr_width),
+                            mode="nearest",
+                        ).squeeze(0).squeeze(0) > 0.5
+                    mask |= yolo_mask
+            cluster_map = build_cluster_map(mask, (cmr_clr_height, cmr_clr_width))
+            prev_cluster = cluster_map
             detection_ms = (time.perf_counter() - detect_start) * 1000.0
         elif predictor is not None and args.cluster_predictor == "sam2" and not roi_init:
-            # SAM2 initializes once from the CLI ROI and then switches to tracking.
-            print(f"[offline] initializing {args.cluster_predictor} ROI on {ply_path.name}")
             detect_start = time.perf_counter()
-            if args.offline_debug_roi:
-                print(
-                    f"[offline][roi] sam2 prompt center=({args.offline_query_x:.1f}, {args.offline_query_y:.1f}) "
-                    f"box={args.offline_box_size:.1f}px"
-                )
-                roi_box = (
-                    int(args.offline_query_x - args.offline_box_size),
-                    int(args.offline_query_y - args.offline_box_size),
-                    int(args.offline_query_x + args.offline_box_size),
-                    int(args.offline_query_y + args.offline_box_size),
-                )
-                overlay_path = output_root / f"{ply_path.stem}_sam2_roi_debug.png"
-                write_roi_debug_overlay(overlay_path, color_img, roi_box, "SAM2 ROI")
             roi_center = torch.tensor(
                 [
                     [args.offline_query_x, args.offline_query_y],
@@ -602,8 +517,6 @@ def run_offline_compression(args, server=None) -> None:
             roi_init = True
             detection_ms = (time.perf_counter() - detect_start) * 1000.0
         elif predictor is not None and args.cluster_predictor == "sam2" and roi_init:
-            # After init, every frame uses SAM2 tracking only.
-            print(f"[offline] tracking {args.cluster_predictor} mask on {ply_path.name}")
             detect_start = time.perf_counter()
             _, out_mask_logits = predictor.track(torch.as_tensor(color_img, device=args.device).permute(2, 0, 1))
             mask = out_mask_logits[0] > 0.0
@@ -625,26 +538,12 @@ def run_offline_compression(args, server=None) -> None:
 
         raw_flat_indices_cpu = load_depth_valid_indices(
             input_root,
-            ply_path.stem,
-            (cmr_depth_height, cmr_depth_width),
+            ply_path.stem
         )
-        if raw_flat_indices_cpu is None:
-            if d_vertices.shape[0] == cmr_depth_width * cmr_depth_height:
-                flat_indices_cpu = np.arange(d_vertices.shape[0], dtype=np.int32)
-            else:
-                flat_indices_cpu = np.arange(d_vertices.shape[0], dtype=np.int32)
-                print(
-                    f"[offline][warn] missing {ply_path.stem}_depth.png; using vertex-order indices for rasterization"
-                )
-        elif raw_flat_indices_cpu.shape[0] == xyz_raw.shape[0]:
+        if raw_flat_indices_cpu.shape[0] == xyz_raw.shape[0]:
             flat_indices_cpu = raw_flat_indices_cpu[depth_keep_mask]
         elif raw_flat_indices_cpu.shape[0] == d_vertices.shape[0]:
             flat_indices_cpu = raw_flat_indices_cpu
-        else:
-            print(
-                f"[offline][warn] depth index count mismatch on {ply_path.name}; using vertex-order indices"
-            )
-            flat_indices_cpu = np.arange(d_vertices.shape[0], dtype=np.int32)
 
         cluster_flat = cluster_for_points.reshape(-1).cpu().numpy()
         point_cluster_cpu = cluster_flat[flat_indices_cpu]
@@ -661,7 +560,7 @@ def run_offline_compression(args, server=None) -> None:
         n_out = int(cp.count_nonzero(d_out_mask))
 
         n_out_budget_pool = n_out
-        if args.low_dedup and n_out > 0:
+        if n_out > 0:
             d_out_budget_idx = d_point_idx[d_out_mask]
             d_low_budget_points = d_vertices[d_out_budget_idx]
             d_low_budget_colors = d_colors[d_out_budget_idx]
@@ -674,7 +573,7 @@ def run_offline_compression(args, server=None) -> None:
             )
             n_out_budget_pool = int(d_low_budget_dedup_idx.shape[0])
 
-        # Derive this frame budget from target fps and available bandwidth.
+        # Derive the frame budget from target fps and available bandwidth.
         derived_budget, target_frame_bytes = derive_offline_point_budget(
             quantizer,
             n_in,
@@ -696,28 +595,13 @@ def run_offline_compression(args, server=None) -> None:
             args.min_keep_ratio_med,
             args.min_keep_ratio_low,
         )
-        estimated_payload = estimate_compressed_bytes_for_budget(
-            quantizer,
-            n_in,
-            n_mid,
-            n_out_budget_pool,
-            total_budget,
-            args.min_keep_ratio_high,
-            args.min_keep_ratio_med,
-            args.min_keep_ratio_low,
-        )
-        print(
-            f"[offline] budgets for {ply_path.name}: in={budget_in} mid={budget_mid} out={budget_out} "
-            f"(total={total_budget}, est={estimated_payload}B, target={target_frame_bytes}B @ {args.offline_target_fps:.2f}fps)"
-        )
-
-
-        # This mirrors online framing so the web client can process chunks in real-time order.
+        
         frame_id_byte = frame_idx % 255
         byte_offset = 0
 
         broadcast_buffers = {}
-        # These metrics keep LOW pre/post dedup visible in the CSV report.
+
+        # These metrics keep LOW pre/post dedup for CSV report.
         low_points_before_dedup = 0
         low_points_after_dedup = 0
         low_size_bytes_before_dedup = 0
@@ -771,20 +655,16 @@ def run_offline_compression(args, server=None) -> None:
                     d_low_points = d_vertices[d_out_point_idx]
                     d_low_colors = d_colors[d_out_point_idx]
                     d_low_flat_idx = d_out_flat_idx
-                    low_min_v = None
-                    low_scale = None
-                    if args.low_dedup:
-                        # Compute once so dedup and encode quantize with the same LOW range.
-                        low_min_v, low_scale = quantizer._compute_low_quant_params(d_low_points)
-                        dedup_idx = quantizer.build_low_dedup_indices(
-                            d_low_points,
-                            d_low_colors,
-                            min_v=low_min_v,
-                            scale=low_scale,
-                        )
-                        d_low_points = d_low_points[dedup_idx]
-                        d_low_colors = d_low_colors[dedup_idx]
-                        d_low_flat_idx = d_low_flat_idx[dedup_idx]
+                    low_min_v, low_scale = quantizer._compute_low_quant_params(d_low_points)
+                    dedup_idx = quantizer.build_low_dedup_indices(
+                        d_low_points,
+                        d_low_colors,
+                        min_v=low_min_v,
+                        scale=low_scale,
+                    )
+                    d_low_points = d_low_points[dedup_idx]
+                    d_low_colors = d_low_colors[dedup_idx]
+                    d_low_flat_idx = d_low_flat_idx[dedup_idx]
 
                     low_points_after_dedup = int(d_low_points.shape[0])
 
@@ -819,7 +699,6 @@ def run_offline_compression(args, server=None) -> None:
         assembled_xyz: list[np.ndarray] = []
         assembled_rgb: list[np.ndarray] = []
         assembled_idx: list[np.ndarray] = []
-        assembled_buffers: list[bytes] = []
         encoded_size_by_mode = {
             EncodingMode.HIGH: 0,
             EncodingMode.MED: 0,
@@ -857,60 +736,32 @@ def run_offline_compression(args, server=None) -> None:
             concurrent.futures.wait(futures_list)
 
         broadcast_ms = (time.perf_counter() - broadcast_window_start) * 1000.0
-        if args.enable_depth_clip:
-            print(
-                f"[offline] depth_clip_ms={depth_clip_ms:.3f} "
-                f"encode_time_ms={encode_time_ms:.3f} broadcast_ms={broadcast_ms:.3f}"
-            )
-        else:
-            print(f"[offline] encode_time_ms={encode_time_ms:.3f} broadcast_ms={broadcast_ms:.3f}")
 
         # server-side decode
         for mode, (_, count, buffer_view, idx_gpu) in broadcast_buffers.items():
             idx_cpu = cp.asnumpy(idx_gpu).astype(np.int32, copy=False)
             buffer_bytes = buffer_view.tobytes()
-            mode_name = mode.name.lower()
-            print(f"[offline] decoding {mode_name} for {ply_path.name} ({int(count)} points)")
             # Decode each importance tier, then assemble into a single output.
             xyz_dec, rgb_dec, _ = decode_chunk(buffer_bytes)
             assembled_xyz.append(xyz_dec)
             assembled_rgb.append(rgb_dec)
             assembled_idx.append(idx_cpu)
-            assembled_buffers.append(buffer_bytes)
 
         if assembled_xyz:
-            # Sort by original pixel index so PLY and PNG outputs share the same point order.
+            # Sort by original pixel index so merged chunks stay in capture order.
             xyz_all = np.concatenate(assembled_xyz, axis=0)
             rgb_all = np.concatenate(assembled_rgb, axis=0)
             idx_all = np.concatenate(assembled_idx, axis=0)
             order = np.argsort(idx_all)
             xyz_all = xyz_all[order]
             rgb_all = rgb_all[order]
-            idx_all = idx_all[order]
-            buffer_all = b"".join(assembled_buffers)
         else:
             # Fall back to empty outputs if no clusters were encoded.
             xyz_all = np.zeros((0, 3), dtype=np.float32)
             rgb_all = np.zeros((0, 3), dtype=np.uint8)
-            idx_all = np.zeros((0,), dtype=np.int32)
-            buffer_all = b""
-
-        out_bin = output_root / f"{ply_path.stem}.bin"
-        out_bin.write_bytes(buffer_all)
 
         out_ply = output_root / f"{ply_path.stem}.ply"
         write_ply_binary(out_ply, xyz_all, rgb_all)
-
-        depth_path = output_root / f"{ply_path.stem}_depth.png"
-        rgb_path = output_root / f"{ply_path.stem}_rgb.png"
-        depth_buf, rgb_buf = rebuild_image_buffers(
-            xyz_all,
-            rgb_all,
-            idx_all,
-            (cmr_depth_height, cmr_depth_width),
-        )
-        write_depth_png(depth_path, depth_buf)
-        write_rgb_png(rgb_path, rgb_buf)
 
         original_points = int(xyz_raw.shape[0])
         points_after_depth_clip = int(xyz.shape[0])
@@ -920,18 +771,18 @@ def run_offline_compression(args, server=None) -> None:
         low_size_mb = bytes_to_mb(low_size_bytes_before_dedup)
         low_size_after_dedup_mb = bytes_to_mb(encoded_size_by_mode[EncodingMode.LOW])
         total_cluster_size_mb = high_size_mb + mid_size_mb + low_size_after_dedup_mb
-        # Each cluster ratio compares kept points against cluster source points.
         keep_ratio_high = float(kept_points_by_mode[EncodingMode.HIGH]) / n_in if n_in > 0 else 0.0
         keep_ratio_mid = float(kept_points_by_mode[EncodingMode.MED]) / n_mid if n_mid > 0 else 0.0
-        # LOW floors are allocated against the post-dedup pool when dedup is enabled.
         low_points_kept_for_ratio = kept_points_by_mode[EncodingMode.LOW]
-        low_points_base_for_ratio = low_points_after_dedup if args.low_dedup else n_out
-        keep_ratio_low = float(low_points_kept_for_ratio) / low_points_base_for_ratio if low_points_base_for_ratio > 0 else 0.0
-        # Track final post-subsampling point counts per cluster and total.
+        low_points_base_for_ratio = low_points_after_dedup
+        keep_ratio_low = (
+            float(low_points_kept_for_ratio) / low_points_base_for_ratio
+            if low_points_base_for_ratio > 0
+            else 0.0
+        )
         points_cluster_high_ss = kept_points_by_mode[EncodingMode.HIGH]
         points_cluster_mid_ss = kept_points_by_mode[EncodingMode.MED]
         points_cluster_low_ss = kept_points_by_mode[EncodingMode.LOW]
-        # This tracks total source points after LOW dedup, before any point-budget subsampling.
         points_total_after_dedup = n_in + n_mid + low_points_after_dedup
         points_cluster_total_ss = points_cluster_high_ss + points_cluster_mid_ss + points_cluster_low_ss
 

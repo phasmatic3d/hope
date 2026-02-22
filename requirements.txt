@@ -1,18 +1,17 @@
 --extra-index-url https://download.pytorch.org/whl/cu128
-ultralytics
+ultralytics==8.3.169
 
-torch
-torchvision
-torchaudio
+torch==2.7.1+cu128
+torchvision==0.22.1+cu128
+torchaudio==2.7.1+cu128
 
-requests
-opencv-python
-numpy
-pyrealsense2
-mediapipe
-tqdm
-omegaconf
-hydra-core
+requests==2.32.4
+opencv-python==4.12.0.88
+numpy==2.2.6
+pyrealsense2==2.55.1.6486
+mediapipe==0.10.14
+tqdm==4.67.1
+omegaconf==2.3.0
+hydra-core==1.3.2
 
-rich
-cupy-cuda12x # change this if different
+cupy-cuda12x==13.4.1

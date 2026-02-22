@@ -110,9 +110,11 @@ class CudaQuantizer:
             float orig_x = vertices[i * 3 + 0];
             float orig_y = vertices[i * 3 + 1];
             float orig_z = vertices[i * 3 + 2];
+            float depth_z = orig_z;
+            
             const float x = __saturatef((orig_x - min_x) * scale_x);
             const float y = __saturatef((orig_y - min_y) * scale_y);
-            const float z = __saturatef((orig_z - min_z) * scale_z);
+            const float z = __saturatef((depth_z - min_z) * scale_z);
             
             // 11 bits each for X,Y (2047) and 10 for Z (1023)
             const uint32_t max_x = (1 << 11) - 1;

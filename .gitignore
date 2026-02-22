@@ -28,13 +28,15 @@ __pycache__/
 *.html
 *.csr
 *.rar
+*.ply
 
-/addons/gesture_recognition/src/gesture_recognition.egg-info
-/addons/gesture_recognition/src/gesture_recognition.egg-info
 producer/mobileclip_blt.ts
 producer/src/yoloe-11l-seg.pt
 producer/src/broadcaster_wrapper/public
-producer/exported_PCs
+producer/exported_PCs/**/*.ply
+producer/exported_PCs/**/*.csv
+producer/exported_PCs/**/*.png
+
 
 
 producer/yoloe-11l-seg.pt

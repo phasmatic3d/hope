@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import { openConnection } from './transmissionWS';
-//import { openConnection } from './transmissionWebRTC';
 import { FreeRoamController } from './FreeRoamController';
 import { createGPUPointCloud } from './gpu_pc_renderer'; 
 import { createPerfCsvExporter } from './perf_csv_export';
@@ -72,7 +71,6 @@ async function setupScene_gpu() {
         if (!completed) return;
 
         perfExporter.addSample(completed.frameId, completed.decodeMs, renderMs);
-        console.log(`[Perf] Frame ${completed.frameId} Decode(full): ${completed.decodeMs.toFixed(3)}ms | Render: ${renderMs.toFixed(3)}ms`);
     }
 
     /**
