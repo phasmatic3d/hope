@@ -153,6 +153,8 @@ It writes outputs to:
   - A `compression_report.csv` with metrics for every .ply processing
   
 Use the offline pipeline for exporting metrics for .ply video streams.
+**Note:** In order for the offline pipeline to work after launching the server with `offline_mode`, one must connect to `https://<server-ip>:9004` using the browser of their choice for the streaming to begin. Otherwise, the server stays inactive.
+
 
 
 ## CLI usage
@@ -179,7 +181,7 @@ python producer.py --cluster_predictor sam2 --enable_depth_clip
 ## Reproducing experiment results
 Our dataset can be downloaded at `https://drive.google.com/file/d/1RqNINdILSmxQMbUaw2XDLmKt4yR2F0cy/view?usp=sharing`. It contains:
 - The original .ply video stream.
-- The uniformaly (naïvely) subsampled .ply video stream (UNIFORM suffix).
+- The uniformly (naïvely) subsampled .ply video stream (UNIFORM suffix).
 - The .ply video stream subsampled with our importance-based scheme (IMPORTANCE suffix).
 
 To reproduce the results:
@@ -214,6 +216,6 @@ If you use HOPE in your research projects or application, please use the followi
 ### Main paper
 `[TODO: PUT PAPER CITATION HERE]`
 
-### Hope Repo
+### Hope Repository
 `[TODO: PUT REPO CITATION HERE]`
 
