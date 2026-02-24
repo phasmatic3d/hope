@@ -2,7 +2,6 @@ build/
 dist/
 .venv/
 sam2/
-gesture_recognizer.task
 checkpoints/
 .vscode/
 draco/
