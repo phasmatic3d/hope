@@ -5,6 +5,24 @@ const HEADER_SIZE = 32;
 const MODE_HIGH = 0;
 const MODE_MED = 1;
 const MODE_LOW = 2;
+const DRACO_MAGIC = [68, 82, 67, 79];
+
+
+
+
+async function loadDracoDecoderModule() {
+    try {
+        const imported = await import('three/examples/jsm/libs/draco/draco_decoder.js');
+        const draco = (imported as any).default ?? imported;
+        const createDecoderModule = draco.createDecoderModule ?? draco;
+        const module = await createDecoderModule({});
+        console.info('[draco] decoder module loaded');
+        return module;
+    } catch (err) {
+        console.error('[draco] failed to initialize decoder module', err);
+        return null;
+    }
+}
 
 const highQShader = {
     uniforms: {
@@ -43,7 +61,7 @@ const highQShader = {
             vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
             gl_Position = projectionMatrix * mvPosition;
 
-            float dist = -mvPosition.z; 
+            float dist = -mvPosition.z;
             float closeDist = 0.01;
             float farDist = 4.0;
             float t = clamp((dist - closeDist) / (farDist - closeDist), 0.0, 1.0);
@@ -111,7 +129,36 @@ const standardShader = {
             vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
             gl_Position = projectionMatrix * mvPosition;
 
-            float dist = -mvPosition.z; 
+            float dist = -mvPosition.z;
+            float closeDist = 0.01;
+            float farDist = 4.0;
+            float t = clamp((dist - closeDist) / (farDist - closeDist), 0.0, 1.0);
+            gl_PointSize = mix(10.0, 1.0, t);
+        }
+    `,
+    fragmentShader: `
+        precision highp float;
+        in vec3 vColor;
+        out vec4 fragColor;
+        void main() {
+            fragColor = vec4(vColor, 1.0);
+        }
+    `
+};
+
+
+const dracoShader = {
+    vertexShader: `
+        precision highp float;
+
+
+        out vec3 vColor;
+
+        void main() {
+            vColor = color;
+            vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+            gl_Position = projectionMatrix * mvPosition;
+            float dist = -mvPosition.z;
             float closeDist = 0.01;
             float farDist = 4.0;
             float t = clamp((dist - closeDist) / (farDist - closeDist), 0.0, 1.0);
@@ -161,6 +208,15 @@ export function createGPUPointCloud(scene: THREE.Scene) {
         fragmentShader: standardShader.fragmentShader,
         glslVersion: THREE.GLSL3 
     });
+    const matDraco = new THREE.ShaderMaterial({
+        vertexShader: dracoShader.vertexShader,
+        fragmentShader: dracoShader.fragmentShader,
+        glslVersion: THREE.GLSL3,
+        vertexColors: true
+    });
+    let dracoDecoderModule: any = null;
+    let dracoUnavailableLogged = false;
+    loadDracoDecoderModule().then((m: any) => { dracoDecoderModule = m; });
 
     function createMesh() {
         const geo = new THREE.BufferGeometry();
@@ -272,6 +328,62 @@ export function createGPUPointCloud(scene: THREE.Scene) {
         geo.setDrawRange(0, numPoints);
     }
 
+    function decodeDracoPayload(payload: Uint8Array) {
+        if (!dracoDecoderModule) {
+            if (!dracoUnavailableLogged) {
+                console.warn('[draco] payload received before decoder became available');
+                dracoUnavailableLogged = true;
+            }
+            return null;
+        }
+        const dracoPayloadSize = new DataView(payload.buffer, payload.byteOffset + 9, 4).getUint32(0, true);
+        const dracoBytes = payload.subarray(13, 13 + dracoPayloadSize);
+        const decoder = new dracoDecoderModule.Decoder();
+        const decoderBuffer = new dracoDecoderModule.DecoderBuffer();
+        decoderBuffer.Init(new Int8Array(dracoBytes.buffer, dracoBytes.byteOffset, dracoBytes.byteLength), dracoBytes.byteLength);
+        const pc = new dracoDecoderModule.PointCloud();
+        const status = decoder.DecodeBufferToPointCloud(decoderBuffer, pc);
+        if (!status.ok() || pc.ptr === 0) {
+            dracoDecoderModule.destroy(decoderBuffer);
+            dracoDecoderModule.destroy(decoder);
+            dracoDecoderModule.destroy(pc);
+            return null;
+        }
+        const numPoints = pc.num_points();
+        const posId = decoder.GetAttributeId(pc, dracoDecoderModule.POSITION);
+        const colId = decoder.GetAttributeId(pc, dracoDecoderModule.COLOR);
+        const posAttr = decoder.GetAttribute(pc, posId);
+        const colAttr = colId >= 0 ? decoder.GetAttribute(pc, colId) : null;
+
+        const posArray = new dracoDecoderModule.DracoFloat32Array();
+        decoder.GetAttributeFloatForAllPoints(pc, posAttr, posArray);
+        const positions = new Float32Array(numPoints * 3);
+        for (let i = 0; i < positions.length; i++) positions[i] = posArray.GetValue(i);
+
+        const colors = new Uint8Array(numPoints * 3);
+        if (colAttr) {
+            const colArray = new dracoDecoderModule.DracoUInt8Array();
+            decoder.GetAttributeUInt8ForAllPoints(pc, colAttr, colArray);
+            for (let i = 0; i < colors.length; i++) colors[i] = colArray.GetValue(i);
+            dracoDecoderModule.destroy(colArray);
+        }
+
+        dracoDecoderModule.destroy(posArray);
+        dracoDecoderModule.destroy(decoderBuffer);
+        dracoDecoderModule.destroy(decoder);
+        dracoDecoderModule.destroy(pc);
+        return { positions, colors, numPoints };
+    }
+
+    function updateMeshFromDraco(mesh: THREE.Points, positions: Float32Array, colors: Uint8Array, numPoints: number) {
+        const geo = mesh.geometry;
+        mesh.material = matDraco;
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        const colorAttr = new THREE.Uint8BufferAttribute(colors, 3, true);
+        geo.setAttribute('color', colorAttr);
+        geo.setDrawRange(0, numPoints);
+    }
+
     let pendingFrameId = -1;
     let accumulatedChunks: { offset: number; length: number }[] = [];
 
@@ -292,6 +404,13 @@ export function createGPUPointCloud(scene: THREE.Scene) {
         accumulatedChunks.push(chunk);
 
         if (accumulatedChunks.length === numChunks) {
+            const hasDracoChunk = accumulatedChunks.some((ch) => {
+                const payload = new Uint8Array(sharedBuf, ch.offset, ch.length);
+                return payload[0] === DRACO_MAGIC[0] && payload[1] === DRACO_MAGIC[1] && payload[2] === DRACO_MAGIC[2] && payload[3] === DRACO_MAGIC[3];
+            });
+            if (hasDracoChunk && !dracoDecoderModule) {
+                return performance.now() - tStart;
+            }
             // Commit the frame atomically after decoding all chunks.
             for (let m of meshPool) m.visible = false;
 
@@ -300,7 +419,15 @@ export function createGPUPointCloud(scene: THREE.Scene) {
 
                 const ch = accumulatedChunks[i];
                 const mesh = meshPool[i];
-                updateMeshFromChunk(mesh, sharedBuf, ch.offset);
+                const payload = new Uint8Array(sharedBuf, ch.offset, ch.length);
+                const isDraco = payload[0] === DRACO_MAGIC[0] && payload[1] === DRACO_MAGIC[1] && payload[2] === DRACO_MAGIC[2] && payload[3] === DRACO_MAGIC[3];
+                if (isDraco) {
+                    const decoded = decodeDracoPayload(payload);
+                    if (!decoded) continue;
+                    updateMeshFromDraco(mesh, decoded.positions, decoded.colors, decoded.numPoints);
+                } else {
+                    updateMeshFromChunk(mesh, sharedBuf, ch.offset);
+                }
                 mesh.visible = true;
             }
 

@@ -7,6 +7,7 @@ from pathlib import Path
 import cupy as cp
 import numpy as np
 import cv2
+import DracoPy
 import torch
 import torch.nn.functional as F
 from ultralytics import YOLOE
@@ -14,6 +15,33 @@ from ultralytics import YOLOE
 import producer_cli as producer_cli
 import sam2_camera_predictor as sam2_camera
 from cuda_quantizer import CudaQuantizer, EncodingMode
+
+
+DRACO_MAGIC = b"DRCO"
+
+
+def encode_draco_chunk(mode: EncodingMode, points: np.ndarray, colors: np.ndarray, pos_bits: int) -> bytes:
+    encoded = DracoPy.encode(
+        points=points.astype(np.float32, copy=False),
+        colors=colors.astype(np.uint8, copy=False),
+        quantization_bits=pos_bits,
+        compression_level=0,
+        create_metadata=False,
+        preserve_order=True,
+    )
+    header = DRACO_MAGIC + mode.value.to_bytes(1, "little") + points.shape[0].to_bytes(4, "little")
+    header += len(encoded).to_bytes(4, "little")
+    return header + encoded
+
+
+def decode_draco_chunk(buffer_bytes: bytes) -> tuple[np.ndarray, np.ndarray, int]:
+    mode = int(buffer_bytes[4])
+    payload_size = int.from_bytes(buffer_bytes[9:13], "little")
+    payload = buffer_bytes[13:13 + payload_size]
+    decoded = DracoPy.decode(payload)
+    xyz = np.asarray(decoded.points, dtype=np.float32)
+    rgb = np.asarray(decoded.colors, dtype=np.uint8)
+    return xyz, rgb, mode
 
 
 def read_ply_ascii(path: Path) -> tuple[np.ndarray, np.ndarray]:
@@ -319,6 +347,38 @@ def derive_offline_point_budget(
             right = mid - 1
     return best, bytes_per_frame
 
+
+def derive_offline_point_budget_draco(
+    n_in: int,
+    n_mid: int,
+    n_out: int,
+    target_fps: float,
+    bandwidth_mb_per_s: float,
+    min_keep_ratio_high: float,
+    min_keep_ratio_med: float,
+    min_keep_ratio_low: float,
+    pos_bits_high: int,
+    pos_bits_med: int,
+    pos_bits_low: int,
+) -> tuple[int, int]:
+    bytes_per_frame = int((bandwidth_mb_per_s * 1024.0 * 1024.0) / max(target_fps, 1e-6))
+    max_points = n_in + n_mid + n_out
+    if max_points <= 0:
+        return 0, bytes_per_frame
+    min_required = (
+        min(n_in, int(np.ceil(n_in * min_keep_ratio_high)))
+        + min(n_mid, int(np.ceil(n_mid * min_keep_ratio_med)))
+        + min(n_out, int(np.ceil(n_out * min_keep_ratio_low)))
+    )
+    min_required = min(min_required, max_points)
+    bpp_high = (3.0 * pos_bits_high + 24.0) / 8.0
+    bpp_med = (3.0 * pos_bits_med + 24.0) / 8.0
+    bpp_low = (3.0 * pos_bits_low + 24.0) / 8.0
+    avg_bpp = max((bpp_high + bpp_med + bpp_low) / 3.0, 1.0)
+    estimated_points = int(bytes_per_frame / avg_bpp)
+    total_budget = max(min_required, min(max_points, estimated_points))
+    return total_budget, bytes_per_frame
+
 def fast_subsample(d_indices: cp.ndarray, budget: int) -> cp.ndarray:
     """Pick evenly spaced indices on the GPU."""
     n = d_indices.size
@@ -328,9 +388,9 @@ def fast_subsample(d_indices: cp.ndarray, budget: int) -> cp.ndarray:
     return d_indices[idx_to_keep]
 
 
-def bytes_to_mb(num_bytes: int) -> float:
-    """Convert byte counts to MiB for report rows."""
-    return float(num_bytes) / (1024.0 * 1024.0)
+def bytes_to_kb(num_bytes: int) -> float:
+    """Convert byte counts to KiB for report rows."""
+    return float(num_bytes) / 1024.0
 
 
 def load_frame_rgb(input_root: Path, frame_stem: str, fallback_rgb: np.ndarray) -> np.ndarray:
@@ -360,29 +420,33 @@ def run_offline_compression(args, server=None) -> None:
     export_root = Path(__file__).resolve().parent / "exported_PCs"
     # The offline prefix names the input folder and the output folder suffix.
     input_root = export_root / args.offline_prefix
-    output_root = export_root / f"{args.offline_prefix}_IMPORTANCE"
+    codec_suffix = args.codec.upper()
+    output_root = export_root / f"{args.offline_prefix}_IMPORTANCE_{codec_suffix}"
     output_root.mkdir(parents=True, exist_ok=True)
     print(f"[offline] input: {input_root} output: {output_root}")
 
+    use_cuda_codec = args.codec == "cuda"
     cp.cuda.Device(0).use()
     cmr_clr_width, cmr_clr_height = producer_cli.map_to_camera_res[args.realsense_clr_stream]
     cmr_depth_width, cmr_depth_height = producer_cli.map_to_camera_res[args.realsense_depth_stream]
 
     quantizer = CudaQuantizer()
-    stream_in = cp.cuda.Stream(non_blocking=True)
-    stream_med = cp.cuda.Stream(non_blocking=True)
-    stream_out = cp.cuda.Stream(non_blocking=True)
+    stream_in = cp.cuda.Stream(non_blocking=True) if use_cuda_codec else None
+    stream_med = cp.cuda.Stream(non_blocking=True) if use_cuda_codec else None
+    stream_out = cp.cuda.Stream(non_blocking=True) if use_cuda_codec else None
 
-    
-# Allocate pinned buffers for the worst-case frame budget at the selected depth resolution.
     max_points_per_frame = cmr_depth_width * cmr_depth_height
-    pinned_mem_high = cp.cuda.alloc_pinned_memory(max_points_per_frame * 15)
-    pinned_mem_med = cp.cuda.alloc_pinned_memory(max_points_per_frame * 15)
-    pinned_mem_low = cp.cuda.alloc_pinned_memory(max_points_per_frame * 15)
+    pinned_np_high = None
+    pinned_np_med = None
+    pinned_np_low = None
+    if use_cuda_codec:
+        pinned_mem_high = cp.cuda.alloc_pinned_memory(max_points_per_frame * 15)
+        pinned_mem_med = cp.cuda.alloc_pinned_memory(max_points_per_frame * 15)
+        pinned_mem_low = cp.cuda.alloc_pinned_memory(max_points_per_frame * 15)
 
-    pinned_np_high = np.frombuffer(pinned_mem_high, dtype=np.uint8)
-    pinned_np_med = np.frombuffer(pinned_mem_med, dtype=np.uint8)
-    pinned_np_low = np.frombuffer(pinned_mem_low, dtype=np.uint8)
+        pinned_np_high = np.frombuffer(pinned_mem_high, dtype=np.uint8)
+        pinned_np_med = np.frombuffer(pinned_mem_med, dtype=np.uint8)
+        pinned_np_low = np.frombuffer(pinned_mem_low, dtype=np.uint8)
 
     # Keep one report per offline run inside the dataset output folder.
     csv_path = output_root / "compression_report.csv"
@@ -400,12 +464,13 @@ def run_offline_compression(args, server=None) -> None:
         "points_cluster_mid_SS",
         "points_cluster_low_SS",
         "points_cluster_total_SS",
-        "uncompressed_size_mb",
-        "cluster_high_size_mb",
-        "cluster_mid_size_mb",
-        "cluster_low_size_mb",
-        "cluster_low_size_mb_after_dedup",
-        "total_compressed_size_mb",
+        "uncompressed_size_kb",
+        "cluster_high_size_kb",
+        "cluster_mid_size_kb",
+        "cluster_low_size_kb",
+        "cluster_low_size_kb_after_dedup",
+        "total_compressed_size_kb",
+        "final_size_kb",
         "detection_time_ms",
         "encode_time_ms",
         "broadcast_time_ms",
@@ -540,6 +605,7 @@ def run_offline_compression(args, server=None) -> None:
             input_root,
             ply_path.stem
         )
+        flat_indices_cpu = np.arange(d_vertices.shape[0], dtype=np.int32)
         if raw_flat_indices_cpu.shape[0] == xyz_raw.shape[0]:
             flat_indices_cpu = raw_flat_indices_cpu[depth_keep_mask]
         elif raw_flat_indices_cpu.shape[0] == d_vertices.shape[0]:
@@ -573,18 +639,32 @@ def run_offline_compression(args, server=None) -> None:
             )
             n_out_budget_pool = int(d_low_budget_dedup_idx.shape[0])
 
-        # Derive the frame budget from target fps and available bandwidth.
-        derived_budget, target_frame_bytes = derive_offline_point_budget(
-            quantizer,
-            n_in,
-            n_mid,
-            n_out_budget_pool,
-            args.offline_target_fps,
-            args.offline_bandwidth_mb_per_s,
-            args.min_keep_ratio_high,
-            args.min_keep_ratio_med,
-            args.min_keep_ratio_low,
-        )
+        if use_cuda_codec:
+            derived_budget, target_frame_bytes = derive_offline_point_budget(
+                quantizer,
+                n_in,
+                n_mid,
+                n_out_budget_pool,
+                args.offline_target_fps,
+                args.offline_bandwidth_mb_per_s,
+                args.min_keep_ratio_high,
+                args.min_keep_ratio_med,
+                args.min_keep_ratio_low,
+            )
+        else:
+            derived_budget, target_frame_bytes = derive_offline_point_budget_draco(
+                n_in,
+                n_mid,
+                n_out_budget_pool,
+                args.offline_target_fps,
+                args.offline_bandwidth_mb_per_s,
+                args.min_keep_ratio_high,
+                args.min_keep_ratio_med,
+                args.min_keep_ratio_low,
+                args.draco_quant_pos_high,
+                args.draco_quant_pos_med,
+                args.draco_quant_pos_low,
+            )
         total_budget = derived_budget
         budget_in, budget_mid, budget_out = allocate_budgets(
             n_in,
@@ -608,89 +688,114 @@ def run_offline_compression(args, server=None) -> None:
 
         encode_window_start = time.perf_counter()
 
-        with stream_in:
-            if budget_in > 0:
-                d_in_point_idx = d_point_idx[d_in_mask]
-                d_in_flat_idx = d_flat_idx[d_in_mask]
-                if d_in_point_idx.size > budget_in:
-                    keep_pos = fast_subsample(cp.arange(d_in_point_idx.size, dtype=cp.int32), budget_in)
-                    d_in_point_idx = d_in_point_idx[keep_pos]
-                    d_in_flat_idx = d_in_flat_idx[keep_pos]
+        d_in_point_idx = d_point_idx[d_in_mask]
+        d_in_flat_idx = d_flat_idx[d_in_mask]
+        if d_in_point_idx.size > budget_in:
+            keep_pos = fast_subsample(cp.arange(d_in_point_idx.size, dtype=cp.int32), budget_in)
+            d_in_point_idx = d_in_point_idx[keep_pos]
+            d_in_flat_idx = d_in_flat_idx[keep_pos]
+
+        d_mid_point_idx = d_point_idx[d_mid_mask]
+        d_mid_flat_idx = d_flat_idx[d_mid_mask]
+        if d_mid_point_idx.size > budget_mid:
+            keep_pos = fast_subsample(cp.arange(d_mid_point_idx.size, dtype=cp.int32), budget_mid)
+            d_mid_point_idx = d_mid_point_idx[keep_pos]
+            d_mid_flat_idx = d_mid_flat_idx[keep_pos]
+
+        d_out_point_idx = d_point_idx[d_out_mask]
+        d_out_flat_idx = d_flat_idx[d_out_mask]
+        if d_out_point_idx.size > 0:
+            low_points_before_dedup = int(d_out_point_idx.size)
+            if use_cuda_codec:
+                low_size_bytes_before_dedup = quantizer.estimate_buffer_size(EncodingMode.LOW, low_points_before_dedup)
+            else:
+                low_size_bytes_before_dedup = int(
+                    low_points_before_dedup
+                    * ((3 * args.draco_quant_pos_low + 24) / 8.0)
+                )
+
+            d_low_points = d_vertices[d_out_point_idx]
+            d_low_colors = d_colors[d_out_point_idx]
+            d_low_flat_idx = d_out_flat_idx
+            low_min_v, low_scale = quantizer._compute_low_quant_params(d_low_points)
+            dedup_idx = quantizer.build_low_dedup_indices(
+                d_low_points,
+                d_low_colors,
+                min_v=low_min_v,
+                scale=low_scale,
+            )
+            d_low_points = d_low_points[dedup_idx]
+            d_low_colors = d_low_colors[dedup_idx]
+            d_low_flat_idx = d_low_flat_idx[dedup_idx]
+            low_points_after_dedup = int(d_low_points.shape[0])
+            if d_low_points.shape[0] > budget_out:
+                keep_pos = fast_subsample(cp.arange(d_low_points.shape[0], dtype=cp.int32), budget_out)
+                d_low_points = d_low_points[keep_pos]
+                d_low_colors = d_low_colors[keep_pos]
+                d_low_flat_idx = d_low_flat_idx[keep_pos]
+        else:
+            d_low_points = cp.empty((0, 3), dtype=cp.float32)
+            d_low_colors = cp.empty((0, 3), dtype=cp.uint8)
+            d_low_flat_idx = cp.empty((0,), dtype=cp.int32)
+
+        if use_cuda_codec:
+            with stream_in:
                 if d_in_point_idx.size > 0:
-                    res_view = quantizer.encode(
-                        stream_in,
-                        EncodingMode.HIGH,
-                        d_vertices[d_in_point_idx],
-                        d_colors[d_in_point_idx],
-                        pinned_np_high,
-                    )
+                    res_view = quantizer.encode(stream_in, EncodingMode.HIGH, d_vertices[d_in_point_idx], d_colors[d_in_point_idx], pinned_np_high)
                     broadcast_buffers[EncodingMode.HIGH] = (stream_in, d_in_point_idx.size, res_view, d_in_flat_idx)
-
-        with stream_med:
-            if budget_mid > 0:
-                d_mid_point_idx = d_point_idx[d_mid_mask]
-                d_mid_flat_idx = d_flat_idx[d_mid_mask]
-                if d_mid_point_idx.size > budget_mid:
-                    keep_pos = fast_subsample(cp.arange(d_mid_point_idx.size, dtype=cp.int32), budget_mid)
-                    d_mid_point_idx = d_mid_point_idx[keep_pos]
-                    d_mid_flat_idx = d_mid_flat_idx[keep_pos]
+            with stream_med:
                 if d_mid_point_idx.size > 0:
-                    res_view = quantizer.encode(
-                        stream_med,
-                        EncodingMode.MED,
-                        d_vertices[d_mid_point_idx],
-                        d_colors[d_mid_point_idx],
-                        pinned_np_med,
-                    )
+                    res_view = quantizer.encode(stream_med, EncodingMode.MED, d_vertices[d_mid_point_idx], d_colors[d_mid_point_idx], pinned_np_med)
                     broadcast_buffers[EncodingMode.MED] = (stream_med, d_mid_point_idx.size, res_view, d_mid_flat_idx)
+            with stream_out:
+                if d_low_points.shape[0] > 0:
+                    res_view = quantizer.encode(stream_out, EncodingMode.LOW, d_low_points, d_low_colors, pinned_np_low, min_v=low_min_v, scale=low_scale)
+                    broadcast_buffers[EncodingMode.LOW] = (stream_out, d_low_points.shape[0], res_view, d_low_flat_idx)
+            for mode in (EncodingMode.HIGH, EncodingMode.MED, EncodingMode.LOW):
+                if mode in broadcast_buffers:
+                    stream, _, _, _ = broadcast_buffers[mode]
+                    stream.synchronize()
+        else:
+            def draco_encode_task(mode: EncodingMode, points: np.ndarray, colors: np.ndarray, flat_idx: np.ndarray, pos_bits: int):
+                if points.shape[0] == 0:
+                    return None
+                buffer_bytes = encode_draco_chunk(mode, points, colors, pos_bits)
+                return mode, points.shape[0], np.frombuffer(buffer_bytes, dtype=np.uint8), flat_idx
 
-        with stream_out:
-            if budget_out > 0:
-                d_out_point_idx = d_point_idx[d_out_mask]
-                d_out_flat_idx = d_flat_idx[d_out_mask]
-                if d_out_point_idx.size > 0:
-                    low_points_before_dedup = int(d_out_point_idx.size)
-                    low_size_bytes_before_dedup = quantizer.estimate_buffer_size(EncodingMode.LOW, low_points_before_dedup)
-
-                    d_low_points = d_vertices[d_out_point_idx]
-                    d_low_colors = d_colors[d_out_point_idx]
-                    d_low_flat_idx = d_out_flat_idx
-                    low_min_v, low_scale = quantizer._compute_low_quant_params(d_low_points)
-                    dedup_idx = quantizer.build_low_dedup_indices(
-                        d_low_points,
-                        d_low_colors,
-                        min_v=low_min_v,
-                        scale=low_scale,
-                    )
-                    d_low_points = d_low_points[dedup_idx]
-                    d_low_colors = d_low_colors[dedup_idx]
-                    d_low_flat_idx = d_low_flat_idx[dedup_idx]
-
-                    low_points_after_dedup = int(d_low_points.shape[0])
-
-                    # Subsample after dedup so the final budget is drawn from unique LOW points.
-                    if d_low_points.shape[0] > budget_out:
-                        keep_pos = fast_subsample(cp.arange(d_low_points.shape[0], dtype=cp.int32), budget_out)
-                        d_low_points = d_low_points[keep_pos]
-                        d_low_colors = d_low_colors[keep_pos]
-                        d_low_flat_idx = d_low_flat_idx[keep_pos]
-                    if d_low_points.shape[0] > 0:
-                        res_view = quantizer.encode(
-                            stream_out,
-                            EncodingMode.LOW,
-                            d_low_points,
-                            d_low_colors,
-                            pinned_np_low,
-                            min_v=low_min_v,
-                            scale=low_scale,
-                        )
-                        broadcast_buffers[EncodingMode.LOW] = (stream_out, d_low_points.shape[0], res_view, d_low_flat_idx)
-
-        # Synchronize 
-        for mode in (EncodingMode.HIGH, EncodingMode.MED, EncodingMode.LOW):
-            if mode in broadcast_buffers:
-                stream, _, _, _ = broadcast_buffers[mode]
-                stream.synchronize()
+            draco_futures = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as draco_executor:
+                if d_in_point_idx.size > 0:
+                    draco_futures.append(draco_executor.submit(
+                        draco_encode_task,
+                        EncodingMode.HIGH,
+                        cp.asnumpy(d_vertices[d_in_point_idx]),
+                        cp.asnumpy(d_colors[d_in_point_idx]),
+                        cp.asnumpy(d_in_flat_idx).astype(np.int32, copy=False),
+                        args.draco_quant_pos_high,
+                    ))
+                if d_mid_point_idx.size > 0:
+                    draco_futures.append(draco_executor.submit(
+                        draco_encode_task,
+                        EncodingMode.MED,
+                        cp.asnumpy(d_vertices[d_mid_point_idx]),
+                        cp.asnumpy(d_colors[d_mid_point_idx]),
+                        cp.asnumpy(d_mid_flat_idx).astype(np.int32, copy=False),
+                        args.draco_quant_pos_med,
+                    ))
+                if d_low_points.shape[0] > 0:
+                    draco_futures.append(draco_executor.submit(
+                        draco_encode_task,
+                        EncodingMode.LOW,
+                        cp.asnumpy(d_low_points),
+                        cp.asnumpy(d_low_colors),
+                        cp.asnumpy(d_low_flat_idx).astype(np.int32, copy=False),
+                        args.draco_quant_pos_low,
+                    ))
+                for fut in concurrent.futures.as_completed(draco_futures):
+                    result = fut.result()
+                    if result is not None:
+                        mode, count, res_view, idx_cpu = result
+                        broadcast_buffers[mode] = (None, count, res_view, idx_cpu)
         encode_time_ms = (time.perf_counter() - encode_window_start) * 1000.0
 
         # Use encoded chunk count, not budget count, so frame completion is accurate on client.
@@ -739,10 +844,16 @@ def run_offline_compression(args, server=None) -> None:
 
         # server-side decode
         for mode, (_, count, buffer_view, idx_gpu) in broadcast_buffers.items():
-            idx_cpu = cp.asnumpy(idx_gpu).astype(np.int32, copy=False)
+            if isinstance(idx_gpu, cp.ndarray):
+                idx_cpu = cp.asnumpy(idx_gpu).astype(np.int32, copy=False)
+            else:
+                idx_cpu = np.asarray(idx_gpu, dtype=np.int32)
             buffer_bytes = buffer_view.tobytes()
             # Decode each importance tier, then assemble into a single output.
-            xyz_dec, rgb_dec, _ = decode_chunk(buffer_bytes)
+            if buffer_bytes[:4] == DRACO_MAGIC:
+                xyz_dec, rgb_dec, _ = decode_draco_chunk(buffer_bytes)
+            else:
+                xyz_dec, rgb_dec, _ = decode_chunk(buffer_bytes)
             assembled_xyz.append(xyz_dec)
             assembled_rgb.append(rgb_dec)
             assembled_idx.append(idx_cpu)
@@ -765,12 +876,13 @@ def run_offline_compression(args, server=None) -> None:
 
         original_points = int(xyz_raw.shape[0])
         points_after_depth_clip = int(xyz.shape[0])
-        original_size_mb = bytes_to_mb(xyz.nbytes + rgb.nbytes)
-        high_size_mb = bytes_to_mb(encoded_size_by_mode[EncodingMode.HIGH])
-        mid_size_mb = bytes_to_mb(encoded_size_by_mode[EncodingMode.MED])
-        low_size_mb = bytes_to_mb(low_size_bytes_before_dedup)
-        low_size_after_dedup_mb = bytes_to_mb(encoded_size_by_mode[EncodingMode.LOW])
-        total_cluster_size_mb = high_size_mb + mid_size_mb + low_size_after_dedup_mb
+        original_size_kb = bytes_to_kb(xyz.nbytes + rgb.nbytes)
+        high_size_kb = bytes_to_kb(encoded_size_by_mode[EncodingMode.HIGH])
+        mid_size_kb = bytes_to_kb(encoded_size_by_mode[EncodingMode.MED])
+        low_size_kb = bytes_to_kb(low_size_bytes_before_dedup)
+        low_size_after_dedup_kb = bytes_to_kb(encoded_size_by_mode[EncodingMode.LOW])
+        total_cluster_size_kb = high_size_kb + mid_size_kb + low_size_after_dedup_kb
+        final_size_kb = bytes_to_kb(out_ply.stat().st_size)
         keep_ratio_high = float(kept_points_by_mode[EncodingMode.HIGH]) / n_in if n_in > 0 else 0.0
         keep_ratio_mid = float(kept_points_by_mode[EncodingMode.MED]) / n_mid if n_mid > 0 else 0.0
         low_points_kept_for_ratio = kept_points_by_mode[EncodingMode.LOW]
@@ -787,7 +899,7 @@ def run_offline_compression(args, server=None) -> None:
         points_cluster_total_ss = points_cluster_high_ss + points_cluster_mid_ss + points_cluster_low_ss
 
         csv_row = [
-            "Cuda quantization",
+            "Cuda quantization" if use_cuda_codec else "DracoPy",
             original_points,
             n_in,
             n_mid,
@@ -798,12 +910,13 @@ def run_offline_compression(args, server=None) -> None:
             points_cluster_mid_ss,
             points_cluster_low_ss,
             points_cluster_total_ss,
-            f"{original_size_mb:.6f}",
-            f"{high_size_mb:.6f}",
-            f"{mid_size_mb:.6f}",
-            f"{low_size_mb:.6f}",
-            f"{low_size_after_dedup_mb:.6f}",
-            f"{total_cluster_size_mb:.6f}",
+            f"{original_size_kb:.2f}",
+            f"{high_size_kb:.2f}",
+            f"{mid_size_kb:.2f}",
+            f"{low_size_kb:.2f}",
+            f"{low_size_after_dedup_kb:.2f}",
+            f"{total_cluster_size_kb:.2f}",
+            f"{final_size_kb:.2f}",
             f"{detection_ms:.3f}",
             f"{encode_time_ms:.3f}",
             f"{broadcast_ms:.3f}",

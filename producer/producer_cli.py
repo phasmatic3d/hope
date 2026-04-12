@@ -100,11 +100,21 @@ producer_cli.add_argument(
     "--offline_prefix",
     type=str,
     default="TRACKING",
-    help="Name of the offline input folder under producer/exported_PCs. outputs go to <prefix>_IMPORTANCE.",
+    help="Name of the offline input folder under producer/exported_PCs. outputs go to <prefix>_IMPORTANCE_<CODEC>.",
 )
 producer_cli.add_argument("--offline_query_x", type=float, default=420.0, help="SAM query x pixel.")
 producer_cli.add_argument("--offline_query_y", type=float, default=210.0, help="SAM query y pixel.")
 producer_cli.add_argument("--offline_box_size", type=float, default=10.0, help="SAM query box half-size in pixels.")
+producer_cli.add_argument(
+    "--codec",
+    type=str,
+    default="cuda",
+    choices=["cuda", "draco"],
+    help="Offline importance compression codec.",
+)
+producer_cli.add_argument("--draco_quant_pos_high", type=int, default=11, help="Draco position quantization bits for HIGH.")
+producer_cli.add_argument("--draco_quant_pos_med", type=int, default=11, help="Draco position quantization bits for MED.")
+producer_cli.add_argument("--draco_quant_pos_low", type=int, default=8, help="Draco position quantization bits for LOW.")
 
 def getRequest(outputPath : Path, url : str) -> None:
     # Stream the checkpoint download and save it to the requested folder.
