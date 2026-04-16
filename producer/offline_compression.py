@@ -27,7 +27,7 @@ def encode_draco_chunk(mode: EncodingMode, points: np.ndarray, colors: np.ndarra
         quantization_bits=pos_bits,
         compression_level=0,
         create_metadata=False,
-        preserve_order=True,
+        preserve_order=False,
     )
     header = DRACO_MAGIC + mode.value.to_bytes(1, "little") + points.shape[0].to_bytes(4, "little")
     header += len(encoded).to_bytes(4, "little")
