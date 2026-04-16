@@ -171,10 +171,11 @@ def camera_process(
                     cp.cuda.Stream.null.synchronize()
                     ready_roi_event.set()
 
-            d_shared_frame[:] = cp.asarray(color_img)
-            cp.cuda.Stream.null.synchronize()
-            ready_frame_event.set()
-
+            if not ready_frame_event.is_set():
+                d_shared_frame[:] = cp.asarray(color_img)
+                cp.cuda.Stream.null.synchronize()
+                ready_frame_event.set()
+                
             if ready_cluster_event.is_set():
                 d_prev_cluster[:] = d_shared_cluster
                 cp.cuda.Stream.null.synchronize() 
